@@ -1,0 +1,977 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fit Taste v4.0 — Sistema de Compras e Inventario</title>
+<script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useMemo} = React;
+
+// ======================== CONFIG v4.0 ========================
+const SB="https://jxyrbvgpjsxevbhaxprr.supabase.co/rest/v1";
+const KEY="sb_publishable_TLdMmgb1r43eahtYKcbzbQ_fLP8U8D7";
+const V="4.0";
+const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
+
+async function sbGet(t,params=""){try{const r=await fetch(`${SB}/${t}?select=*${params?"&"+params:""}`,{headers:H});const d=await r.json();return Array.isArray(d)?d:[];}catch(e){console.error(t,e);return[];}}
+async function sbPost(t,data){try{const r=await fetch(`${SB}/${t}`,{method:"POST",headers:{...H,Prefer:"return=representation"},body:JSON.stringify(data)});return await r.json();}catch(e){console.error(t,e);return null;}}
+async function sbPatch(t,id,data){try{const r=await fetch(`${SB}/${t}?id=eq.${id}`,{method:"PATCH",headers:{...H,Prefer:"return=representation"},body:JSON.stringify(data)});return await r.json();}catch(e){console.error(t,e);return null;}}
+function genToken(){return Array.from(crypto.getRandomValues(new Uint8Array(24))).map(b=>b.toString(36)).join("").slice(0,32);}
+
+const fmt=(n)=>n==null?"-":`$${Number(n).toLocaleString("es-MX",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+const fmtQ=(n,u)=>`${n.toLocaleString("es-MX",{maximumFractionDigits:2})} ${u}`;
+const Badge=({children,v="default"})=>{const s={default:"bg-gray-100 text-gray-700",success:"bg-emerald-100 text-emerald-800",danger:"bg-red-100 text-red-800",warning:"bg-orange-100 text-orange-800",info:"bg-sky-100 text-sky-800",purple:"bg-violet-100 text-violet-800",commodity:"bg-amber-200 text-amber-900",manual:"bg-sky-200 text-sky-900",almacen:"bg-violet-200 text-violet-900",nuevo:"bg-amber-400 text-amber-950",proceso:"bg-blue-200 text-blue-900",enviado:"bg-orange-200 text-orange-900",cerrado:"bg-gray-300 text-gray-800"};return<span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${s[v]||s.default}`}>{children}</span>;};
+const LOGO_SRC="data:image/png;base64,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";
+const Logo=({size=32})=><img src={LOGO_SRC} width={size} height={size} style={{objectFit:"contain"}} alt="Fit Taste"/>;
+const Btn=({children,onClick,disabled,color="amber"})=><button onClick={onClick} disabled={disabled} className={`text-sm font-semibold px-4 py-2 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed`} style={{background:disabled?"#ccc":color==="amber"?"#F5B731":color==="green"?"#10b981":color==="red"?"#ef4444":"#8b5cf6",color:color==="amber"?"#2D2D2D":"white"}}>{children}</button>;
+
+const estatusBadge=(e)=>{const m={creado:"nuevo",en_proceso:"proceso",enviado_proveedor:"enviado",entregado:"warning",recibido_completo:"success",recibido_con_faltantes:"danger",cerrado:"cerrado"};return<Badge v={m[e]||"default"}>{e.replace(/_/g," ")}</Badge>;};
+
+// ======================== CONTRASEÑAS POR ROL ========================
+// Cambia estas contraseñas cuando quieras
+const PASSWORDS={
+  admin:"fittaste2026",
+  compras:"compras2026",
+  sucursal:"roma2026",
+  proveedor:"prov2026",
+  almacen:"almacen2026",
+  finanzas:"finanzas2026"
+};
+
+// ======================== LOGIN ========================
+function LoginScreen({onLogin,provToken}){
+  if(provToken)return null;
+  const [selected,setSelected]=useState(null);
+  const [pass,setPass]=useState("");
+  const [error,setError]=useState("");
+  const roles=[{rol:"admin",label:"Admin / Dueño",desc:"Acceso total",icon:"★"},{rol:"compras",label:"Compras",desc:"Gestiona pedidos",icon:"◈"},{rol:"sucursal",label:"Sucursal",desc:"Crea pedidos",icon:"◉"},{rol:"proveedor",label:"Proveedor",desc:"Captura precios",icon:"◇"},{rol:"almacen",label:"Almacén",desc:"Inventario",icon:"◫"},{rol:"finanzas",label:"Finanzas",desc:"Cuentas por pagar",icon:"◎"}];
+
+  const handleLogin=()=>{
+    if(PASSWORDS[selected]===pass){setError("");onLogin(selected);}
+    else{setError("Contraseña incorrecta");setPass("");}
+  };
+
+  return(<div className="min-h-screen flex items-center justify-center p-4" style={{background:"linear-gradient(135deg,#2D2D2D,#1a1a1a)"}}>
+    <div className="max-w-sm w-full">
+      <div className="text-center mb-8">
+        <div className="flex justify-center mb-4"><Logo size={56}/></div>
+        <p className="text-amber-400 text-sm tracking-widest font-medium">SER FIT NUNCA SUPO TAN RICO</p>
+        <p className="text-gray-500 text-xs mt-3">Sistema de compras e inventario v{V}</p>
+      </div>
+
+      {!selected?<div>
+        <p className="text-gray-400 text-sm text-center mb-3">Selecciona tu rol</p>
+        <div className="space-y-2">{roles.map(r=>(
+          <button key={r.rol} onClick={()=>{setSelected(r.rol);setPass("");setError("");}} className="w-full flex items-center gap-3 p-3 rounded-xl border border-gray-700 bg-gray-800/50 hover:border-amber-500 hover:bg-amber-500/10 transition-all text-left group">
+            <span className="w-10 h-10 rounded-lg bg-amber-500/20 flex items-center justify-center text-amber-400 font-bold group-hover:bg-amber-500/30">{r.icon}</span>
+            <div><p className="font-semibold text-white text-sm">{r.label}</p><p className="text-xs text-gray-500">{r.desc}</p></div>
+          </button>
+        ))}</div>
+      </div>
+
+      :<div>
+        <button onClick={()=>{setSelected(null);setError("");}} className="text-gray-500 text-sm hover:text-gray-300 mb-4">← Cambiar rol</button>
+        <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4">
+          <div className="flex items-center gap-3 mb-4">
+            <span className="w-10 h-10 rounded-lg bg-amber-500/20 flex items-center justify-center text-amber-400 font-bold">{roles.find(r=>r.rol===selected)?.icon}</span>
+            <div><p className="font-semibold text-white">{roles.find(r=>r.rol===selected)?.label}</p><p className="text-xs text-gray-500">{roles.find(r=>r.rol===selected)?.desc}</p></div>
+          </div>
+          <div className="mb-3">
+            <label className="text-xs text-gray-400 block mb-1">Contraseña</label>
+            <input type="password" className="w-full bg-gray-900 border border-gray-600 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500" placeholder="Ingresa tu contraseña" value={pass} onChange={e=>{setPass(e.target.value);setError("");}} onKeyDown={e=>{if(e.key==="Enter"&&pass)handleLogin();}} autoFocus/>
+          </div>
+          {error&&<p className="text-red-400 text-xs mb-3">{error}</p>}
+          <Btn onClick={handleLogin} disabled={!pass}>Ingresar</Btn>
+        </div>
+      </div>}
+    </div>
+  </div>);
+}
+
+// ======================== BANDEJA DE PEDIDOS ========================
+function BandejaPedidos({pedidos,rol,onSelect,onNew,pedidoDetalle,proveedores,provEstatus}){
+  let filteredByRol=pedidos;
+  if(rol==="sucursal")filteredByRol=pedidos;
+  else if(rol==="proveedor"){
+    // Show pedidos that have items for JC and are enviado
+    const jcProv=proveedores?.find(p=>p.nombre==="Juan Carlos Botello");
+    filteredByRol=pedidos.filter(p=>{
+      const pe=provEstatus?.find(x=>x.pedido_id===p.id&&x.proveedor_id===jcProv?.id);
+      return pe&&["enviado","precios_capturados"].includes(pe.estatus);
+    });
+  }
+  return(<div>
+    <div className="flex items-center justify-between mb-4">
+      <div><h2 className="text-lg font-bold text-gray-900">Pedidos</h2><p className="text-sm text-gray-500">{filteredByRol.length} pedido{filteredByRol.length!==1?"s":""}</p></div>
+      {(rol==="sucursal"||rol==="admin")&&<Btn onClick={onNew}>+ Nuevo pedido</Btn>}
+    </div>
+    {filteredByRol.length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400">No hay pedidos</p>{(rol==="sucursal"||rol==="admin")&&<Btn onClick={onNew}>Crear primer pedido</Btn>}</div>
+    :<div className="space-y-2">{filteredByRol.map(p=>(<button key={p.id} onClick={()=>onSelect(p)} className="w-full bg-white border border-gray-200 rounded-xl p-4 hover:border-amber-400 transition-all text-left">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2"><span className="font-bold text-gray-900">Pedido #{p.numero_pedido||"—"}</span>{estatusBadge(p.estatus)}</div>
+        <span className="text-xs text-gray-400">{new Date(p.created_at||p.fecha).toLocaleDateString("es-MX")}</span>
+      </div>
+      <div className="flex items-center gap-4 text-sm">
+        <span className="text-gray-500">{p.sucursal||"Roma"}</span>
+        <span className="text-gray-500">{p.num_articulos||0} artículos</span>
+        <span className="font-semibold text-gray-700">{fmt(p.total_teorico)}</span>
+        {p.articulos_sin_precio>0&&<span className="text-amber-600 text-xs">{p.articulos_sin_precio} sin precio</span>}
+      </div>
+    </button>))}</div>}
+  </div>);
+}
+
+// ======================== CREAR PEDIDO (SUCURSAL) ========================
+function CrearPedido({catalogo,proveedores,onSave,onCancel}){
+  const [pedido,setPedido]=useState({});
+  const [filter,setFilter]=useState("");
+  const filtered=catalogo.filter(p=>p.articulo.toLowerCase().includes(filter.toLowerCase())||p.tipo_producto.toLowerCase().includes(filter.toLowerCase()));
+  const totalTeo=catalogo.reduce((s,p)=>s+(pedido[p.id]||0)*p.costo_referencia,0);
+  const count=Object.values(pedido).filter(v=>v>0).length;
+  const tb={PROTEINAS:"danger",SUPLEMENTO:"purple",EMPAQUE:"info",FRUTA:"warning",LIMPIEZA:"default"};
+
+  const handleSave=async()=>{
+    const items=catalogo.filter(p=>(pedido[p.id]||0)>0).map(p=>({catalogo_id:p.id,proveedor_id:p.proveedor_id,cantidad:pedido[p.id],costo_referencia:p.costo_referencia}));
+    if(items.length===0)return;
+    onSave(items,totalTeo);
+  };
+
+  return(<div>
+    <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <div><h2 className="text-lg font-bold text-gray-900">Nuevo pedido</h2><p className="text-sm text-gray-500">Selecciona artículos y cantidades</p></div>
+      <div className="flex items-center gap-2">
+        <div className="text-right bg-amber-50 border border-amber-200 rounded-xl px-4 py-2"><p className="text-xl font-bold text-amber-700">{fmt(totalTeo)}</p><p className="text-xs text-amber-600">{count} artículos</p></div>
+      </div>
+    </div>
+    <div className="flex gap-2 mb-4">
+      <input className="flex-1 border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-amber-400" placeholder="Buscar..." value={filter} onChange={e=>setFilter(e.target.value)}/>
+      <button onClick={onCancel} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 border border-gray-200 rounded-xl">Cancelar</button>
+      <Btn onClick={handleSave} disabled={count===0}>Enviar pedido ({count})</Btn>
+    </div>
+    <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white"><table className="w-full text-sm"><thead className="bg-gray-50"><tr>
+      {["Tipo","Artículo","Proveedor","Cantidad","Unidad","Subtotal"].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${h==="Cantidad"?"text-center":h==="Subtotal"?"text-right":"text-left"}`}>{h}</th>)}
+    </tr></thead><tbody>{filtered.map(p=>{const qq=pedido[p.id]||0;return(<tr key={p.id} className={`border-t border-gray-100 ${qq>0?"bg-amber-50/60":"hover:bg-gray-50"}`}>
+      <td className="px-3 py-2"><Badge v={tb[p.tipo_producto]||"success"}>{p.tipo_producto}</Badge></td>
+      <td className="px-3 py-2 font-medium text-gray-900">{p.articulo}</td>
+      <td className="px-3 py-2 text-gray-400 text-xs">{p.proveedor_nombre}</td>
+      <td className="px-3 py-2 text-center"><input type="number" min="0" step={p.unidad_clave==="kg"?"0.25":"1"} className="w-20 text-center border border-gray-200 rounded-lg px-1 py-1 text-sm focus:ring-2 focus:ring-amber-400" value={pedido[p.id]||""} onChange={e=>setPedido({...pedido,[p.id]:parseFloat(e.target.value)||0})}/></td>
+      <td className="px-3 py-2 text-gray-500">{p.unidad_clave}</td>
+      <td className="px-3 py-2 text-right font-semibold text-gray-700">{qq>0?fmt(qq*p.costo_referencia):"-"}</td>
+    </tr>);})}</tbody></table></div>
+  </div>);
+}
+
+// ======================== DETALLE PEDIDO (COMPRAS) ========================
+function DetallePedido({pedido:ped,detalle,catalogo,proveedores,provEstatus,onBack,onAction,onReasignar,onUpdatePrecio,onUpdateCantidad,onAddItem,rol}){
+  const [addingTo,setAddingTo]=useState(null);
+  const [addProduct,setAddProduct]=useState("");
+  const [addQty,setAddQty]=useState(0);
+
+  const byProv={};
+  detalle.forEach(d=>{
+    const prov=proveedores.find(p=>p.id===d.proveedor_id);
+    const k=prov?.nombre||"?";
+    if(!byProv[k])byProv[k]={items:[],prov,estatus:provEstatus.find(pe=>pe.proveedor_id===d.proveedor_id)};
+    byProv[k].items.push(d);
+  });
+
+  const allHavePrice=detalle.every(d=>d.costo_real!=null);
+  const allProvComplete=provEstatus.every(pe=>["completo","precios_capturados","surtido"].includes(pe.estatus));
+  const canClose=allHavePrice&&allProvComplete;
+  const totalTeo=detalle.reduce((s,d)=>s+d.cantidad*d.costo_referencia,0);
+  const totalReal=detalle.reduce((s,d)=>s+d.cantidad*(d.costo_real||d.costo_referencia),0);
+
+  const closeBlockers=[];
+  if(!allHavePrice){const n=detalle.filter(d=>d.costo_real==null).length;closeBlockers.push(`${n} artículo${n>1?"s":""} sin precio real`);}
+  provEstatus.forEach(pe=>{const prov=proveedores.find(p=>p.id===pe.proveedor_id);if(pe.estatus==="pendiente")closeBlockers.push(`${prov?.nombre||"?"}: no enviado`);if(pe.estatus==="enviado")closeBlockers.push(`${prov?.nombre||"?"}: esperando confirmación`);});
+  const isCompras=["admin","compras"].includes(rol);
+
+  const handleAdd=(provId)=>{
+    if(!addProduct||addQty<=0)return;
+    const cat=catalogo.find(c=>c.id===addProduct);
+    if(!cat)return;
+    onAddItem(ped.id,cat.id,provId,addQty,cat.costo_referencia);
+    setAddProduct("");setAddQty(0);setAddingTo(null);
+  };
+
+  // Products available to add (not already in this pedido for this provider)
+  const getAvailable=(provId)=>{
+    const existing=detalle.filter(d=>d.proveedor_id===provId).map(d=>d.catalogo_id);
+    return catalogo.filter(c=>!existing.includes(c.id));
+  };
+
+  return(<div>
+    <button onClick={onBack} className="text-sm text-gray-500 hover:text-gray-700 mb-4">← Volver a bandeja</button>
+    <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <div className="flex items-center gap-3"><h2 className="text-lg font-bold text-gray-900">Pedido #{ped.numero_pedido}</h2>{estatusBadge(ped.estatus)}</div>
+      <div className="flex gap-3">
+        <div className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-center"><p className="text-xs text-gray-500">Teórico</p><p className="font-bold text-gray-800">{fmt(totalTeo)}</p></div>
+        <div className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-center"><p className="text-xs text-gray-500">Real</p><p className={`font-bold ${totalReal>totalTeo*1.05?"text-red-600":"text-emerald-600"}`}>{fmt(totalReal)}</p></div>
+      </div>
+    </div>
+
+    {Object.entries(byProv).map(([nombre,{items,prov,estatus:pEst}])=>{
+      const flujo=prov?.tipo_flujo||"";const quien=prov?.quien_captura||"";
+      const pT=items.reduce((s,d)=>s+d.cantidad*(d.costo_real||d.costo_referencia),0);
+      const est=pEst?.estatus||"pendiente";
+      const allProvPrice=items.every(d=>d.costo_real!=null);
+      const token=pEst?.token_acceso;
+      const linkProv=token?`${window.location.origin}${window.location.pathname}?token=${token}`:null;
+      const available=getAvailable(prov?.id);
+
+      return(<div key={nombre} className="bg-white border border-gray-200 rounded-xl mb-4 overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 bg-gray-50 border-b border-gray-100">
+          <div className="flex items-center gap-2"><h3 className="font-bold text-gray-800">{nombre}</h3><Badge v={flujo==="Commodity"?"commodity":flujo==="Compra manual"?"manual":"almacen"}>{flujo}</Badge><Badge v={est==="completo"||est==="precios_capturados"||est==="surtido"?"success":est==="enviado"?"warning":"default"}>{est}</Badge></div>
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-gray-700">{fmt(pT)}</span>
+            {flujo==="Commodity"&&est==="pendiente"&&isCompras&&<Btn onClick={()=>onAction("enviar_proveedor",prov.id)}>Enviar a {nombre.split(" ")[0]}</Btn>}
+            {flujo==="Commodity"&&est==="enviado"&&linkProv&&<button onClick={()=>{navigator.clipboard.writeText(linkProv);alert("Link copiado:\n"+linkProv);}} className="text-xs bg-amber-100 text-amber-800 px-3 py-1.5 rounded-lg hover:bg-amber-200">Copiar link</button>}
+            {flujo==="Compra manual"&&est!=="completo"&&allProvPrice&&isCompras&&<Btn onClick={()=>onAction("cerrar_manual",prov.id)} color="green">Cerrar compra</Btn>}
+            {flujo==="Almacen interno"&&est==="pendiente"&&isCompras&&<Btn onClick={()=>onAction("enviar_almacen",prov.id)} color="purple">Enviar a almacén</Btn>}
+          </div>
+        </div>
+        {flujo==="Commodity"&&est==="enviado"&&linkProv&&<div className="px-4 py-2 bg-amber-50 border-b border-amber-100 text-xs text-amber-800">Link: <span className="font-mono text-amber-900 select-all">{linkProv}</span></div>}
+        <table className="w-full text-sm"><thead><tr className="border-b border-gray-100">
+          {["Artículo","Cant",isCompras?"Proveedor":"","Ref","Real","Desv.","Total"].filter(Boolean).map(h=><th key={h} className={`px-3 py-2 font-medium text-gray-500 text-xs ${h==="Cant"?"text-center":h==="Proveedor"?"text-left":h!=="Artículo"?"text-right":"text-left"}`}>{h}</th>)}
+        </tr></thead><tbody>{items.map(d=>{
+          const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};
+          const diff=d.costo_real?((d.costo_real-d.costo_referencia)/d.costo_referencia*100):null;
+          return(<tr key={d.id} className="border-t border-gray-50">
+            <td className="px-3 py-2 font-medium text-gray-800">{cat.articulo||"?"} <span className="text-gray-400 text-xs">{cat.unidad_clave}</span></td>
+            <td className="px-3 py-2 text-center">{isCompras?<input type="number" min="0" step={cat.unidad_clave==="kg"?"0.25":"1"} className="w-20 text-center border border-gray-200 rounded px-1 py-0.5 text-sm focus:ring-2 focus:ring-amber-400" value={d.cantidad} onChange={e=>onUpdateCantidad(d.id,parseFloat(e.target.value)||0)}/>:<span className="text-gray-600">{cat.unidad_clave==="kg"?fmtQ(d.cantidad,"kg"):d.cantidad}</span>}</td>
+            {isCompras&&<td className="px-3 py-2"><select className="text-xs border border-gray-200 rounded px-1 py-0.5" value={d.proveedor_id} onChange={e=>onReasignar(d.id,e.target.value)}>{proveedores.map(pr=><option key={pr.id} value={pr.id}>{pr.nombre}</option>)}</select></td>}
+            <td className="px-3 py-2 text-right text-gray-400">{fmt(d.costo_referencia)}</td>
+            <td className="px-3 py-2 text-right">{quien==="compras"&&isCompras?<input type="number" step="0.01" className="w-20 text-right border border-gray-200 rounded px-1 py-0.5 text-sm focus:ring-2 focus:ring-amber-400" value={d.costo_real||""} onChange={e=>onUpdatePrecio(d.id,parseFloat(e.target.value)||null)}/>:d.costo_real?<span className="font-semibold">{fmt(d.costo_real)}</span>:flujo==="Almacen interno"?<span className="text-violet-600">{fmt(d.costo_referencia)}</span>:<span className="text-amber-500 text-xs">Pendiente</span>}</td>
+            <td className="px-3 py-2 text-right">{diff!=null?<Badge v={Math.abs(diff)>15?"danger":Math.abs(diff)>5?"warning":"success"}>{diff>0?"+":""}{diff.toFixed(0)}%</Badge>:flujo==="Almacen interno"?<Badge v="purple">Fijo</Badge>:"-"}</td>
+            <td className="px-3 py-2 text-right font-semibold text-gray-700">{fmt(d.cantidad*(d.costo_real||d.costo_referencia))}</td>
+          </tr>);})}</tbody></table>
+
+        {isCompras&&ped.estatus!=="cerrado"&&<div className="border-t border-gray-100 px-4 py-2">
+          {addingTo===prov?.id?<div className="flex gap-2 items-end flex-wrap py-1">
+            <div className="flex-1"><label className="text-xs text-gray-500">Producto</label><select className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm" value={addProduct} onChange={e=>setAddProduct(e.target.value)}><option value="">Seleccionar...</option>{available.map(c=><option key={c.id} value={c.id}>{c.articulo} ({c.unidad_clave}) — {fmt(c.costo_referencia)}</option>)}</select></div>
+            <div><label className="text-xs text-gray-500">Cantidad</label><input type="number" min="0" step="0.25" className="w-20 border border-gray-200 rounded-lg px-2 py-1.5 text-sm" value={addQty||""} onChange={e=>setAddQty(parseFloat(e.target.value)||0)}/></div>
+            <Btn onClick={()=>handleAdd(prov?.id)} disabled={!addProduct||addQty<=0}>Agregar</Btn>
+            <button onClick={()=>setAddingTo(null)} className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1.5">Cancelar</button>
+          </div>
+          :<button onClick={()=>{setAddingTo(prov?.id);setAddProduct("");setAddQty(0);}} className="text-xs text-amber-700 hover:text-amber-900 font-medium hover:bg-amber-50 px-2 py-1 rounded">+ Agregar artículo a {nombre.split(" ")[0]}</button>}
+        </div>}
+      </div>);
+    })}
+
+    {ped.estatus!=="cerrado"&&isCompras&&<div className="mt-4">
+      {closeBlockers.length>0&&<div className="bg-red-50 border border-red-200 rounded-xl p-3 mb-3"><p className="text-sm font-semibold text-red-800 mb-1">No se puede cerrar el pedido:</p><ul className="text-xs text-red-700 space-y-0.5">{closeBlockers.map((b,i)=><li key={i}>• {b}</li>)}</ul></div>}
+      <div className="flex justify-end"><Btn onClick={()=>{if(!canClose){alert("No se puede cerrar el pedido:\n\n"+closeBlockers.join("\n"));return;}onAction("cerrar_pedido");}} color={canClose?"green":"amber"}>{canClose?"Cerrar pedido":"Intentar cerrar pedido"}</Btn></div>
+    </div>}
+  </div>);
+}
+
+// ======================== VISTA PROVEEDOR (por token) ========================
+function ProveedorTokenView({detalle,catalogo,pedido:ped,provNombre,onConfirm}){
+  const [precios,setPrecios]=useState({});
+  const [cantidades,setCantidades]=useState(()=>{const c={};detalle.forEach(d=>{c[d.id]=d.cantidad;});return c;});
+  const items=detalle;
+  const total=items.reduce((s,d)=>s+(precios[d.id]||0)*(cantidades[d.id]||0),0);
+  const totalConIva=items.reduce((s,d)=>{const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};const sub=(precios[d.id]||0)*(cantidades[d.id]||0);return s+sub;},0);
+  const iva=items.reduce((s,d)=>{const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};const sub=(precios[d.id]||0)*(cantidades[d.id]||0);return s+(cat.aplica_iva?sub*0.16:0);},0);
+  const allCaptured=items.every(d=>precios[d.id]!=null&&precios[d.id]>=0);
+  const itemsConCambio=items.filter(d=>(cantidades[d.id]||0)!==d.cantidad);
+
+  return(<div className="min-h-screen" style={{background:"#FAFAF8"}}><div style={{background:"#2D2D2D"}} className="border-b border-gray-200"><div className="max-w-3xl mx-auto px-4 py-3 flex items-center gap-3"><Logo size={32}/><div><h1 className="text-sm font-bold text-white">Fit Taste — Pedido #{ped.numero_pedido}</h1><p className="text-xs text-gray-400">{provNombre}</p></div></div></div>
+    <div className="max-w-3xl mx-auto px-4 py-6">
+      <div className="rounded-xl p-4 mb-4 border-2 border-amber-300" style={{background:"linear-gradient(135deg,#FEF9EC,#FBF0D1)"}}>
+        <h2 className="text-lg font-bold text-gray-900 mb-1">Captura tus precios y confirma cantidades</h2>
+        <p className="text-sm text-gray-600">Pedido #{ped.numero_pedido} — {new Date(ped.fecha).toLocaleDateString("es-MX")}</p>
+        <p className="text-xs text-gray-500 mt-1">Si no tienes un artículo, pon 0 en la cantidad entregada</p>
+        <div className="w-full bg-amber-200 rounded-full h-2 mt-3"><div className="bg-amber-500 h-2 rounded-full transition-all" style={{width:`${items.length>0?(items.filter(d=>precios[d.id]!=null&&precios[d.id]>=0).length/items.length*100):0}%`}}/></div>
+        <p className="text-xs text-amber-700 mt-1">{items.filter(d=>precios[d.id]!=null&&precios[d.id]>=0).length} de {items.length} capturados</p>
+      </div>
+      <div className="grid grid-cols-3 gap-3 mb-4">{[{l:"Subtotal",v:fmt(total)},{l:"IVA 16%",v:fmt(iva)},{l:"Gran Total",v:fmt(total+iva),c:"text-amber-700 font-extrabold"}].map((s,i)=>(<div key={i} className="bg-white border border-gray-200 rounded-xl p-3"><p className="text-xs text-gray-500">{s.l}</p><p className={`text-lg font-bold ${s.c||"text-gray-800"}`}>{s.v}</p></div>))}</div>
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden"><table className="w-full text-sm"><thead className="bg-gray-50"><tr>
+        {["Artículo","Solicitado","Entregado","Unidad","Precio unit.","IVA","Total"].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Solicitado","Entregado","Precio unit."].includes(h)?"text-center":h==="Total"?"text-right":"text-left"}`}>{h}</th>)}
+      </tr></thead><tbody>{items.map(d=>{const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};const pr=precios[d.id];const cant=cantidades[d.id]||0;const changed=cant!==d.cantidad;const sub=pr!=null&&cant>0?cant*pr:0;return(<tr key={d.id} className={`border-t border-gray-100 ${cant===0?"bg-red-50/40":pr!=null&&pr>=0?"bg-amber-50/40":""}`}>
+        <td className="px-3 py-2 font-medium text-gray-900">{cat.articulo}</td>
+        <td className="px-3 py-2 text-center text-gray-400">{cat.unidad_clave==="kg"?fmtQ(d.cantidad,"kg"):d.cantidad}</td>
+        <td className="px-3 py-2 text-center"><input type="number" min="0" step={cat.unidad_clave==="kg"?"0.25":"1"} className={`w-20 text-center border rounded-lg px-1 py-1 text-sm focus:ring-2 focus:ring-amber-400 ${changed?"border-orange-400 bg-orange-50":"border-gray-200"}`} value={cantidades[d.id]||""} onChange={e=>setCantidades({...cantidades,[d.id]:parseFloat(e.target.value)||0})}/></td>
+        <td className="px-3 py-2 text-gray-500">{cat.unidad_clave==="kg"?"por kg":`por ${cat.unidad_clave}`}</td>
+        <td className="px-3 py-2 text-center"><div className="flex items-center justify-center gap-1"><span className="text-gray-400">$</span><input type="number" min="0" step="0.01" className="w-24 text-center border border-gray-200 rounded-lg px-1 py-1 text-sm focus:ring-2 focus:ring-amber-400" value={precios[d.id]!=null?precios[d.id]:""} onChange={e=>setPrecios({...precios,[d.id]:e.target.value===""?null:parseFloat(e.target.value)||0})}/></div></td>
+        <td className="px-3 py-2 text-center">{cat.aplica_iva?<span className="text-xs text-gray-500">16%</span>:<span className="text-xs text-emerald-600 font-medium">Exento</span>}</td>
+        <td className="px-3 py-2 text-right font-semibold text-gray-700">{pr!=null&&cant>0?fmt(sub+(cat.aplica_iva?sub*0.16:0)):cant===0?<span className="text-red-500 text-xs">Sin stock</span>:"-"}</td>
+      </tr>);})}</tbody></table></div>
+      {itemsConCambio.length>0&&<div className="bg-orange-50 border border-orange-200 rounded-xl p-3 mt-4"><p className="text-sm font-semibold text-orange-800">{itemsConCambio.length} artículo{itemsConCambio.length>1?"s":""} con cantidad diferente a la solicitada</p><div className="text-xs text-orange-700 mt-1">{itemsConCambio.map(d=>{const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};return<p key={d.id}>{cat.articulo}: solicitado {d.cantidad} → entrega {cantidades[d.id]||0}{(cantidades[d.id]||0)===0?" (sin stock)":""}</p>;})}</div></div>}
+      <div className="flex justify-end mt-4"><Btn onClick={()=>onConfirm(precios,cantidades)} disabled={!allCaptured}>{allCaptured?"Confirmar precios y cantidades":`Faltan ${items.length-items.filter(d=>precios[d.id]!=null&&precios[d.id]>=0).length} precios`}</Btn></div>
+    </div>
+  </div>);
+}
+
+// ======================== ALMACÉN PEPS ========================
+function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedidosAlm,catalogo,pedidoDetalle,proveedores,onSurtirPedido,lotes,setLotes}){
+  const [tab,setTab]=useState("inventario");
+  const [surtiendo,setSurtiendo]=useState(null);
+  const [surtidos,setSurtidos]=useState({});
+  const [cantSurtida,setCantSurtida]=useState({});
+  // Entrada de lote
+  const [nLote,setNLote]=useState({inv_id:"",cantidad:0,costo_unitario:0,iva:0,proveedor:"",nota:""});
+  const [savingLote,setSavingLote]=useState(false);
+
+  const cap=inventario.reduce((s,p)=>s+p.existencia*p.costo_unitario_actual,0);
+  const pedidoItems=surtiendo?pedidoDetalle.filter(d=>d.pedido_id===surtiendo&&proveedores.find(pr=>pr.id===d.proveedor_id)?.tipo_flujo==="Almacen interno"):[];
+  const totalSurtidos=pedidoItems.filter(d=>surtidos[d.id]).length;
+  const allSurtidos=pedidoItems.length>0&&totalSurtidos===pedidoItems.length;
+
+  // Save new lote to Supabase
+  const handleNewLote=async()=>{
+    if(!nLote.inv_id||nLote.cantidad<=0||nLote.costo_unitario<=0)return;
+    setSavingLote(true);
+    const data={inventario_id:nLote.inv_id,fecha_entrada:new Date().toISOString().split("T")[0],cantidad:nLote.cantidad,costo_unitario:nLote.costo_unitario,iva:nLote.iva||0,sobreprecio_transporte:0,proveedor_origen:nLote.proveedor||null,nota:nLote.nota||null};
+    const res=await sbPost("lotes_almacen",data);
+    if(res&&res[0]){
+      setLotes([...lotes,res[0]]);
+      // Update local inventory (trigger in DB does it too)
+      const costoTotal=nLote.costo_unitario+(nLote.iva||0);
+      setInventario(inventario.map(p=>p.id===nLote.inv_id?{...p,existencia:p.existencia+nLote.cantidad,costo_unitario_actual:costoTotal}:p));
+      setNLote({inv_id:"",cantidad:0,costo_unitario:0,iva:0,proveedor:"",nota:""});
+      alert("Lote registrado — inventario actualizado");
+    }else{alert("Error al registrar lote");}
+    setSavingLote(false);
+  };
+
+  // Group lotes by product
+  const lotesByProd={};
+  lotes.filter(l=>(l.existencia_restante||l.cantidad)>0).forEach(l=>{
+    const prod=inventario.find(p=>p.id===l.inventario_id);
+    const k=prod?.descripcion||l.inventario_id;
+    if(!lotesByProd[k])lotesByProd[k]={prod,lotes:[]};
+    lotesByProd[k].lotes.push(l);
+  });
+  // Sort lotes by date (oldest first = PEPS)
+  Object.values(lotesByProd).forEach(g=>g.lotes.sort((a,b)=>new Date(a.fecha_entrada)-new Date(b.fecha_entrada)));
+
+  const tabs2=[{id:"inventario",l:"Inventario"},{id:"lotes",l:"Lotes PEPS"},{id:"entrada",l:"+ Entrada"},{id:"surtir",l:`Surtir (${pedidosAlm.length})`}];
+
+  return(<div>
+    <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <div><h2 className="text-lg font-bold text-gray-900">Almacén — Control PEPS</h2><p className="text-sm text-gray-500">Primeras Entradas, Primeras Salidas</p></div>
+      <div className="bg-violet-50 border border-violet-200 rounded-xl px-4 py-2 text-right"><p className="text-xs text-violet-600">Capital</p><p className="text-xl font-bold text-violet-700">{fmt(cap)}</p></div>
+    </div>
+
+    <div className="flex gap-1 mb-4">{tabs2.map(t=><button key={t.id} onClick={()=>{setTab(t.id);if(t.id!=="surtir")setSurtiendo(null);}} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${tab===t.id?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={tab===t.id?{background:"#8b5cf6"}:{}}>{t.l}</button>)}</div>
+
+    {/* INVENTARIO con costos PEPS */}
+    {tab==="inventario"&&<div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+      <table className="w-full text-sm"><thead className="bg-gray-50"><tr>
+        {["SKU","Producto","Existencia","Costo PEPS","Valor PEPS","Lotes","Estado"].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Existencia","Costo PEPS","Valor PEPS","Lotes"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
+      </tr></thead><tbody>{inventario.map(p=>{
+        const prodLotes=lotes.filter(l=>l.inventario_id===p.id&&(l.existencia_restante||0)>0);
+        const valorPeps=prodLotes.reduce((s,l)=>(l.existencia_restante||0)*(parseFloat(l.costo_unitario)+parseFloat(l.iva||0))+s,0);
+        const costoPeps=p.existencia>0&&prodLotes.length>0?valorPeps/prodLotes.reduce((s,l)=>s+(l.existencia_restante||0),0):p.costo_unitario_actual;
+        const low=(p.unidad_clave==="kg"&&p.existencia<2)||(p.unidad_clave!=="kg"&&p.existencia<50);
+        return(<tr key={p.id} className={`border-t border-gray-100 ${low?"bg-red-50/50":"hover:bg-gray-50"}`}>
+          <td className="px-3 py-2 text-gray-400 font-mono text-xs">{p.sku}</td>
+          <td className="px-3 py-2 font-medium text-gray-900">{p.descripcion}</td>
+          <td className="px-3 py-2 text-right font-bold">{fmtQ(p.existencia,p.unidad_clave)}</td>
+          <td className="px-3 py-2 text-right text-gray-600">{fmt(costoPeps)}<span className="text-gray-400 text-xs">/{p.unidad_clave}</span></td>
+          <td className="px-3 py-2 text-right font-medium text-gray-700">{fmt(valorPeps||p.existencia*p.costo_unitario_actual)}</td>
+          <td className="px-3 py-2 text-right"><span className={`text-xs font-medium ${prodLotes.length>0?"text-violet-600":"text-gray-400"}`}>{prodLotes.length}</span></td>
+          <td className="px-3 py-2">{p.existencia===0?<Badge v="danger">Agotado</Badge>:low?<Badge v="warning">Bajo</Badge>:<Badge v="success">OK</Badge>}</td>
+        </tr>);
+      })}</tbody></table>
+    </div>}
+
+    {/* LOTES PEPS */}
+    {tab==="lotes"&&<div>
+      {Object.entries(lotesByProd).length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400">Sin lotes activos</p><Btn onClick={()=>setTab("entrada")}>Registrar primera entrada</Btn></div>
+      :Object.entries(lotesByProd).map(([nombre,{prod,lotes:pLotes}])=>(
+        <div key={nombre} className="bg-white border border-gray-200 rounded-xl mb-3 overflow-hidden">
+          <div className="px-4 py-2 bg-violet-50 border-b border-violet-100 flex justify-between items-center">
+            <span className="font-semibold text-violet-900">{nombre} <span className="text-xs text-violet-600">({prod?.unidad_clave})</span></span>
+            <span className="text-sm font-bold text-violet-700">{pLotes.length} lote{pLotes.length>1?"s":""}</span>
+          </div>
+          <table className="w-full text-xs"><thead><tr className="border-b border-gray-100">
+            {["Fecha","Original","Restante","Costo unit.","IVA","Costo total/u","Valor restante","Proveedor"].map(h=><th key={h} className={`px-3 py-1.5 font-medium text-gray-500 ${h==="Fecha"||h==="Proveedor"?"text-left":"text-right"}`}>{h}</th>)}
+          </tr></thead><tbody>{pLotes.map((l,i)=>{
+            const rest=l.existencia_restante||0;
+            const cu=parseFloat(l.costo_unitario)||0;
+            const iv=parseFloat(l.iva)||0;
+            const ct=cu+iv;
+            return(<tr key={l.id} className={`border-t border-gray-50 ${i===0?"bg-violet-50/30":""}`}>
+              <td className="px-3 py-1.5 text-gray-600">{new Date(l.fecha_entrada).toLocaleDateString("es-MX")}{i===0&&<span className="ml-1 text-violet-600 font-semibold">← PEPS</span>}</td>
+              <td className="px-3 py-1.5 text-right text-gray-400">{fmtQ(l.cantidad,prod?.unidad_clave||"?")}</td>
+              <td className="px-3 py-1.5 text-right font-bold text-gray-800">{fmtQ(rest,prod?.unidad_clave||"?")}</td>
+              <td className="px-3 py-1.5 text-right">{fmt(cu)}</td>
+              <td className="px-3 py-1.5 text-right">{fmt(iv)}</td>
+              <td className="px-3 py-1.5 text-right font-semibold text-violet-700">{fmt(ct)}</td>
+              <td className="px-3 py-1.5 text-right">{fmt(rest*ct)}</td>
+              <td className="px-3 py-1.5 text-gray-500">{l.proveedor_origen||"-"}</td>
+            </tr>);})}</tbody></table>
+        </div>
+      ))}
+    </div>}
+
+    {/* ENTRADA DE LOTE */}
+    {tab==="entrada"&&<div className="bg-white border-2 border-violet-300 rounded-xl p-4">
+      <h3 className="text-sm font-bold text-violet-800 mb-3">Registrar entrada de lote</h3>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
+        <div><label className="text-xs text-gray-500 block mb-1">Producto</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={nLote.inv_id} onChange={e=>setNLote({...nLote,inv_id:e.target.value})}><option value="">Seleccionar...</option>{inventario.map(p=><option key={p.id} value={p.id}>{p.descripcion} ({p.unidad_clave})</option>)}</select></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Cantidad</label><input type="number" min="0" step="0.25" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={nLote.cantidad||""} onChange={e=>setNLote({...nLote,cantidad:parseFloat(e.target.value)||0})}/></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Costo unitario (sin IVA)</label><input type="number" min="0" step="0.01" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={nLote.costo_unitario||""} onChange={e=>setNLote({...nLote,costo_unitario:parseFloat(e.target.value)||0})}/></div>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
+        <div><label className="text-xs text-gray-500 block mb-1">IVA por unidad</label><input type="number" min="0" step="0.01" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="0 si exento" value={nLote.iva||""} onChange={e=>setNLote({...nLote,iva:parseFloat(e.target.value)||0})}/></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Proveedor origen</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Nombre del proveedor" value={nLote.proveedor} onChange={e=>setNLote({...nLote,proveedor:e.target.value})}/></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Nota</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Opcional" value={nLote.nota} onChange={e=>setNLote({...nLote,nota:e.target.value})}/></div>
+      </div>
+      {nLote.costo_unitario>0&&nLote.cantidad>0&&<div className="bg-violet-50 rounded-xl p-3 mb-4">
+        <div className="grid grid-cols-4 gap-3 text-sm">
+          <div><p className="text-xs text-violet-600">Costo/u</p><p className="font-bold text-violet-800">{fmt(nLote.costo_unitario)}</p></div>
+          <div><p className="text-xs text-violet-600">IVA/u</p><p className="font-bold text-violet-800">{fmt(nLote.iva||0)}</p></div>
+          <div><p className="text-xs text-violet-600">Total/u</p><p className="font-bold text-violet-900">{fmt(nLote.costo_unitario+(nLote.iva||0))}</p></div>
+          <div><p className="text-xs text-violet-600">Total lote</p><p className="font-bold text-violet-900">{fmt(nLote.cantidad*(nLote.costo_unitario+(nLote.iva||0)))}</p></div>
+        </div>
+      </div>}
+      <Btn onClick={handleNewLote} disabled={savingLote||!nLote.inv_id||nLote.cantidad<=0||nLote.costo_unitario<=0} color="purple">{savingLote?"Guardando...":"Registrar lote de entrada"}</Btn>
+    </div>}
+
+    {/* SURTIR PEDIDOS */}
+    {tab==="surtir"&&!surtiendo&&<div>
+      {pedidosAlm.length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400">Sin pedidos pendientes de surtir</p></div>
+      :<div className="rounded-xl p-4 border-2 border-amber-300 bg-amber-50"><h3 className="text-sm font-bold text-amber-800 mb-3">Pedidos pendientes de surtir</h3>
+        {pedidosAlm.map((p,i)=>{const items=pedidoDetalle.filter(d=>d.pedido_id===p.id&&proveedores.find(pr=>pr.id===d.proveedor_id)?.tipo_flujo==="Almacen interno");const tot=items.reduce((s,d)=>s+d.cantidad*d.costo_referencia,0);return(<div key={i} className="bg-white rounded-xl p-3 mb-2 border border-amber-200"><div className="flex justify-between items-center mb-2"><div><span className="font-bold text-gray-900">Pedido #{p.numero_pedido}</span><span className="text-xs text-gray-500 ml-2">{new Date(p.fecha||p.created_at).toLocaleDateString("es-MX")}</span></div><div className="flex items-center gap-2"><span className="text-sm font-semibold text-gray-700">{fmt(tot)}</span><Btn onClick={()=>{setSurtiendo(p.id);setSurtidos({});const c={};items.forEach(d=>{c[d.id]=d.cantidad;});setCantSurtida(c);}} color="purple">Ver y surtir</Btn></div></div><div className="text-xs text-gray-600">{items.map(d=>{const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};return<span key={d.id} className="inline-block bg-gray-100 rounded px-2 py-0.5 mr-1 mb-1">{cat.articulo} ({cat.unidad_clave==="kg"?fmtQ(d.cantidad,"kg"):d.cantidad+" "+cat.unidad_clave})</span>})}</div></div>);})}
+      </div>}
+    </div>}
+
+    {tab==="surtir"&&surtiendo&&<div className="rounded-xl mb-4 border-2 border-violet-300 bg-violet-50 overflow-hidden">
+      <div className="px-4 py-3 bg-violet-100 border-b border-violet-200 flex items-center justify-between"><div><h3 className="font-bold text-violet-900">Surtiendo Pedido #{pedidosAlm.find(p=>p.id===surtiendo)?.numero_pedido}</h3><p className="text-xs text-violet-700">{totalSurtidos} de {pedidoItems.length} marcados</p></div><button onClick={()=>setSurtiendo(null)} className="text-xs text-violet-700 hover:text-violet-900 px-3 py-1.5 border border-violet-300 rounded-lg">← Volver</button></div>
+      <div className="w-full bg-violet-200 h-2"><div className="bg-violet-600 h-2 transition-all" style={{width:`${pedidoItems.length>0?(totalSurtidos/pedidoItems.length*100):0}%`}}/></div>
+      <div className="p-4">
+        <p className="text-xs text-violet-700 mb-3">Ajusta cantidad surtida. Al confirmar, se descontará por PEPS (lote más antiguo primero).</p>
+        {pedidoItems.map(d=>{
+          const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};
+          const done=surtidos[d.id];
+          const cs=cantSurtida[d.id]||0;
+          const parcial=cs<d.cantidad&&cs>0;
+          // Buscar inventario y lotes para este producto
+          const inv=cat.inv_id?inventario.find(i=>i.id===cat.inv_id):inventario.find(i=>{const dL=i.descripcion.toLowerCase();const words=cat.articulo.toLowerCase().split(" ");return words.some(w=>w.length>3&&dL.includes(w));});
+          const existencia=inv?inv.existencia:0;
+          const prodLotes=inv?lotes.filter(l=>l.inventario_id===inv.id&&(l.existencia_restante||0)>0).sort((a,b)=>new Date(a.fecha_entrada)-new Date(b.fecha_entrada)):[];
+          const alcanza=existencia>=cs;
+          return(<div key={d.id} className={`p-3 mb-2 rounded-xl border-2 transition-all ${done?"border-emerald-400 bg-emerald-50":"border-gray-200 bg-white"}`}>
+            <div className="flex items-center gap-3">
+              <div onClick={()=>setSurtidos({...surtidos,[d.id]:!surtidos[d.id]})} className={`w-7 h-7 rounded-lg border-2 flex items-center justify-center text-sm cursor-pointer shrink-0 ${done?"border-emerald-500 bg-emerald-500 text-white":"border-gray-300 hover:border-violet-400"}`}>{done?"✓":""}</div>
+              <div className="flex-1">
+                <p className={`font-medium ${done?"text-emerald-800":"text-gray-900"}`}>{cat.articulo}</p>
+                <p className="text-xs text-gray-500">Solicitado: {cat.unidad_clave==="kg"?fmtQ(d.cantidad,"kg"):`${d.cantidad} ${cat.unidad_clave}`}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {parcial&&<Badge v="warning">Parcial</Badge>}
+                <div><label className="text-xs text-gray-500 block">Surtido</label><input type="number" min="0" step={cat.unidad_clave==="kg"?"0.25":"1"} className={`w-20 text-center border rounded-lg px-1 py-1 text-sm ${cs>existencia?"border-red-400 bg-red-50":cs<d.cantidad?"border-orange-300 bg-orange-50":"border-gray-200"}`} value={cantSurtida[d.id]||""} onChange={e=>setCantSurtida({...cantSurtida,[d.id]:parseFloat(e.target.value)||0})}/></div>
+                <span className="text-xs text-gray-400">{cat.unidad_clave}</span>
+              </div>
+            </div>
+            {/* Existencia y lotes */}
+            <div className="ml-10 mt-2 flex items-center gap-4">
+              <div className={`text-xs px-2 py-1 rounded-lg ${alcanza?"bg-emerald-100 text-emerald-800":"bg-red-100 text-red-800"}`}>
+                Existencia: <span className="font-bold">{inv?fmtQ(existencia,cat.unidad_clave):"No vinculado"}</span>
+                {cs>0&&existencia>0&&<span className="ml-1">→ quedarían {fmtQ(Math.max(0,existencia-cs),cat.unidad_clave)}</span>}
+              </div>
+              {prodLotes.length>0&&<div className="text-xs text-violet-600">
+                {prodLotes.length} lote{prodLotes.length>1?"s":""}: {prodLotes.map((l,i)=>{const rest=l.existencia_restante||0;const cu=parseFloat(l.costo_unitario)+(parseFloat(l.iva)||0);return<span key={l.id} className={`inline-block mr-1 ${i===0?"font-bold":""}`}>{fmtQ(rest,cat.unidad_clave)} @{fmt(cu)}{i<prodLotes.length-1?",":""}</span>;})}
+              </div>}
+              {!inv&&<span className="text-xs text-red-600 font-medium">No vinculado a inventario</span>}
+            </div>
+          </div>);
+        })}
+        <div className="flex justify-end mt-4"><Btn onClick={()=>{onSurtirPedido(surtiendo,cantSurtida);setSurtiendo(null);setSurtidos({});}} disabled={!allSurtidos} color="purple">{allSurtidos?"Pedido Surtido (PEPS) ✓":`Marca los ${pedidoItems.length-totalSurtidos} restantes`}</Btn></div>
+      </div>
+    </div>}
+
+    {/* MOVIMIENTOS RECIENTES */}
+    {movimientos.length>0&&<div className="mt-4"><h3 className="text-sm font-bold text-gray-700 mb-2">Movimientos recientes</h3><div className="space-y-1">{movimientos.slice().reverse().slice(0,8).map(m=>{const prod=inventario.find(p=>p.id===m.inv_id);return(<div key={m.id} className="flex items-center gap-2 text-sm bg-white border border-gray-100 rounded-lg px-3 py-2"><Badge v={m.tipo==="entrada"?"success":"danger"}>{m.tipo}</Badge><span className="font-medium text-gray-800">{prod?.descripcion}</span><span className="text-gray-500">{fmtQ(m.qty,prod?.unidad_clave||"pz")}</span>{m.nota&&<span className="text-gray-400 text-xs">— {m.nota}</span>}<span className="ml-auto text-xs text-gray-400">{m.fecha}</span></div>);})}</div></div>}
+  </div>);
+}
+
+// ======================== DASHBOARD FINANCIERO ========================
+function DashboardView({pedidos,catalogo,proveedores,pedidoDetalle,inventario}){
+  const [mesOffset,setMesOffset]=useState(0);
+  const now=new Date();
+  const mesActual=new Date(now.getFullYear(),now.getMonth()-mesOffset,1);
+  const mesNombre=mesActual.toLocaleDateString("es-MX",{month:"long",year:"numeric"});
+  const mesInicio=mesActual.toISOString().split("T")[0];
+  const mesFin=new Date(mesActual.getFullYear(),mesActual.getMonth()+1,0).toISOString().split("T")[0];
+
+  // Pedidos del mes
+  const pedidosMes=pedidos.filter(p=>{const f=p.fecha||p.created_at?.split("T")[0];return f>=mesInicio&&f<=mesFin;});
+  const pedidosCerradosMes=pedidosMes.filter(p=>p.estatus==="cerrado");
+  const pedidosActivosMes=pedidosMes.filter(p=>p.estatus!=="cerrado");
+
+  // Detalle del mes
+  const pedidoIdsMes=new Set(pedidosMes.map(p=>p.id));
+  const detalleMes=pedidoDetalle.filter(d=>pedidoIdsMes.has(d.pedido_id));
+
+  // Costo real del mes
+  const costoRealMes=detalleMes.reduce((s,d)=>s+d.cantidad*(d.costo_real||0),0);
+  const costoTeoricoMes=detalleMes.reduce((s,d)=>s+d.cantidad*d.costo_referencia,0);
+  const desvMes=costoTeoricoMes>0?((costoRealMes-costoTeoricoMes)/costoTeoricoMes*100):0;
+
+  // Por proveedor
+  const byProv={};
+  detalleMes.forEach(d=>{
+    const prov=proveedores.find(p=>p.id===d.proveedor_id);
+    const k=prov?.nombre||"Otro";
+    if(!byProv[k])byProv[k]={total_real:0,total_teo:0,items:0};
+    byProv[k].total_real+=d.cantidad*(d.costo_real||d.costo_referencia);
+    byProv[k].total_teo+=d.cantidad*d.costo_referencia;
+    byProv[k].items++;
+  });
+  const provSorted=Object.entries(byProv).sort((a,b)=>b[1].total_real-a[1].total_real);
+  const maxProv=provSorted.length>0?provSorted[0][1].total_real:1;
+
+  // Por SKU (top 15 por gasto)
+  const bySku={};
+  detalleMes.forEach(d=>{
+    const cat=catalogo.find(c=>c.id===d.catalogo_id);
+    if(!cat)return;
+    const k=cat.articulo;
+    if(!bySku[k])bySku[k]={total_real:0,total_teo:0,cantidad:0,unidad:cat.unidad_clave,sku:cat.sku,proveedor:cat.proveedor_nombre};
+    bySku[k].total_real+=d.cantidad*(d.costo_real||d.costo_referencia);
+    bySku[k].total_teo+=d.cantidad*d.costo_referencia;
+    bySku[k].cantidad+=d.cantidad;
+  });
+  const skuSorted=Object.entries(bySku).sort((a,b)=>b[1].total_real-a[1].total_real);
+  const maxSku=skuSorted.length>0?skuSorted[0][1].total_real:1;
+
+  // Capital almacén
+  const capAlmacen=inventario.reduce((s,p)=>s+p.existencia*p.costo_unitario_actual,0);
+
+  return(<div>
+    <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center gap-3"><Logo size={40}/><div><h2 className="text-lg font-bold text-gray-900">Dashboard financiero</h2><p className="text-sm text-gray-500">Fit Taste Roma — v{V}</p></div></div>
+      <div className="flex items-center gap-2">
+        <button onClick={()=>setMesOffset(mesOffset+1)} className="px-3 py-1.5 rounded-lg text-sm border border-gray-200 hover:bg-gray-100">←</button>
+        <span className="text-sm font-semibold text-gray-800 capitalize min-w-32 text-center">{mesNombre}</span>
+        <button onClick={()=>setMesOffset(Math.max(0,mesOffset-1))} disabled={mesOffset===0} className="px-3 py-1.5 rounded-lg text-sm border border-gray-200 hover:bg-gray-100 disabled:opacity-30">→</button>
+      </div>
+    </div>
+
+    {/* KPIs principales */}
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+      <div className="bg-white border border-gray-200 rounded-xl p-3"><p className="text-xs text-gray-500">Costo real del mes</p><p className="text-xl font-bold text-gray-900">{fmt(costoRealMes)}</p></div>
+      <div className="bg-white border border-gray-200 rounded-xl p-3"><p className="text-xs text-gray-500">Costo teórico</p><p className="text-xl font-bold text-gray-500">{fmt(costoTeoricoMes)}</p></div>
+      <div className="bg-white border border-gray-200 rounded-xl p-3"><p className="text-xs text-gray-500">Desviación</p><p className={`text-xl font-bold ${desvMes>5?"text-red-600":desvMes<-5?"text-emerald-600":"text-gray-800"}`}>{desvMes>0?"+":""}{desvMes.toFixed(1)}%</p></div>
+      <div className="bg-white border border-gray-200 rounded-xl p-3"><p className="text-xs text-gray-500">Pedidos mes</p><p className="text-xl font-bold text-amber-600">{pedidosMes.length}<span className="text-xs text-gray-400 ml-1">({pedidosCerradosMes.length} cerrados)</span></p></div>
+      <div className="bg-white border border-gray-200 rounded-xl p-3"><p className="text-xs text-gray-500">Capital almacén</p><p className="text-xl font-bold text-violet-600">{fmt(capAlmacen)}</p></div>
+    </div>
+
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+      {/* GASTO POR PROVEEDOR */}
+      <div className="bg-white border border-gray-200 rounded-xl p-4">
+        <h3 className="text-sm font-bold text-gray-700 mb-3">Gasto por proveedor — <span className="capitalize">{mesNombre}</span></h3>
+        {provSorted.length===0?<p className="text-sm text-gray-400">Sin datos para este mes</p>:provSorted.map(([prov,data])=>{
+          const pct=maxProv>0?(data.total_real/maxProv)*100:0;
+          const desv=data.total_teo>0?((data.total_real-data.total_teo)/data.total_teo*100):0;
+          return(<div key={prov} className="mb-3">
+            <div className="flex justify-between text-sm mb-1">
+              <span className="text-gray-700 font-medium">{prov} <span className="text-gray-400 text-xs">({data.items} artículos)</span></span>
+              <div className="flex items-center gap-2"><Badge v={Math.abs(desv)>10?"danger":Math.abs(desv)>5?"warning":"success"}>{desv>0?"+":""}{desv.toFixed(0)}%</Badge><span className="font-bold text-gray-800">{fmt(data.total_real)}</span></div>
+            </div>
+            <div className="w-full bg-gray-100 rounded-full h-3"><div className="h-3 rounded-full transition-all" style={{width:`${Math.min(pct,100)}%`,background:"#F5B731"}}/></div>
+          </div>);
+        })}
+        {provSorted.length>0&&<div className="border-t border-gray-100 pt-2 mt-2 flex justify-between font-bold text-sm"><span>Total</span><span>{fmt(costoRealMes)}</span></div>}
+      </div>
+
+      {/* CONSUMO POR SKU (top 15) */}
+      <div className="bg-white border border-gray-200 rounded-xl p-4">
+        <h3 className="text-sm font-bold text-gray-700 mb-3">Top consumo por SKU — <span className="capitalize">{mesNombre}</span></h3>
+        {skuSorted.length===0?<p className="text-sm text-gray-400">Sin datos para este mes</p>:
+        <div className="overflow-y-auto" style={{maxHeight:"400px"}}><table className="w-full text-sm"><thead className="sticky top-0 bg-white"><tr>
+          {["Artículo","Cantidad","Costo real","% del total"].map(h=><th key={h} className={`px-2 py-1.5 font-medium text-gray-500 text-xs ${h==="Artículo"?"text-left":"text-right"}`}>{h}</th>)}
+        </tr></thead><tbody>{skuSorted.slice(0,15).map(([art,data],i)=>{
+          const pctTotal=costoRealMes>0?(data.total_real/costoRealMes*100):0;
+          const desv=data.total_teo>0?((data.total_real-data.total_teo)/data.total_teo*100):0;
+          return(<tr key={i} className="border-t border-gray-50">
+            <td className="px-2 py-1.5"><p className="font-medium text-gray-800">{art}</p><p className="text-xs text-gray-400">{data.proveedor}</p></td>
+            <td className="px-2 py-1.5 text-right text-gray-600">{data.unidad==="kg"?fmtQ(data.cantidad,"kg"):`${data.cantidad} ${data.unidad}`}</td>
+            <td className="px-2 py-1.5 text-right"><span className="font-semibold">{fmt(data.total_real)}</span>{Math.abs(desv)>5&&<span className={`text-xs ml-1 ${desv>0?"text-red-500":"text-emerald-500"}`}>{desv>0?"+":""}{desv.toFixed(0)}%</span>}</td>
+            <td className="px-2 py-1.5 text-right">
+              <div className="flex items-center justify-end gap-1"><div className="w-12 bg-gray-100 rounded-full h-1.5"><div className="h-1.5 rounded-full" style={{width:`${Math.min(pctTotal,100)}%`,background:"#F5B731"}}/></div><span className="text-xs text-gray-500 w-8">{pctTotal.toFixed(0)}%</span></div>
+            </td>
+          </tr>);})}</tbody></table></div>}
+      </div>
+    </div>
+
+    {/* PEDIDOS ACTIVOS */}
+    {pedidosActivosMes.length>0&&<div className="bg-white border border-gray-200 rounded-xl p-4">
+      <h3 className="text-sm font-bold text-gray-700 mb-3">Pedidos activos</h3>
+      {pedidosActivosMes.map(p=>{
+        const det=pedidoDetalle.filter(d=>d.pedido_id===p.id);
+        const real=det.reduce((s,d)=>s+d.cantidad*(d.costo_real||d.costo_referencia),0);
+        const sinPrecio=det.filter(d=>!d.costo_real).length;
+        return(<div key={p.id} className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
+          <div className="flex items-center gap-2"><span className="font-medium text-gray-800">#{p.numero_pedido}</span>{estatusBadge(p.estatus)}{sinPrecio>0&&<span className="text-xs text-amber-600">{sinPrecio} sin precio</span>}</div>
+          <span className="font-semibold text-gray-700">{fmt(real)}</span>
+        </div>);
+      })}
+    </div>}
+  </div>);
+}
+
+// ======================== CATÁLOGO (solo Admin) ========================
+function CatalogoView({catalogo,setCatalogo,proveedores,unidades}){
+  const [filter,setFilter]=useState("");
+  const [editing,setEditing]=useState(null);
+  const [editData,setEditData]=useState({});
+  const [adding,setAdding]=useState(false);
+  const [newItem,setNewItem]=useState({sku:"",articulo:"",tipo_producto:"VERDURA",unidad_clave:"kg",costo_referencia:0,proveedor_id:"",notas:""});
+  const [saving,setSaving]=useState(false);
+  const [msg,setMsg]=useState(null);
+
+  const filtered=catalogo.filter(p=>p.articulo.toLowerCase().includes(filter.toLowerCase())||p.sku.toLowerCase().includes(filter.toLowerCase())||p.tipo_producto.toLowerCase().includes(filter.toLowerCase())||p.proveedor_nombre.toLowerCase().includes(filter.toLowerCase()));
+  const tipos=[...new Set(catalogo.map(c=>c.tipo_producto))].sort();
+
+  const startEdit=(p)=>{setEditing(p.id);setEditData({costo_referencia:p.costo_referencia,proveedor_id:p.proveedor_id,unidad_clave:p.unidad_clave,notas:p.notas||"",aplica_iva:p.aplica_iva!==false});};
+
+  const saveEdit=async(p)=>{
+    setSaving(true);setMsg(null);
+    const unid=unidades.find(u=>u.clave===editData.unidad_clave);
+    const updates={costo_referencia:editData.costo_referencia,proveedor_id:editData.proveedor_id,notas:editData.notas||null,aplica_iva:editData.aplica_iva};
+    if(unid)updates.unidad_id=unid.id;
+    const res=await sbPatch("catalogo",p.id,updates);
+    if(res){
+      const prov=proveedores.find(pr=>pr.id===editData.proveedor_id);
+      setCatalogo(catalogo.map(c=>c.id===p.id?{...c,costo_referencia:parseFloat(editData.costo_referencia),proveedor_id:editData.proveedor_id,proveedor_nombre:prov?.nombre||c.proveedor_nombre,unidad_clave:editData.unidad_clave,notas:editData.notas,aplica_iva:editData.aplica_iva}:c));
+      setMsg(`${p.articulo} actualizado`);
+    }else{setMsg("Error al guardar");}
+    setEditing(null);setSaving(false);
+    setTimeout(()=>setMsg(null),3000);
+  };
+
+  const saveNew=async()=>{
+    if(!newItem.sku||!newItem.articulo||!newItem.proveedor_id){setMsg("Completa SKU, artículo y proveedor");return;}
+    setSaving(true);setMsg(null);
+    const unid=unidades.find(u=>u.clave===newItem.unidad_clave);
+    const data={sku:newItem.sku,articulo:newItem.articulo.toUpperCase(),tipo_producto:newItem.tipo_producto,unidad_id:unid?.id,costo_referencia:newItem.costo_referencia,proveedor_id:newItem.proveedor_id,notas:newItem.notas||null,activo:true};
+    const res=await sbPost("catalogo",data);
+    if(res&&res[0]){
+      const prov=proveedores.find(pr=>pr.id===newItem.proveedor_id);
+      setCatalogo([...catalogo,{id:res[0].id,sku:newItem.sku,articulo:newItem.articulo.toUpperCase(),tipo_producto:newItem.tipo_producto,unidad_clave:newItem.unidad_clave,costo_referencia:parseFloat(newItem.costo_referencia),proveedor_id:newItem.proveedor_id,proveedor_nombre:prov?.nombre||"?",notas:newItem.notas}]);
+      setMsg(`${newItem.articulo} agregado`);
+      setNewItem({sku:"",articulo:"",tipo_producto:"VERDURA",unidad_clave:"kg",costo_referencia:0,proveedor_id:"",notas:""});
+      setAdding(false);
+    }else{setMsg("Error al agregar — verifica que el SKU no esté duplicado");}
+    setSaving(false);
+    setTimeout(()=>setMsg(null),3000);
+  };
+
+  return(<div>
+    <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <div><h2 className="text-lg font-bold text-gray-900">Catálogo de productos</h2><p className="text-sm text-gray-500">{catalogo.length} SKUs — edición directa a Supabase</p></div>
+      <Btn onClick={()=>setAdding(!adding)}>{adding?"Cancelar":"+ Nuevo SKU"}</Btn>
+    </div>
+
+    {msg&&<div className={`rounded-xl p-3 mb-4 text-sm font-medium ${msg.includes("Error")?"bg-red-50 text-red-800 border border-red-200":"bg-emerald-50 text-emerald-800 border border-emerald-200"}`}>{msg}</div>}
+
+    {adding&&<div className="bg-white border-2 border-amber-300 rounded-xl p-4 mb-4">
+      <h3 className="text-sm font-bold text-gray-700 mb-3">Agregar nuevo producto</h3>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+        <div><label className="text-xs text-gray-500 block mb-1">SKU</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-amber-400" placeholder="COC-050" value={newItem.sku} onChange={e=>setNewItem({...newItem,sku:e.target.value})}/></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Artículo</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-amber-400" placeholder="NOMBRE DEL PRODUCTO" value={newItem.articulo} onChange={e=>setNewItem({...newItem,articulo:e.target.value})}/></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Tipo</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newItem.tipo_producto} onChange={e=>setNewItem({...newItem,tipo_producto:e.target.value})}>{tipos.map(t=><option key={t} value={t}>{t}</option>)}<option value="OTRO">OTRO</option></select></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Unidad</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newItem.unidad_clave} onChange={e=>setNewItem({...newItem,unidad_clave:e.target.value})}>{unidades.map(u=><option key={u.clave} value={u.clave}>{u.nombre} ({u.clave})</option>)}</select></div>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div><label className="text-xs text-gray-500 block mb-1">Costo referencia</label><input type="number" step="0.01" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-amber-400" value={newItem.costo_referencia||""} onChange={e=>setNewItem({...newItem,costo_referencia:parseFloat(e.target.value)||0})}/></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Proveedor</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newItem.proveedor_id} onChange={e=>setNewItem({...newItem,proveedor_id:e.target.value})}><option value="">Seleccionar...</option>{proveedores.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}</select></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Notas</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Opcional" value={newItem.notas} onChange={e=>setNewItem({...newItem,notas:e.target.value})}/></div>
+        <div className="flex items-end"><Btn onClick={saveNew} disabled={saving}>{saving?"Guardando...":"Guardar producto"}</Btn></div>
+      </div>
+    </div>}
+
+    <input className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm mb-4 focus:ring-2 focus:ring-amber-400" placeholder="Buscar por SKU, artículo, tipo o proveedor..." value={filter} onChange={e=>setFilter(e.target.value)}/>
+
+    <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
+      <table className="w-full text-sm"><thead className="bg-gray-50"><tr>
+        {["SKU","Artículo","Tipo","Unidad","Costo ref","IVA","Proveedor","Notas",""].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${h==="Costo ref"?"text-right":h==="IVA"?"text-center":"text-left"}`}>{h}</th>)}
+      </tr></thead><tbody>{filtered.map(p=>{
+        const isEditing=editing===p.id;
+        return(<tr key={p.id} className={`border-t border-gray-100 ${isEditing?"bg-amber-50":""}`}>
+          <td className="px-3 py-2 font-mono text-xs text-gray-500">{p.sku}</td>
+          <td className="px-3 py-2 font-medium text-gray-900">{p.articulo}</td>
+          <td className="px-3 py-2"><Badge v={({PROTEINAS:"danger",SUPLEMENTO:"purple",EMPAQUE:"info",FRUTA:"warning"})[p.tipo_producto]||"success"}>{p.tipo_producto}</Badge></td>
+          <td className="px-3 py-2">{isEditing?<select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.unidad_clave} onChange={e=>setEditData({...editData,unidad_clave:e.target.value})}>{unidades.map(u=><option key={u.clave} value={u.clave}>{u.clave}</option>)}</select>:<span className="text-gray-600">{p.unidad_clave}</span>}</td>
+          <td className="px-3 py-2 text-right">{isEditing?<input type="number" step="0.01" className="w-24 text-right border border-amber-300 rounded px-1 py-0.5 text-sm bg-amber-50 focus:ring-2 focus:ring-amber-400" value={editData.costo_referencia} onChange={e=>setEditData({...editData,costo_referencia:parseFloat(e.target.value)||0})}/>:<span className="font-semibold text-gray-800">{fmt(p.costo_referencia)}</span>}</td>
+          <td className="px-3 py-2 text-center">{isEditing?<label className="flex items-center justify-center gap-1 cursor-pointer"><input type="checkbox" checked={editData.aplica_iva} onChange={e=>setEditData({...editData,aplica_iva:e.target.checked})} className="w-4 h-4 rounded border-amber-300 text-amber-500 focus:ring-amber-400"/><span className="text-xs">{editData.aplica_iva?"Sí":"No"}</span></label>:p.aplica_iva?<span className="text-xs text-gray-500">16%</span>:<span className="text-xs text-emerald-600 font-semibold">Exento</span>}</td>
+          <td className="px-3 py-2">{isEditing?<select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.proveedor_id} onChange={e=>setEditData({...editData,proveedor_id:e.target.value})}>{proveedores.map(pr=><option key={pr.id} value={pr.id}>{pr.nombre}</option>)}</select>:<span className="text-gray-600 text-xs">{p.proveedor_nombre}</span>}</td>
+          <td className="px-3 py-2">{isEditing?<input className="w-full border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.notas} onChange={e=>setEditData({...editData,notas:e.target.value})}/>:<span className="text-gray-400 text-xs">{p.notas||""}</span>}</td>
+          <td className="px-3 py-2 text-right">{isEditing?<div className="flex gap-1"><button onClick={()=>saveEdit(p)} disabled={saving} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded hover:bg-emerald-600">{saving?"...":"Guardar"}</button><button onClick={()=>setEditing(null)} className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded hover:bg-gray-300">X</button></div>:<button onClick={()=>startEdit(p)} className="text-xs text-amber-700 hover:text-amber-900 font-medium hover:bg-amber-100 px-2 py-1 rounded">Editar</button>}</td>
+        </tr>);})}</tbody></table>
+    </div>
+    <p className="text-xs text-gray-400 mt-2 text-right">Mostrando {filtered.length} de {catalogo.length} productos</p>
+  </div>);
+}
+
+// ======================== APP v4.0 ========================
+function App(){
+  const [rol,setRol]=useState(null);
+  const [view,setView]=useState("bandeja");
+  const [subview,setSubview]=useState(null);
+  const [loading,setLoading]=useState(true);
+  const [loadMsg,setLoadMsg]=useState("Iniciando...");
+  const [error,setError]=useState(null);
+  const [catalogo,setCatalogo]=useState([]);
+  const [proveedores,setProveedores]=useState([]);
+  const [inventario,setInventario]=useState([]);
+  const [movimientos,setMovimientos]=useState([]);
+  const [pedidos,setPedidos]=useState([]);
+  const [selectedPedido,setSelectedPedido]=useState(null);
+  const [pedidoDetalle,setPedidoDetalle]=useState([]);
+  const [provEstatus,setProvEstatus]=useState([]);
+  const [unidades,setUnidades]=useState([]);
+  const [lotes,setLotes]=useState([]);
+  const [provToken,setProvToken]=useState(null);
+
+  // Check URL for provider token
+  useEffect(()=>{
+    const params=new URLSearchParams(window.location.search);
+    const t=params.get("token");
+    if(t)setProvToken(t);
+  },[]);
+
+  useEffect(()=>{
+    async function load(){
+      setLoadMsg("Conectando...");
+      const tables=["catalogo","proveedores","tipos_flujo_costo","unidades_medida","inventario_almacen","pedidos","pedido_detalle","pedido_proveedor_estatus","lotes_almacen"];
+      const results={};
+      for(const t of tables){setLoadMsg(`Cargando ${t}...`);results[t]=await sbGet(t);}
+      
+      if(results.catalogo.length===0&&!provToken){setError("Sin datos. Verifica SQL y permisos.");setLoading(false);return;}
+
+      const uMap={};(results.unidades_medida||[]).forEach(u=>{uMap[u.id]=u;});
+      const pMap={};(results.proveedores||[]).forEach(p=>{pMap[p.id]=p;});
+      const fMap={};(results.tipos_flujo_costo||[]).forEach(f=>{fMap[f.id]=f;});
+
+      setCatalogo((results.catalogo||[]).filter(c=>c.activo!==false).map(c=>({id:c.id,sku:c.sku,articulo:c.articulo,tipo_producto:c.tipo_producto,unidad_clave:uMap[c.unidad_id]?.clave||"?",costo_referencia:parseFloat(c.costo_referencia)||0,proveedor_id:c.proveedor_id,proveedor_nombre:pMap[c.proveedor_id]?.nombre||"?",notas:c.notas,aplica_iva:c.aplica_iva!==false,inv_id:c.inventario_almacen_id})));
+      setProveedores((results.proveedores||[]).filter(p=>p.activo!==false).map(p=>{const fl=fMap[p.tipo_flujo_id]||{};return{id:p.id,nombre:p.nombre,tipo_flujo:fl.nombre||"?",quien_captura:fl.quien_captura_precio||"?"};}));
+      setInventario((results.inventario_almacen||[]).map(i=>({id:i.id,sku:i.sku,descripcion:i.descripcion,unidad_clave:uMap[i.unidad_id]?.clave||"?",existencia:parseFloat(i.existencia)||0,costo_unitario_actual:parseFloat(i.costo_unitario_actual)||0,lead_time:i.lead_time})));
+      setPedidos((results.pedidos||[]).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)));
+      setPedidoDetalle(results.pedido_detalle||[]);
+      setProvEstatus(results.pedido_proveedor_estatus||[]);
+      setUnidades((results.unidades_medida||[]).filter(u=>u.activa!==false));
+      setLotes(results.lotes_almacen||[]);
+
+      // Handle provider token access
+      if(provToken){
+        const pe=results.pedido_proveedor_estatus.find(x=>x.token_acceso===provToken&&x.token_activo);
+        if(pe){setRol("proveedor_token");setSelectedPedido(results.pedidos.find(p=>p.id===pe.pedido_id));} 
+        else{setError("Link expirado o inválido.");}
+      }
+      setLoading(false);
+    }
+    load();
+  },[provToken]);
+
+  // CREATE PEDIDO
+  const handleCreatePedido=async(items,totalTeo)=>{
+    const sucursal=await sbGet("sucursales","limit=1");
+    const sucId=sucursal[0]?.id;
+    const res=await sbPost("pedidos",{fecha:new Date().toISOString().split("T")[0],sucursal_id:sucId,estatus:"creado",total_teorico:Math.round(totalTeo*100)/100});
+    if(res&&res[0]){
+      const pedId=res[0].id;
+      for(const item of items){await sbPost("pedido_detalle",{pedido_id:pedId,catalogo_id:item.catalogo_id,proveedor_id:item.proveedor_id,cantidad:item.cantidad,costo_referencia:item.costo_referencia});}
+      // Create estatus per proveedor
+      const provIds=[...new Set(items.map(i=>i.proveedor_id))];
+      for(const pid of provIds){await sbPost("pedido_proveedor_estatus",{pedido_id:pedId,proveedor_id:pid,estatus:"pendiente"});}
+      // Reload
+      setPedidos([res[0],...pedidos]);
+      const det=await sbGet("pedido_detalle",`pedido_id=eq.${pedId}`);
+      setPedidoDetalle([...pedidoDetalle,...det]);
+      const pe=await sbGet("pedido_proveedor_estatus",`pedido_id=eq.${pedId}`);
+      setProvEstatus([...provEstatus,...pe]);
+      setSubview(null);
+      alert(`Pedido #${res[0].numero_pedido} creado`);
+    }
+  };
+
+  // ACTIONS
+  const handleAction=async(action,provId)=>{
+    if(!selectedPedido)return;
+    const pedId=selectedPedido.id;
+    if(action==="enviar_proveedor"){
+      const token=genToken();
+      await sbPatch("pedido_proveedor_estatus",provEstatus.find(x=>x.pedido_id===pedId&&x.proveedor_id===provId)?.id,{estatus:"enviado",fecha_envio:new Date().toISOString(),token_acceso:token,token_activo:true});
+      await sbPatch("pedidos",pedId,{estatus:"en_proceso"});
+      setProvEstatus(provEstatus.map(x=>x.pedido_id===pedId&&x.proveedor_id===provId?{...x,estatus:"enviado",token_acceso:token,token_activo:true}:x));
+      setPedidos(pedidos.map(p=>p.id===pedId?{...p,estatus:"en_proceso"}:p));
+      setSelectedPedido({...selectedPedido,estatus:"en_proceso"});
+      const link=`${window.location.origin}${window.location.pathname}?token=${token}`;
+      alert(`Enviado. Link para proveedor:\n${link}`);
+      navigator.clipboard.writeText(link);
+    }
+    if(action==="cerrar_manual"||action==="enviar_almacen"){
+      const est=action==="cerrar_manual"?"completo":"enviado";
+      const pe=provEstatus.find(x=>x.pedido_id===pedId&&x.proveedor_id===provId);
+      if(pe)await sbPatch("pedido_proveedor_estatus",pe.id,{estatus:est,fecha_completado:new Date().toISOString()});
+      setProvEstatus(provEstatus.map(x=>x.pedido_id===pedId&&x.proveedor_id===provId?{...x,estatus:est}:x));
+    }
+    if(action==="cerrar_pedido"){
+      await sbPatch("pedidos",pedId,{estatus:"cerrado",total_real:pedidoDetalle.filter(d=>d.pedido_id===pedId).reduce((s,d)=>s+d.cantidad*(d.costo_real||d.costo_referencia),0)});
+      setPedidos(pedidos.map(p=>p.id===pedId?{...p,estatus:"cerrado"}:p));
+      setSelectedPedido({...selectedPedido,estatus:"cerrado"});
+      alert("Pedido cerrado");
+    }
+  };
+
+  const handleReasignar=async(detalleId,nuevoProvId)=>{
+    const det=pedidoDetalle.find(d=>d.id===detalleId);
+    if(!det)return;
+    await sbPost("pedido_reasignaciones",{pedido_detalle_id:detalleId,pedido_id:det.pedido_id,proveedor_original_id:det.proveedor_id,proveedor_nuevo_id:nuevoProvId});
+    await sbPatch("pedido_detalle",detalleId,{proveedor_id:nuevoProvId});
+    setPedidoDetalle(pedidoDetalle.map(d=>d.id===detalleId?{...d,proveedor_id:nuevoProvId}:d));
+  };
+
+  const handleUpdatePrecio=async(detalleId,precio)=>{
+    await sbPatch("pedido_detalle",detalleId,{costo_real:precio,capturado_por:"compras",fecha_captura:new Date().toISOString()});
+    setPedidoDetalle(pedidoDetalle.map(d=>d.id===detalleId?{...d,costo_real:precio}:d));
+  };
+
+  const handleUpdateCantidad=async(detalleId,cantidad)=>{
+    await sbPatch("pedido_detalle",detalleId,{cantidad:cantidad});
+    setPedidoDetalle(pedidoDetalle.map(d=>d.id===detalleId?{...d,cantidad:cantidad}:d));
+  };
+
+  const handleAddItem=async(pedidoId,catalogoId,proveedorId,cantidad,costoRef)=>{
+    const res=await sbPost("pedido_detalle",{pedido_id:pedidoId,catalogo_id:catalogoId,proveedor_id:proveedorId,cantidad:cantidad,costo_referencia:costoRef});
+    if(res&&res[0]){
+      setPedidoDetalle([...pedidoDetalle,res[0]]);
+      // Ensure pedido_proveedor_estatus exists for this provider
+      const existsPE=provEstatus.find(pe=>pe.pedido_id===pedidoId&&pe.proveedor_id===proveedorId);
+      if(!existsPE){
+        const newPE=await sbPost("pedido_proveedor_estatus",{pedido_id:pedidoId,proveedor_id:proveedorId,estatus:"pendiente"});
+        if(newPE&&newPE[0])setProvEstatus([...provEstatus,newPE[0]]);
+      }
+    }
+  };
+
+  const handleProvConfirm=async(precios,cantidades)=>{
+    for(const[detId,precio]of Object.entries(precios)){
+      if(precio==null)continue;
+      const cant=cantidades[detId];
+      await sbPatch("pedido_detalle",detId,{costo_real:precio,cantidad:cant,capturado_por:"proveedor",fecha_captura:new Date().toISOString()});
+    }
+    // Expire token
+    const pe=provEstatus.find(x=>x.token_acceso===provToken);
+    if(pe)await sbPatch("pedido_proveedor_estatus",pe.id,{estatus:"precios_capturados",token_activo:false,fecha_completado:new Date().toISOString()});
+    alert("Precios confirmados. Gracias.");
+    window.location.href=window.location.pathname;
+  };
+
+  if(loading)return(<div className="min-h-screen flex flex-col items-center justify-center" style={{background:"#2D2D2D"}}><Logo size={56}/><p className="text-amber-400 mt-4 text-sm animate-pulse">{loadMsg}</p></div>);
+  if(error)return(<div className="min-h-screen flex items-center justify-center p-4" style={{background:"#2D2D2D"}}><div className="max-w-lg text-center"><Logo size={56}/><p className="text-red-400 mt-4 text-sm">{error}</p><button onClick={()=>window.location.href=window.location.pathname} className="mt-4 px-4 py-2 rounded-lg text-sm font-medium" style={{background:"#F5B731",color:"#2D2D2D"}}>Reintentar</button></div></div>);
+
+  // Provider token view
+  if(rol==="proveedor_token"&&selectedPedido){
+    const pe=provEstatus.find(x=>x.token_acceso===provToken);
+    const det=pedidoDetalle.filter(d=>d.pedido_id===selectedPedido.id&&d.proveedor_id===pe?.proveedor_id);
+    const provNombre=proveedores.find(p=>p.id===pe?.proveedor_id)?.nombre||"Proveedor";
+    return<ProveedorTokenView detalle={det} catalogo={catalogo} pedido={selectedPedido} provNombre={provNombre} onConfirm={handleProvConfirm}/>;
+  }
+
+  if(!rol)return<LoginScreen onLogin={r=>{setRol(r);setView("bandeja");}}/>;
+
+  const tabs=[];
+  if(["admin","compras"].includes(rol)){tabs.push({id:"bandeja",l:"Pedidos"},{id:"almacen",l:"Almacén"},{id:"dashboard",l:"Dashboard"});if(rol==="admin")tabs.push({id:"catalogo",l:"Catálogo"});}
+  else if(rol==="sucursal")tabs.push({id:"bandeja",l:"Mis pedidos"});
+  else if(rol==="proveedor")tabs.push({id:"bandeja",l:"Mis pedidos"});
+  else if(rol==="almacen")tabs.push({id:"almacen",l:"Inventario"},{id:"bandeja",l:"Pedidos"});
+  else tabs.push({id:"dashboard",l:"Dashboard"});
+
+  const currentDetalle=selectedPedido?pedidoDetalle.filter(d=>d.pedido_id===selectedPedido.id):[];
+  const currentProvEst=selectedPedido?provEstatus.filter(x=>x.pedido_id===selectedPedido.id):[];
+  const pedidosAlm=pedidos.filter(p=>provEstatus.some(pe=>pe.pedido_id===p.id&&pe.estatus==="enviado"&&proveedores.find(pr=>pr.id===pe.proveedor_id)?.tipo_flujo==="Almacen interno")).map(p=>({...p,articulos:pedidoDetalle.filter(d=>d.pedido_id===p.id&&proveedores.find(pr=>pr.id===d.proveedor_id)?.tipo_flujo==="Almacen interno").length}));
+
+  return(<div className="min-h-screen" style={{background:"#FAFAF8"}}>
+    <div className="border-b border-gray-200" style={{background:"#2D2D2D"}}><div className="max-w-6xl mx-auto px-4"><div className="flex items-center justify-between py-3">
+      <div className="flex items-center gap-3"><Logo size={32}/><div><h1 className="text-sm font-bold text-white leading-tight">Fit Taste Roma</h1><p className="text-xs text-emerald-400">{rol} — {catalogo.length} productos</p></div></div>
+      <div className="flex items-center gap-1">
+        {tabs.map(t=><button key={t.id} onClick={()=>{setView(t.id);setSelectedPedido(null);setSubview(null);}} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${view===t.id?"text-gray-900":"text-gray-400 hover:text-white"}`} style={view===t.id?{background:"#F5B731"}:{}}>{t.l}</button>)}
+        <button onClick={()=>{setRol(null);setView("bandeja");setSelectedPedido(null);}} className="ml-3 px-2 py-1.5 rounded-lg text-xs text-gray-500 hover:text-red-400">Salir</button>
+      </div>
+    </div></div></div>
+    <div className="max-w-6xl mx-auto px-4 py-6">
+      {view==="bandeja"&&!selectedPedido&&subview!=="crear"&&<BandejaPedidos pedidos={pedidos} rol={rol} onSelect={p=>{setSelectedPedido(p);}} onNew={()=>setSubview("crear")} pedidoDetalle={pedidoDetalle} proveedores={proveedores} provEstatus={provEstatus}/>}
+      {view==="bandeja"&&subview==="crear"&&<CrearPedido catalogo={catalogo} proveedores={proveedores} onSave={handleCreatePedido} onCancel={()=>setSubview(null)}/>}
+      {view==="bandeja"&&selectedPedido&&["admin","compras"].includes(rol)&&<DetallePedido pedido={selectedPedido} detalle={currentDetalle} catalogo={catalogo} proveedores={proveedores} provEstatus={currentProvEst} onBack={()=>setSelectedPedido(null)} onAction={handleAction} onReasignar={handleReasignar} onUpdatePrecio={handleUpdatePrecio} onUpdateCantidad={handleUpdateCantidad} onAddItem={handleAddItem} rol={rol}/>}
+      {view==="bandeja"&&selectedPedido&&rol==="sucursal"&&<DetallePedido pedido={selectedPedido} detalle={currentDetalle} catalogo={catalogo} proveedores={proveedores} provEstatus={currentProvEst} onBack={()=>setSelectedPedido(null)} onAction={()=>{}} onReasignar={()=>{}} onUpdatePrecio={()=>{}} onUpdateCantidad={()=>{}} onAddItem={()=>{}} rol={rol}/>}
+      {view==="bandeja"&&selectedPedido&&rol==="proveedor"&&(()=>{
+        const jcProv=proveedores.find(p=>p.nombre==="Juan Carlos Botello");
+        const provDet=currentDetalle.filter(d=>d.proveedor_id===jcProv?.id);
+        return<ProveedorTokenView detalle={provDet} catalogo={catalogo} pedido={selectedPedido} provNombre={jcProv?.nombre||"Proveedor"} onConfirm={async(precios,cantidades)=>{
+          for(const[detId,precio]of Object.entries(precios)){if(precio==null)continue;const cant=cantidades[detId];await sbPatch("pedido_detalle",detId,{costo_real:precio,cantidad:cant,capturado_por:"proveedor",fecha_captura:new Date().toISOString()});}
+          const pe=provEstatus.find(x=>x.pedido_id===selectedPedido.id&&x.proveedor_id===jcProv?.id);
+          if(pe)await sbPatch("pedido_proveedor_estatus",pe.id,{estatus:"precios_capturados",fecha_completado:new Date().toISOString()});
+          setProvEstatus(provEstatus.map(x=>x.pedido_id===selectedPedido.id&&x.proveedor_id===jcProv?.id?{...x,estatus:"precios_capturados"}:x));
+          setPedidoDetalle(pedidoDetalle.map(d=>{const pr=precios[d.id];if(pr!=null)return{...d,costo_real:pr,cantidad:cantidades[d.id]||d.cantidad};return d;}));
+          alert("Precios confirmados");setSelectedPedido(null);
+        }}/>;
+      })()}
+      {view==="almacen"&&<AlmacenView inventario={inventario} setInventario={setInventario} movimientos={movimientos} setMovimientos={setMovimientos} pedidosAlm={pedidosAlm} catalogo={catalogo} pedidoDetalle={pedidoDetalle} proveedores={proveedores} lotes={lotes} setLotes={setLotes} onSurtirPedido={async(pedId,cantSurtida)=>{
+        // 0. VALIDATE stock
+        const almItems=pedidoDetalle.filter(d=>d.pedido_id===pedId&&proveedores.find(pr=>pr.id===d.proveedor_id)?.tipo_flujo==="Almacen interno");
+        const sinStock=[];
+        for(const d of almItems){const cs=cantSurtida[d.id]||0;if(cs<=0)continue;const cat=catalogo.find(c=>c.id===d.catalogo_id);if(!cat)continue;const inv=cat.inv_id?inventario.find(i=>i.id===cat.inv_id):inventario.find(i=>{const dL=i.descripcion.toLowerCase();const words=cat.articulo.toLowerCase().split(" ");return words.some(w=>w.length>3&&dL.includes(w));});if(inv&&cs>inv.existencia)sinStock.push(`${cat.articulo}: surtir ${fmtQ(cs,cat.unidad_clave)} pero hay ${fmtQ(inv.existencia,cat.unidad_clave)}`);else if(!inv&&cs>0)sinStock.push(`${cat.articulo}: no vinculado a inventario — ve a Catálogo y vincula`);}
+        if(sinStock.length>0){alert("Inventario insuficiente:\n\n"+sinStock.join("\n")+"\n\nRegistra una entrada de lote primero.");return;}
+        // 1. Update estatus
+        const pe=provEstatus.find(x=>x.pedido_id===pedId&&proveedores.find(pr=>pr.id===x.proveedor_id)?.tipo_flujo==="Almacen interno");
+        if(pe){await sbPatch("pedido_proveedor_estatus",pe.id,{estatus:"surtido",fecha_completado:new Date().toISOString()});setProvEstatus(provEstatus.map(x=>x.id===pe.id?{...x,estatus:"surtido"}:x));}
+        // 2. PEPS deduction per item
+        let updatedLotes=[...lotes];
+        let updatedInv=[...inventario];
+        for(const d of almItems){
+          let cs=cantSurtida[d.id]||0;if(cs<=0)continue;
+          const cat=catalogo.find(c=>c.id===d.catalogo_id);if(!cat)continue;
+          const inv=cat.inv_id?updatedInv.find(i=>i.id===cat.inv_id):updatedInv.find(i=>{const dL=i.descripcion.toLowerCase();const words=cat.articulo.toLowerCase().split(" ");return words.some(w=>w.length>3&&dL.includes(w));});
+          if(!inv)continue;
+          // Get lotes for this product sorted by date (PEPS)
+          const prodLotes=updatedLotes.filter(l=>l.inventario_id===inv.id&&(l.existencia_restante||0)>0).sort((a,b)=>new Date(a.fecha_entrada)-new Date(b.fecha_entrada));
+          let remaining=cs;let costoPeps=0;
+          for(const lote of prodLotes){
+            if(remaining<=0)break;
+            const available=lote.existencia_restante||0;
+            const take=Math.min(remaining,available);
+            const costoU=parseFloat(lote.costo_unitario)+(parseFloat(lote.iva)||0);
+            costoPeps+=take*costoU;
+            // Update lote
+            const newRest=available-take;
+            await sbPatch("lotes_almacen",lote.id,{existencia_restante:newRest});
+            updatedLotes=updatedLotes.map(l=>l.id===lote.id?{...l,existencia_restante:newRest}:l);
+            remaining-=take;
+          }
+          // Update inventory total
+          const newExist=Math.max(0,inv.existencia-cs);
+          const avgCost=cs>0?costoPeps/cs:inv.costo_unitario_actual;
+          await sbPatch("inventario_almacen",inv.id,{existencia:newExist,costo_unitario_actual:avgCost});
+          updatedInv=updatedInv.map(p=>p.id===inv.id?{...p,existencia:newExist,costo_unitario_actual:avgCost}:p);
+          // Update pedido_detalle with PEPS cost
+          await sbPatch("pedido_detalle",d.id,{cantidad:cs,costo_real:avgCost,capturado_por:"sistema",fecha_captura:new Date().toISOString()});
+          setMovimientos(prev=>[...prev,{id:Date.now().toString()+d.id,inv_id:inv.id,tipo:"salida",qty:cs,nota:`PEPS Pedido #${pedidosAlm.find(p=>p.id===pedId)?.numero_pedido||""}`,fecha:new Date().toLocaleDateString("es-MX")}]);
+        }
+        setLotes(updatedLotes);setInventario(updatedInv);
+        setPedidoDetalle(pedidoDetalle.map(d=>{if(d.pedido_id===pedId&&proveedores.find(pr=>pr.id===d.proveedor_id)?.tipo_flujo==="Almacen interno"){return{...d,cantidad:cantSurtida[d.id]||0};}return d;}));
+        alert("Pedido surtido con PEPS — lotes e inventario actualizados");
+      }}/>}
+      {view==="dashboard"&&<DashboardView pedidos={pedidos} catalogo={catalogo} proveedores={proveedores} pedidoDetalle={pedidoDetalle} inventario={inventario}/>}
+      {view==="catalogo"&&rol==="admin"&&<CatalogoView catalogo={catalogo} setCatalogo={setCatalogo} proveedores={proveedores} unidades={unidades}/>}
+    </div>
+  </div>);
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
