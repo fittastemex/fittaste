@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Fit Taste v4.0 — Sistema de Compras e Inventario</title>
+<title>Fit Taste v5.0 — Sistema de Compras e Inventario</title>
 <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
@@ -14,16 +14,19 @@
 <script type="text/babel">
 const {useState,useEffect,useMemo} = React;
 
-// ======================== CONFIG v4.0 ========================
+// ======================== CONFIG v5.0 ========================
 const SB="https://jxyrbvgpjsxevbhaxprr.supabase.co/rest/v1";
 const KEY="sb_publishable_TLdMmgb1r43eahtYKcbzbQ_fLP8U8D7";
-const V="4.0";
+const V="5.0";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 async function sbGet(t,params=""){try{const r=await fetch(`${SB}/${t}?select=*${params?"&"+params:""}`,{headers:H});const d=await r.json();return Array.isArray(d)?d:[];}catch(e){console.error(t,e);return[];}}
 async function sbPost(t,data){try{const r=await fetch(`${SB}/${t}`,{method:"POST",headers:{...H,Prefer:"return=representation"},body:JSON.stringify(data)});return await r.json();}catch(e){console.error(t,e);return null;}}
 async function sbPatch(t,id,data){try{const r=await fetch(`${SB}/${t}?id=eq.${id}`,{method:"PATCH",headers:{...H,Prefer:"return=representation"},body:JSON.stringify(data)});return await r.json();}catch(e){console.error(t,e);return null;}}
+async function sbDelete(t,id){try{const r=await fetch(`${SB}/${t}?id=eq.${id}`,{method:"DELETE",headers:H});return r.ok;}catch(e){console.error(t,e);return false;}}
+async function sbDeleteWhere(t,filter){try{const r=await fetch(`${SB}/${t}?${filter}`,{method:"DELETE",headers:H});return r.ok;}catch(e){console.error(t,e);return false;}}
 function genToken(){return Array.from(crypto.getRandomValues(new Uint8Array(24))).map(b=>b.toString(36)).join("").slice(0,32);}
+function genSerial(pedidos){const hoy=new Date();const ymd=hoy.toISOString().split("T")[0].replace(/-/g,"");const delDia=pedidos.filter(p=>{const f=(p.created_at||p.fecha||"").split("T")[0];return f===hoy.toISOString().split("T")[0];}).length;const num=String(delDia+1).padStart(3,"0");return`PED-${ymd}-${num}`;}
 
 const fmt=(n)=>n==null?"-":`$${Number(n).toLocaleString("es-MX",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 const fmtQ=(n,u)=>`${n.toLocaleString("es-MX",{maximumFractionDigits:2})} ${u}`;
@@ -96,7 +99,7 @@ function LoginScreen({onLogin,provToken}){
 }
 
 // ======================== BANDEJA DE PEDIDOS ========================
-function BandejaPedidos({pedidos,rol,onSelect,onNew,pedidoDetalle,proveedores,provEstatus}){
+function BandejaPedidos({pedidos,rol,onSelect,onNew,pedidoDetalle,proveedores,provEstatus,onDelete}){
   let filteredByRol=pedidos;
   if(rol==="sucursal")filteredByRol=pedidos;
   else if(rol==="proveedor"){
@@ -113,18 +116,21 @@ function BandejaPedidos({pedidos,rol,onSelect,onNew,pedidoDetalle,proveedores,pr
       {(rol==="sucursal"||rol==="admin")&&<Btn onClick={onNew}>+ Nuevo pedido</Btn>}
     </div>
     {filteredByRol.length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400">No hay pedidos</p>{(rol==="sucursal"||rol==="admin")&&<Btn onClick={onNew}>Crear primer pedido</Btn>}</div>
-    :<div className="space-y-2">{filteredByRol.map(p=>(<button key={p.id} onClick={()=>onSelect(p)} className="w-full bg-white border border-gray-200 rounded-xl p-4 hover:border-amber-400 transition-all text-left">
+    :<div className="space-y-2">{filteredByRol.map(p=>(<div key={p.id} className="w-full bg-white border border-gray-200 rounded-xl p-4 hover:border-amber-400 transition-all text-left">
       <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2"><span className="font-bold text-gray-900">Pedido #{p.numero_pedido||"—"}</span>{estatusBadge(p.estatus)}</div>
-        <span className="text-xs text-gray-400">{new Date(p.created_at||p.fecha).toLocaleDateString("es-MX")}</span>
+        <button onClick={()=>onSelect(p)} className="flex items-center gap-2 flex-1 text-left"><span className="font-bold text-gray-900">Pedido {p.numero_pedido||"#—"}</span>{estatusBadge(p.estatus)}</button>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-400">{new Date(p.created_at||p.fecha).toLocaleDateString("es-MX")}</span>
+          {["admin","compras"].includes(rol)&&p.estatus!=="cerrado"&&<button onClick={(e)=>{e.stopPropagation();onDelete(p.id);}} className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded" title="Eliminar pedido">✕</button>}
+        </div>
       </div>
-      <div className="flex items-center gap-4 text-sm">
+      <button onClick={()=>onSelect(p)} className="w-full text-left"><div className="flex items-center gap-4 text-sm">
         <span className="text-gray-500">{p.sucursal||"Roma"}</span>
         <span className="text-gray-500">{p.num_articulos||0} artículos</span>
         <span className="font-semibold text-gray-700">{fmt(p.total_teorico)}</span>
         {p.articulos_sin_precio>0&&<span className="text-amber-600 text-xs">{p.articulos_sin_precio} sin precio</span>}
-      </div>
-    </button>))}</div>}
+      </div></button>
+    </div>))}</div>}
   </div>);
 }
 
@@ -132,6 +138,7 @@ function BandejaPedidos({pedidos,rol,onSelect,onNew,pedidoDetalle,proveedores,pr
 function CrearPedido({catalogo,proveedores,onSave,onCancel}){
   const [pedido,setPedido]=useState({});
   const [filter,setFilter]=useState("");
+  const [saving,setSaving]=useState(false);
   const filtered=catalogo.filter(p=>p.articulo.toLowerCase().includes(filter.toLowerCase())||p.tipo_producto.toLowerCase().includes(filter.toLowerCase()));
   const totalTeo=catalogo.reduce((s,p)=>s+(pedido[p.id]||0)*p.costo_referencia,0);
   const count=Object.values(pedido).filter(v=>v>0).length;
@@ -139,8 +146,11 @@ function CrearPedido({catalogo,proveedores,onSave,onCancel}){
 
   const handleSave=async()=>{
     const items=catalogo.filter(p=>(pedido[p.id]||0)>0).map(p=>({catalogo_id:p.id,proveedor_id:p.proveedor_id,cantidad:pedido[p.id],costo_referencia:p.costo_referencia}));
-    if(items.length===0)return;
-    onSave(items,totalTeo);
+    if(items.length===0||saving)return;
+    setSaving(true);
+    await onSave(items,totalTeo);
+    setPedido({});
+    setSaving(false);
   };
 
   return(<div>
@@ -153,7 +163,7 @@ function CrearPedido({catalogo,proveedores,onSave,onCancel}){
     <div className="flex gap-2 mb-4">
       <input className="flex-1 border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-amber-400" placeholder="Buscar..." value={filter} onChange={e=>setFilter(e.target.value)}/>
       <button onClick={onCancel} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 border border-gray-200 rounded-xl">Cancelar</button>
-      <Btn onClick={handleSave} disabled={count===0}>Enviar pedido ({count})</Btn>
+      <Btn onClick={handleSave} disabled={count===0||saving}>{saving?"Creando...":"Enviar pedido ("+count+")"}</Btn>
     </div>
     <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white"><table className="w-full text-sm"><thead className="bg-gray-50"><tr>
       {["Tipo","Artículo","Proveedor","Cantidad","Unidad","Subtotal"].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${h==="Cantidad"?"text-center":h==="Subtotal"?"text-right":"text-left"}`}>{h}</th>)}
@@ -273,7 +283,7 @@ function DetallePedido({pedido:ped,detalle,catalogo,proveedores,provEstatus,onBa
 }
 
 // ======================== VISTA PROVEEDOR (por token) ========================
-function ProveedorTokenView({detalle,catalogo,pedido:ped,provNombre,onConfirm}){
+function ProveedorTokenView({detalle,catalogo,pedido:ped,provNombre,onConfirm,readOnly}){
   const [precios,setPrecios]=useState({});
   const [cantidades,setCantidades]=useState(()=>{const c={};detalle.forEach(d=>{c[d.id]=d.cantidad;});return c;});
   const items=detalle;
@@ -286,7 +296,7 @@ function ProveedorTokenView({detalle,catalogo,pedido:ped,provNombre,onConfirm}){
   return(<div className="min-h-screen" style={{background:"#FAFAF8"}}><div style={{background:"#2D2D2D"}} className="border-b border-gray-200"><div className="max-w-3xl mx-auto px-4 py-3 flex items-center gap-3"><Logo size={32}/><div><h1 className="text-sm font-bold text-white">Fit Taste — Pedido #{ped.numero_pedido}</h1><p className="text-xs text-gray-400">{provNombre}</p></div></div></div>
     <div className="max-w-3xl mx-auto px-4 py-6">
       <div className="rounded-xl p-4 mb-4 border-2 border-amber-300" style={{background:"linear-gradient(135deg,#FEF9EC,#FBF0D1)"}}>
-        <h2 className="text-lg font-bold text-gray-900 mb-1">Captura tus precios y confirma cantidades</h2>
+        <h2 className="text-lg font-bold text-gray-900 mb-1">{readOnly?"Resumen de precios y cantidades (solo lectura)":"Captura tus precios y confirma cantidades"}</h2>
         <p className="text-sm text-gray-600">Pedido #{ped.numero_pedido} — {new Date(ped.fecha).toLocaleDateString("es-MX")}</p>
         <p className="text-xs text-gray-500 mt-1">Si no tienes un artículo, pon 0 en la cantidad entregada</p>
         <div className="w-full bg-amber-200 rounded-full h-2 mt-3"><div className="bg-amber-500 h-2 rounded-full transition-all" style={{width:`${items.length>0?(items.filter(d=>precios[d.id]!=null&&precios[d.id]>=0).length/items.length*100):0}%`}}/></div>
@@ -298,20 +308,21 @@ function ProveedorTokenView({detalle,catalogo,pedido:ped,provNombre,onConfirm}){
       </tr></thead><tbody>{items.map(d=>{const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};const pr=precios[d.id];const cant=cantidades[d.id]||0;const changed=cant!==d.cantidad;const sub=pr!=null&&cant>0?cant*pr:0;return(<tr key={d.id} className={`border-t border-gray-100 ${cant===0?"bg-red-50/40":pr!=null&&pr>=0?"bg-amber-50/40":""}`}>
         <td className="px-3 py-2 font-medium text-gray-900">{cat.articulo}</td>
         <td className="px-3 py-2 text-center text-gray-400">{cat.unidad_clave==="kg"?fmtQ(d.cantidad,"kg"):d.cantidad}</td>
-        <td className="px-3 py-2 text-center"><input type="number" min="0" step={cat.unidad_clave==="kg"?"0.25":"1"} className={`w-20 text-center border rounded-lg px-1 py-1 text-sm focus:ring-2 focus:ring-amber-400 ${changed?"border-orange-400 bg-orange-50":"border-gray-200"}`} value={cantidades[d.id]||""} onChange={e=>setCantidades({...cantidades,[d.id]:parseFloat(e.target.value)||0})}/></td>
+        <td className="px-3 py-2 text-center">{readOnly?<span className="text-gray-600">{cat.unidad_clave==="kg"?fmtQ(cantidades[d.id]||d.cantidad,"kg"):(cantidades[d.id]||d.cantidad)}</span>:<input type="number" min="0" step={cat.unidad_clave==="kg"?"0.25":"1"} className={`w-20 text-center border rounded-lg px-1 py-1 text-sm focus:ring-2 focus:ring-amber-400 ${changed?"border-orange-400 bg-orange-50":"border-gray-200"}`} value={cantidades[d.id]||""} onChange={e=>setCantidades({...cantidades,[d.id]:parseFloat(e.target.value)||0})}/>}</td>
         <td className="px-3 py-2 text-gray-500">{cat.unidad_clave==="kg"?"por kg":`por ${cat.unidad_clave}`}</td>
-        <td className="px-3 py-2 text-center"><div className="flex items-center justify-center gap-1"><span className="text-gray-400">$</span><input type="number" min="0" step="0.01" className="w-24 text-center border border-gray-200 rounded-lg px-1 py-1 text-sm focus:ring-2 focus:ring-amber-400" value={precios[d.id]!=null?precios[d.id]:""} onChange={e=>setPrecios({...precios,[d.id]:e.target.value===""?null:parseFloat(e.target.value)||0})}/></div></td>
+        <td className="px-3 py-2 text-center">{readOnly?<span className="font-semibold">{d.costo_real!=null?fmt(d.costo_real):"-"}</span>:<div className="flex items-center justify-center gap-1"><span className="text-gray-400">$</span><input type="number" min="0" step="0.01" className="w-24 text-center border border-gray-200 rounded-lg px-1 py-1 text-sm focus:ring-2 focus:ring-amber-400" value={precios[d.id]!=null?precios[d.id]:""} onChange={e=>setPrecios({...precios,[d.id]:e.target.value===""?null:parseFloat(e.target.value)||0})}/></div>}</td>
         <td className="px-3 py-2 text-center">{cat.aplica_iva?<span className="text-xs text-gray-500">16%</span>:<span className="text-xs text-emerald-600 font-medium">Exento</span>}</td>
         <td className="px-3 py-2 text-right font-semibold text-gray-700">{pr!=null&&cant>0?fmt(sub+(cat.aplica_iva?sub*0.16:0)):cant===0?<span className="text-red-500 text-xs">Sin stock</span>:"-"}</td>
       </tr>);})}</tbody></table></div>
       {itemsConCambio.length>0&&<div className="bg-orange-50 border border-orange-200 rounded-xl p-3 mt-4"><p className="text-sm font-semibold text-orange-800">{itemsConCambio.length} artículo{itemsConCambio.length>1?"s":""} con cantidad diferente a la solicitada</p><div className="text-xs text-orange-700 mt-1">{itemsConCambio.map(d=>{const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};return<p key={d.id}>{cat.articulo}: solicitado {d.cantidad} → entrega {cantidades[d.id]||0}{(cantidades[d.id]||0)===0?" (sin stock)":""}</p>;})}</div></div>}
-      <div className="flex justify-end mt-4"><Btn onClick={()=>onConfirm(precios,cantidades)} disabled={!allCaptured}>{allCaptured?"Confirmar precios y cantidades":`Faltan ${items.length-items.filter(d=>precios[d.id]!=null&&precios[d.id]>=0).length} precios`}</Btn></div>
+      {!readOnly&&<div className="flex justify-end mt-4"><Btn onClick={()=>onConfirm(precios,cantidades)} disabled={!allCaptured}>{allCaptured?"Confirmar precios y cantidades":`Faltan ${items.length-items.filter(d=>precios[d.id]!=null&&precios[d.id]>=0).length} precios`}</Btn></div>}
+      {readOnly&&<div className="mt-4 text-center"><div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3"><p className="text-sm font-medium text-emerald-800">Precios ya confirmados — vista de solo lectura</p></div></div>}
     </div>
   </div>);
 }
 
 // ======================== ALMACÉN PEPS ========================
-function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedidosAlm,catalogo,pedidoDetalle,proveedores,onSurtirPedido,lotes,setLotes}){
+function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedidosAlm,catalogo,pedidoDetalle,proveedores,onSurtirPedido,lotes,setLotes,rol,allPedidos,allProvEstatus}){
   const [tab,setTab]=useState("inventario");
   const [surtiendo,setSurtiendo]=useState(null);
   const [surtidos,setSurtidos]=useState({});
@@ -319,6 +330,11 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
   // Entrada de lote
   const [nLote,setNLote]=useState({inv_id:"",cantidad:0,costo_unitario:0,iva:0,proveedor:"",nota:""});
   const [savingLote,setSavingLote]=useState(false);
+  // Admin: agregar/borrar productos almacén (#6 #7)
+  const [addingInv,setAddingInv]=useState(false);
+  const [newInv,setNewInv]=useState({sku:"",descripcion:"",unidad_clave:"kg"});
+  const [savingInv,setSavingInv]=useState(false);
+  const isAdmin=rol==="admin";
 
   const cap=inventario.reduce((s,p)=>s+p.existencia*p.costo_unitario_actual,0);
   const pedidoItems=surtiendo?pedidoDetalle.filter(d=>d.pedido_id===surtiendo&&proveedores.find(pr=>pr.id===d.proveedor_id)?.tipo_flujo==="Almacen interno"):[];
@@ -342,6 +358,46 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
     setSavingLote(false);
   };
 
+  // Change #5: Print pedido surtido
+  const handlePrint=(pedId)=>{
+    const ped=allPedidos?.find(p=>p.id===pedId)||pedidosAlm.find(p=>p.id===pedId);
+    const items=pedidoDetalle.filter(d=>d.pedido_id===pedId&&proveedores.find(pr=>pr.id===d.proveedor_id)?.tipo_flujo==="Almacen interno");
+    const rows=items.map(d=>{const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};return`<tr><td style="padding:6px;border-bottom:1px solid #eee">${cat.articulo||"?"}</td><td style="padding:6px;border-bottom:1px solid #eee;text-align:center">${d.cantidad} ${cat.unidad_clave||""}</td></tr>`;}).join("");
+    const w=window.open("","_blank","width=400,height=600");
+    w.document.write(`<html><head><title>Pedido ${ped?.numero_pedido||""}</title><style>body{font-family:sans-serif;padding:20px}table{width:100%;border-collapse:collapse}th{text-align:left;padding:6px;border-bottom:2px solid #333;font-size:12px;text-transform:uppercase}td{font-size:13px}@media print{button{display:none}}</style></head><body><div style="text-align:center;margin-bottom:16px"><strong style="font-size:18px">Fit Taste</strong><br><span style="font-size:12px;color:#888">Pedido ${ped?.numero_pedido||""} — ${new Date().toLocaleDateString("es-MX")}</span></div><table><thead><tr><th>Artículo</th><th style="text-align:center">Cantidad</th></tr></thead><tbody>${rows}</tbody></table><br><button onclick="window.print()" style="padding:8px 16px;background:#F5B731;border:none;border-radius:8px;font-weight:bold;cursor:pointer">Imprimir</button></body></html>`);
+    w.document.close();
+  };
+
+  // Change #6: Add product to almacén (admin only)
+  const handleAddInv=async()=>{
+    if(!newInv.sku||!newInv.descripcion){alert("Completa SKU y descripción");return;}
+    setSavingInv(true);
+    const unid=await sbGet("unidades_medida",`clave=eq.${newInv.unidad_clave}&limit=1`);
+    const uid=unid[0]?.id||null;
+    const res=await sbPost("inventario_almacen",{sku:newInv.sku,descripcion:newInv.descripcion.toUpperCase().trim(),unidad_id:uid,existencia:0,costo_unitario_actual:0});
+    if(res&&res[0]){
+      setInventario([...inventario,{id:res[0].id,sku:newInv.sku,descripcion:newInv.descripcion.toUpperCase().trim(),unidad_clave:newInv.unidad_clave,existencia:0,costo_unitario_actual:0}]);
+      setNewInv({sku:"",descripcion:"",unidad_clave:"kg"});
+      setAddingInv(false);
+      alert("Producto agregado al almacén con existencia 0");
+    }else{alert("Error — verifica que el SKU no esté duplicado");}
+    setSavingInv(false);
+  };
+
+  // Change #7: Delete product from almacén (admin only)
+  const handleDeleteInv=async(invId)=>{
+    const prod=inventario.find(p=>p.id===invId);
+    if(!confirm(`¿Eliminar "${prod?.descripcion}" del almacén?\n\nEsto borrará todos sus lotes y movimientos. Los productos del catálogo vinculados se desvincularán.`))return;
+    await sbDeleteWhere("lotes_almacen",`inventario_id=eq.${invId}`);
+    await sbDelete("inventario_almacen",invId);
+    setInventario(inventario.filter(p=>p.id!==invId));
+    setLotes(lotes.filter(l=>l.inventario_id!==invId));
+    alert(`${prod?.descripcion} eliminado del almacén`);
+  };
+
+  // Pedidos ya surtidos (for print)
+  const pedidosSurtidos=(allPedidos||[]).filter(p=>(allProvEstatus||[]).some(pe=>pe.pedido_id===p.id&&pe.estatus==="surtido"&&proveedores.find(pr=>pr.id===pe.proveedor_id)?.tipo_flujo==="Almacen interno"));
+
   // Group lotes by product
   const lotesByProd={};
   lotes.filter(l=>(l.existencia_restante||l.cantidad)>0).forEach(l=>{
@@ -364,9 +420,11 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
     <div className="flex gap-1 mb-4">{tabs2.map(t=><button key={t.id} onClick={()=>{setTab(t.id);if(t.id!=="surtir")setSurtiendo(null);}} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${tab===t.id?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={tab===t.id?{background:"#8b5cf6"}:{}}>{t.l}</button>)}</div>
 
     {/* INVENTARIO con costos PEPS */}
-    {tab==="inventario"&&<div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+    {tab==="inventario"&&<div>
+      {isAdmin&&<div className="mb-3 flex justify-end">{addingInv?<div className="bg-white border-2 border-violet-300 rounded-xl p-3 w-full"><h3 className="text-sm font-bold text-violet-800 mb-2">Agregar producto al almacén</h3><div className="flex gap-2 items-end flex-wrap"><div><label className="text-xs text-gray-500 block mb-1">SKU</label><input className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm w-28" placeholder="ALM-XXX" value={newInv.sku} onChange={e=>setNewInv({...newInv,sku:e.target.value})}/></div><div className="flex-1"><label className="text-xs text-gray-500 block mb-1">Descripción</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="NOMBRE DEL PRODUCTO" value={newInv.descripcion} onChange={e=>setNewInv({...newInv,descripcion:e.target.value})}/></div><div><label className="text-xs text-gray-500 block mb-1">Unidad</label><select className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newInv.unidad_clave} onChange={e=>setNewInv({...newInv,unidad_clave:e.target.value})}><option value="kg">kg</option><option value="pz">pz</option><option value="lt">lt</option><option value="paq">paq</option></select></div><Btn onClick={handleAddInv} disabled={savingInv} color="purple">{savingInv?"Guardando...":"Agregar"}</Btn><button onClick={()=>setAddingInv(false)} className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1.5">Cancelar</button></div></div>:<Btn onClick={()=>setAddingInv(true)} color="purple">+ Agregar producto</Btn>}</div>}
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
       <table className="w-full text-sm"><thead className="bg-gray-50"><tr>
-        {["SKU","Producto","Existencia","Costo PEPS","Valor PEPS","Lotes","Estado"].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Existencia","Costo PEPS","Valor PEPS","Lotes"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
+        {["SKU","Producto","Existencia","Costo PEPS","Valor PEPS","Lotes","Estado"].concat(isAdmin?[""]:[]).map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Existencia","Costo PEPS","Valor PEPS","Lotes"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
       </tr></thead><tbody>{inventario.map(p=>{
         const prodLotes=lotes.filter(l=>l.inventario_id===p.id&&(l.existencia_restante||0)>0);
         const valorPeps=prodLotes.reduce((s,l)=>(l.existencia_restante||0)*(parseFloat(l.costo_unitario)+parseFloat(l.iva||0))+s,0);
@@ -380,9 +438,10 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
           <td className="px-3 py-2 text-right font-medium text-gray-700">{fmt(valorPeps||p.existencia*p.costo_unitario_actual)}</td>
           <td className="px-3 py-2 text-right"><span className={`text-xs font-medium ${prodLotes.length>0?"text-violet-600":"text-gray-400"}`}>{prodLotes.length}</span></td>
           <td className="px-3 py-2">{p.existencia===0?<Badge v="danger">Agotado</Badge>:low?<Badge v="warning">Bajo</Badge>:<Badge v="success">OK</Badge>}</td>
+          {isAdmin&&<td className="px-3 py-2 text-right"><button onClick={()=>handleDeleteInv(p.id)} className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded" title="Eliminar producto">✕</button></td>}
         </tr>);
       })}</tbody></table>
-    </div>}
+    </div></div>}
 
     {/* LOTES PEPS */}
     {tab==="lotes"&&<div>
@@ -443,6 +502,10 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
       {pedidosAlm.length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400">Sin pedidos pendientes de surtir</p></div>
       :<div className="rounded-xl p-4 border-2 border-amber-300 bg-amber-50"><h3 className="text-sm font-bold text-amber-800 mb-3">Pedidos pendientes de surtir</h3>
         {pedidosAlm.map((p,i)=>{const items=pedidoDetalle.filter(d=>d.pedido_id===p.id&&proveedores.find(pr=>pr.id===d.proveedor_id)?.tipo_flujo==="Almacen interno");const tot=items.reduce((s,d)=>s+d.cantidad*d.costo_referencia,0);return(<div key={i} className="bg-white rounded-xl p-3 mb-2 border border-amber-200"><div className="flex justify-between items-center mb-2"><div><span className="font-bold text-gray-900">Pedido #{p.numero_pedido}</span><span className="text-xs text-gray-500 ml-2">{new Date(p.fecha||p.created_at).toLocaleDateString("es-MX")}</span></div><div className="flex items-center gap-2"><span className="text-sm font-semibold text-gray-700">{fmt(tot)}</span><Btn onClick={()=>{setSurtiendo(p.id);setSurtidos({});const c={};items.forEach(d=>{c[d.id]=d.cantidad;});setCantSurtida(c);}} color="purple">Ver y surtir</Btn></div></div><div className="text-xs text-gray-600">{items.map(d=>{const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};return<span key={d.id} className="inline-block bg-gray-100 rounded px-2 py-0.5 mr-1 mb-1">{cat.articulo} ({cat.unidad_clave==="kg"?fmtQ(d.cantidad,"kg"):d.cantidad+" "+cat.unidad_clave})</span>})}</div></div>);})}
+      </div>}
+      {/* Pedidos ya surtidos — con botón imprimir */}
+      {pedidosSurtidos.length>0&&<div className="rounded-xl p-4 border border-emerald-200 bg-emerald-50 mt-4"><h3 className="text-sm font-bold text-emerald-800 mb-3">Pedidos surtidos</h3>
+        {pedidosSurtidos.map((p,i)=>{const items=pedidoDetalle.filter(d=>d.pedido_id===p.id&&proveedores.find(pr=>pr.id===d.proveedor_id)?.tipo_flujo==="Almacen interno");return(<div key={i} className="bg-white rounded-xl p-3 mb-2 border border-emerald-200 flex justify-between items-center"><div><span className="font-bold text-gray-900">Pedido {p.numero_pedido||"#"+p.id}</span><span className="text-xs text-gray-500 ml-2">{new Date(p.fecha||p.created_at).toLocaleDateString("es-MX")}</span><span className="text-xs text-emerald-600 ml-2">{items.length} artículos</span></div><button onClick={()=>handlePrint(p.id)} className="text-sm font-medium bg-white border border-emerald-300 text-emerald-700 hover:bg-emerald-100 px-3 py-1.5 rounded-lg">🖨 Imprimir</button></div>);})}
       </div>}
     </div>}
 
@@ -623,7 +686,7 @@ function DashboardView({pedidos,catalogo,proveedores,pedidoDetalle,inventario}){
 }
 
 // ======================== CATÁLOGO (solo Admin) ========================
-function CatalogoView({catalogo,setCatalogo,proveedores,unidades}){
+function CatalogoView({catalogo,setCatalogo,proveedores,unidades,inventario}){
   const [filter,setFilter]=useState("");
   const [editing,setEditing]=useState(null);
   const [editData,setEditData]=useState({});
@@ -635,18 +698,18 @@ function CatalogoView({catalogo,setCatalogo,proveedores,unidades}){
   const filtered=catalogo.filter(p=>p.articulo.toLowerCase().includes(filter.toLowerCase())||p.sku.toLowerCase().includes(filter.toLowerCase())||p.tipo_producto.toLowerCase().includes(filter.toLowerCase())||p.proveedor_nombre.toLowerCase().includes(filter.toLowerCase()));
   const tipos=[...new Set(catalogo.map(c=>c.tipo_producto))].sort();
 
-  const startEdit=(p)=>{setEditing(p.id);setEditData({costo_referencia:p.costo_referencia,proveedor_id:p.proveedor_id,unidad_clave:p.unidad_clave,notas:p.notas||"",aplica_iva:p.aplica_iva!==false});};
+  const startEdit=(p)=>{setEditing(p.id);setEditData({articulo:p.articulo,costo_referencia:p.costo_referencia,proveedor_id:p.proveedor_id,unidad_clave:p.unidad_clave,notas:p.notas||"",aplica_iva:p.aplica_iva!==false,inv_id:p.inv_id||""});};
 
   const saveEdit=async(p)=>{
     setSaving(true);setMsg(null);
     const unid=unidades.find(u=>u.clave===editData.unidad_clave);
-    const updates={costo_referencia:editData.costo_referencia,proveedor_id:editData.proveedor_id,notas:editData.notas||null,aplica_iva:editData.aplica_iva};
+    const updates={articulo:editData.articulo.toUpperCase().trim(),costo_referencia:editData.costo_referencia,proveedor_id:editData.proveedor_id,notas:editData.notas||null,aplica_iva:editData.aplica_iva,inventario_almacen_id:editData.inv_id||null};
     if(unid)updates.unidad_id=unid.id;
     const res=await sbPatch("catalogo",p.id,updates);
     if(res){
       const prov=proveedores.find(pr=>pr.id===editData.proveedor_id);
-      setCatalogo(catalogo.map(c=>c.id===p.id?{...c,costo_referencia:parseFloat(editData.costo_referencia),proveedor_id:editData.proveedor_id,proveedor_nombre:prov?.nombre||c.proveedor_nombre,unidad_clave:editData.unidad_clave,notas:editData.notas,aplica_iva:editData.aplica_iva}:c));
-      setMsg(`${p.articulo} actualizado`);
+      setCatalogo(catalogo.map(c=>c.id===p.id?{...c,articulo:editData.articulo.toUpperCase().trim(),costo_referencia:parseFloat(editData.costo_referencia),proveedor_id:editData.proveedor_id,proveedor_nombre:prov?.nombre||c.proveedor_nombre,unidad_clave:editData.unidad_clave,notas:editData.notas,aplica_iva:editData.aplica_iva,inv_id:editData.inv_id||null}:c));
+      setMsg(`${editData.articulo.toUpperCase().trim()} actualizado`);
     }else{setMsg("Error al guardar");}
     setEditing(null);setSaving(false);
     setTimeout(()=>setMsg(null),3000);
@@ -697,17 +760,18 @@ function CatalogoView({catalogo,setCatalogo,proveedores,unidades}){
 
     <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
       <table className="w-full text-sm"><thead className="bg-gray-50"><tr>
-        {["SKU","Artículo","Tipo","Unidad","Costo ref","IVA","Proveedor","Notas",""].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${h==="Costo ref"?"text-right":h==="IVA"?"text-center":"text-left"}`}>{h}</th>)}
+        {["SKU","Artículo","Tipo","Unidad","Costo ref","IVA","Proveedor","Almacén","Notas",""].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${h==="Costo ref"?"text-right":h==="IVA"?"text-center":"text-left"}`}>{h}</th>)}
       </tr></thead><tbody>{filtered.map(p=>{
         const isEditing=editing===p.id;
         return(<tr key={p.id} className={`border-t border-gray-100 ${isEditing?"bg-amber-50":""}`}>
           <td className="px-3 py-2 font-mono text-xs text-gray-500">{p.sku}</td>
-          <td className="px-3 py-2 font-medium text-gray-900">{p.articulo}</td>
+          <td className="px-3 py-2 font-medium text-gray-900">{isEditing?<input className="w-full border border-amber-300 rounded px-1 py-0.5 text-sm bg-amber-50 font-medium focus:ring-2 focus:ring-amber-400" value={editData.articulo} onChange={e=>setEditData({...editData,articulo:e.target.value})}/>:p.articulo}</td>
           <td className="px-3 py-2"><Badge v={({PROTEINAS:"danger",SUPLEMENTO:"purple",EMPAQUE:"info",FRUTA:"warning"})[p.tipo_producto]||"success"}>{p.tipo_producto}</Badge></td>
           <td className="px-3 py-2">{isEditing?<select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.unidad_clave} onChange={e=>setEditData({...editData,unidad_clave:e.target.value})}>{unidades.map(u=><option key={u.clave} value={u.clave}>{u.clave}</option>)}</select>:<span className="text-gray-600">{p.unidad_clave}</span>}</td>
           <td className="px-3 py-2 text-right">{isEditing?<input type="number" step="0.01" className="w-24 text-right border border-amber-300 rounded px-1 py-0.5 text-sm bg-amber-50 focus:ring-2 focus:ring-amber-400" value={editData.costo_referencia} onChange={e=>setEditData({...editData,costo_referencia:parseFloat(e.target.value)||0})}/>:<span className="font-semibold text-gray-800">{fmt(p.costo_referencia)}</span>}</td>
           <td className="px-3 py-2 text-center">{isEditing?<label className="flex items-center justify-center gap-1 cursor-pointer"><input type="checkbox" checked={editData.aplica_iva} onChange={e=>setEditData({...editData,aplica_iva:e.target.checked})} className="w-4 h-4 rounded border-amber-300 text-amber-500 focus:ring-amber-400"/><span className="text-xs">{editData.aplica_iva?"Sí":"No"}</span></label>:p.aplica_iva?<span className="text-xs text-gray-500">16%</span>:<span className="text-xs text-emerald-600 font-semibold">Exento</span>}</td>
           <td className="px-3 py-2">{isEditing?<select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.proveedor_id} onChange={e=>setEditData({...editData,proveedor_id:e.target.value})}>{proveedores.map(pr=><option key={pr.id} value={pr.id}>{pr.nombre}</option>)}</select>:<span className="text-gray-600 text-xs">{p.proveedor_nombre}</span>}</td>
+          <td className="px-3 py-2">{isEditing?<select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.inv_id||""} onChange={e=>setEditData({...editData,inv_id:e.target.value||null})}><option value="">Sin vincular</option>{inventario.map(i=><option key={i.id} value={i.id}>{i.descripcion} ({i.unidad_clave})</option>)}</select>:p.inv_id?<span className="text-xs text-violet-600 font-medium">{inventario.find(i=>i.id===p.inv_id)?.descripcion||"Vinculado"}</span>:<span className="text-xs text-gray-400">—</span>}</td>
           <td className="px-3 py-2">{isEditing?<input className="w-full border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.notas} onChange={e=>setEditData({...editData,notas:e.target.value})}/>:<span className="text-gray-400 text-xs">{p.notas||""}</span>}</td>
           <td className="px-3 py-2 text-right">{isEditing?<div className="flex gap-1"><button onClick={()=>saveEdit(p)} disabled={saving} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded hover:bg-emerald-600">{saving?"...":"Guardar"}</button><button onClick={()=>setEditing(null)} className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded hover:bg-gray-300">X</button></div>:<button onClick={()=>startEdit(p)} className="text-xs text-amber-700 hover:text-amber-900 font-medium hover:bg-amber-100 px-2 py-1 rounded">Editar</button>}</td>
         </tr>);})}</tbody></table>
@@ -716,7 +780,7 @@ function CatalogoView({catalogo,setCatalogo,proveedores,unidades}){
   </div>);
 }
 
-// ======================== APP v4.0 ========================
+// ======================== APP v5.0 ========================
 function App(){
   const [rol,setRol]=useState(null);
   const [view,setView]=useState("bandeja");
@@ -767,7 +831,7 @@ function App(){
 
       // Handle provider token access
       if(provToken){
-        const pe=results.pedido_proveedor_estatus.find(x=>x.token_acceso===provToken&&x.token_activo);
+        const pe=results.pedido_proveedor_estatus.find(x=>x.token_acceso===provToken);
         if(pe){setRol("proveedor_token");setSelectedPedido(results.pedidos.find(p=>p.id===pe.pedido_id));} 
         else{setError("Link expirado o inválido.");}
       }
@@ -780,7 +844,8 @@ function App(){
   const handleCreatePedido=async(items,totalTeo)=>{
     const sucursal=await sbGet("sucursales","limit=1");
     const sucId=sucursal[0]?.id;
-    const res=await sbPost("pedidos",{fecha:new Date().toISOString().split("T")[0],sucursal_id:sucId,estatus:"creado",total_teorico:Math.round(totalTeo*100)/100});
+    const serial=genSerial(pedidos);
+    const res=await sbPost("pedidos",{fecha:new Date().toISOString().split("T")[0],sucursal_id:sucId,estatus:"creado",total_teorico:Math.round(totalTeo*100)/100,numero_pedido:serial});
     if(res&&res[0]){
       const pedId=res[0].id;
       for(const item of items){await sbPost("pedido_detalle",{pedido_id:pedId,catalogo_id:item.catalogo_id,proveedor_id:item.proveedor_id,cantidad:item.cantidad,costo_referencia:item.costo_referencia});}
@@ -788,13 +853,13 @@ function App(){
       const provIds=[...new Set(items.map(i=>i.proveedor_id))];
       for(const pid of provIds){await sbPost("pedido_proveedor_estatus",{pedido_id:pedId,proveedor_id:pid,estatus:"pendiente"});}
       // Reload
-      setPedidos([res[0],...pedidos]);
+      setPedidos([{...res[0],numero_pedido:serial},...pedidos]);
       const det=await sbGet("pedido_detalle",`pedido_id=eq.${pedId}`);
       setPedidoDetalle([...pedidoDetalle,...det]);
       const pe=await sbGet("pedido_proveedor_estatus",`pedido_id=eq.${pedId}`);
       setProvEstatus([...provEstatus,...pe]);
       setSubview(null);
-      alert(`Pedido #${res[0].numero_pedido} creado`);
+      alert(`Pedido ${serial} creado`);
     }
   };
 
@@ -858,6 +923,20 @@ function App(){
     }
   };
 
+  // DELETE PEDIDO (admin/compras only)
+  const handleDeletePedido=async(pedId)=>{
+    if(!confirm("¿Eliminar este pedido? Esta acción no se puede deshacer."))return;
+    await sbDeleteWhere("pedido_reasignaciones",`pedido_id=eq.${pedId}`);
+    await sbDeleteWhere("pedido_detalle",`pedido_id=eq.${pedId}`);
+    await sbDeleteWhere("pedido_proveedor_estatus",`pedido_id=eq.${pedId}`);
+    await sbDelete("pedidos",pedId);
+    setPedidos(pedidos.filter(p=>p.id!==pedId));
+    setPedidoDetalle(pedidoDetalle.filter(d=>d.pedido_id!==pedId));
+    setProvEstatus(provEstatus.filter(pe=>pe.pedido_id!==pedId));
+    setSelectedPedido(null);
+    alert("Pedido eliminado");
+  };
+
   const handleProvConfirm=async(precios,cantidades)=>{
     for(const[detId,precio]of Object.entries(precios)){
       if(precio==null)continue;
@@ -877,9 +956,10 @@ function App(){
   // Provider token view
   if(rol==="proveedor_token"&&selectedPedido){
     const pe=provEstatus.find(x=>x.token_acceso===provToken);
+    const isReadOnly=!pe?.token_activo;
     const det=pedidoDetalle.filter(d=>d.pedido_id===selectedPedido.id&&d.proveedor_id===pe?.proveedor_id);
     const provNombre=proveedores.find(p=>p.id===pe?.proveedor_id)?.nombre||"Proveedor";
-    return<ProveedorTokenView detalle={det} catalogo={catalogo} pedido={selectedPedido} provNombre={provNombre} onConfirm={handleProvConfirm}/>;
+    return<ProveedorTokenView detalle={det} catalogo={catalogo} pedido={selectedPedido} provNombre={provNombre} onConfirm={handleProvConfirm} readOnly={isReadOnly}/>;
   }
 
   if(!rol)return<LoginScreen onLogin={r=>{setRol(r);setView("bandeja");}}/>;
@@ -904,7 +984,7 @@ function App(){
       </div>
     </div></div></div>
     <div className="max-w-6xl mx-auto px-4 py-6">
-      {view==="bandeja"&&!selectedPedido&&subview!=="crear"&&<BandejaPedidos pedidos={pedidos} rol={rol} onSelect={p=>{setSelectedPedido(p);}} onNew={()=>setSubview("crear")} pedidoDetalle={pedidoDetalle} proveedores={proveedores} provEstatus={provEstatus}/>}
+      {view==="bandeja"&&!selectedPedido&&subview!=="crear"&&<BandejaPedidos pedidos={pedidos} rol={rol} onSelect={p=>{setSelectedPedido(p);}} onNew={()=>setSubview("crear")} pedidoDetalle={pedidoDetalle} proveedores={proveedores} provEstatus={provEstatus} onDelete={handleDeletePedido}/>}
       {view==="bandeja"&&subview==="crear"&&<CrearPedido catalogo={catalogo} proveedores={proveedores} onSave={handleCreatePedido} onCancel={()=>setSubview(null)}/>}
       {view==="bandeja"&&selectedPedido&&["admin","compras"].includes(rol)&&<DetallePedido pedido={selectedPedido} detalle={currentDetalle} catalogo={catalogo} proveedores={proveedores} provEstatus={currentProvEst} onBack={()=>setSelectedPedido(null)} onAction={handleAction} onReasignar={handleReasignar} onUpdatePrecio={handleUpdatePrecio} onUpdateCantidad={handleUpdateCantidad} onAddItem={handleAddItem} rol={rol}/>}
       {view==="bandeja"&&selectedPedido&&rol==="sucursal"&&<DetallePedido pedido={selectedPedido} detalle={currentDetalle} catalogo={catalogo} proveedores={proveedores} provEstatus={currentProvEst} onBack={()=>setSelectedPedido(null)} onAction={()=>{}} onReasignar={()=>{}} onUpdatePrecio={()=>{}} onUpdateCantidad={()=>{}} onAddItem={()=>{}} rol={rol}/>}
@@ -920,7 +1000,7 @@ function App(){
           alert("Precios confirmados");setSelectedPedido(null);
         }}/>;
       })()}
-      {view==="almacen"&&<AlmacenView inventario={inventario} setInventario={setInventario} movimientos={movimientos} setMovimientos={setMovimientos} pedidosAlm={pedidosAlm} catalogo={catalogo} pedidoDetalle={pedidoDetalle} proveedores={proveedores} lotes={lotes} setLotes={setLotes} onSurtirPedido={async(pedId,cantSurtida)=>{
+      {view==="almacen"&&<AlmacenView inventario={inventario} setInventario={setInventario} movimientos={movimientos} setMovimientos={setMovimientos} pedidosAlm={pedidosAlm} catalogo={catalogo} pedidoDetalle={pedidoDetalle} proveedores={proveedores} lotes={lotes} setLotes={setLotes} rol={rol} allPedidos={pedidos} allProvEstatus={provEstatus} onSurtirPedido={async(pedId,cantSurtida)=>{
         // 0. VALIDATE stock
         const almItems=pedidoDetalle.filter(d=>d.pedido_id===pedId&&proveedores.find(pr=>pr.id===d.proveedor_id)?.tipo_flujo==="Almacen interno");
         const sinStock=[];
@@ -966,7 +1046,7 @@ function App(){
         alert("Pedido surtido con PEPS — lotes e inventario actualizados");
       }}/>}
       {view==="dashboard"&&<DashboardView pedidos={pedidos} catalogo={catalogo} proveedores={proveedores} pedidoDetalle={pedidoDetalle} inventario={inventario}/>}
-      {view==="catalogo"&&rol==="admin"&&<CatalogoView catalogo={catalogo} setCatalogo={setCatalogo} proveedores={proveedores} unidades={unidades}/>}
+      {view==="catalogo"&&rol==="admin"&&<CatalogoView catalogo={catalogo} setCatalogo={setCatalogo} proveedores={proveedores} unidades={unidades} inventario={inventario}/>}
     </div>
   </div>);
 }
