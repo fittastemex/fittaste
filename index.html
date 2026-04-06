@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Fit Taste v5.0 — Sistema de Compras e Inventario</title>
+<title>Fit Taste v6.0 — Sistema de Compras e Inventario</title>
 <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
@@ -14,10 +14,10 @@
 <script type="text/babel">
 const {useState,useEffect,useMemo} = React;
 
-// ======================== CONFIG v5.0 ========================
+// ======================== CONFIG v6.0 ========================
 const SB="https://jxyrbvgpjsxevbhaxprr.supabase.co/rest/v1";
 const KEY="sb_publishable_TLdMmgb1r43eahtYKcbzbQ_fLP8U8D7";
-const V="5.0";
+const V="6.0";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 async function sbGet(t,params=""){try{const r=await fetch(`${SB}/${t}?select=*${params?"&"+params:""}`,{headers:H});const d=await r.json();return Array.isArray(d)?d:[];}catch(e){console.error(t,e);return[];}}
@@ -35,7 +35,7 @@ const LOGO_SRC="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMgAAABnCAIAAADKcJ
 const Logo=({size=32})=><img src={LOGO_SRC} width={size} height={size} style={{objectFit:"contain"}} alt="Fit Taste"/>;
 const Btn=({children,onClick,disabled,color="amber"})=><button onClick={onClick} disabled={disabled} className={`text-sm font-semibold px-4 py-2 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed`} style={{background:disabled?"#ccc":color==="amber"?"#F5B731":color==="green"?"#10b981":color==="red"?"#ef4444":"#8b5cf6",color:color==="amber"?"#2D2D2D":"white"}}>{children}</button>;
 
-const estatusBadge=(e)=>{const m={creado:"nuevo",en_proceso:"proceso",enviado_proveedor:"enviado",entregado:"warning",recibido_completo:"success",recibido_con_faltantes:"danger",cerrado:"cerrado"};return<Badge v={m[e]||"default"}>{e.replace(/_/g," ")}</Badge>;};
+const estatusBadge=(e)=>{const m={creado:"nuevo",en_proceso:"proceso",enviado_proveedor:"enviado",enviado:"enviado",entregado:"warning",precios_capturados:"success",completo:"success",surtido:"purple",recibido_completo:"success",recibido_con_faltantes:"danger",cerrado:"cerrado",pendiente:"default"};return<Badge v={m[e]||"default"}>{e.replace(/_/g," ")}</Badge>;};
 
 // ======================== CONTRASEÑAS POR ROL ========================
 // Cambia estas contraseñas cuando quieras
@@ -99,17 +99,21 @@ function LoginScreen({onLogin,provToken}){
 }
 
 // ======================== BANDEJA DE PEDIDOS ========================
-function BandejaPedidos({pedidos,rol,onSelect,onNew,pedidoDetalle,proveedores,provEstatus,onDelete}){
+function BandejaPedidos({pedidos,rol,onSelect,onNew,pedidoDetalle,proveedores,provEstatus,onDelete,recepciones}){
   let filteredByRol=pedidos;
   if(rol==="sucursal")filteredByRol=pedidos;
   else if(rol==="proveedor"){
-    // Show pedidos that have items for JC and are enviado
     const jcProv=proveedores?.find(p=>p.nombre==="Juan Carlos Botello");
     filteredByRol=pedidos.filter(p=>{
       const pe=provEstatus?.find(x=>x.pedido_id===p.id&&x.proveedor_id===jcProv?.id);
       return pe&&["enviado","precios_capturados"].includes(pe.estatus);
     });
   }
+  // Count pending recepciones per pedido (for sucursal)
+  const pendRecep=(pedId)=>{
+    const pes=provEstatus.filter(pe=>pe.pedido_id===pedId&&["precios_capturados","completo","surtido"].includes(pe.estatus));
+    return pes.filter(pe=>!(recepciones||[]).some(r=>r.pedido_id===pedId&&r.proveedor_id===pe.proveedor_id)).length;
+  };
   return(<div>
     <div className="flex items-center justify-between mb-4">
       <div><h2 className="text-lg font-bold text-gray-900">Pedidos</h2><p className="text-sm text-gray-500">{filteredByRol.length} pedido{filteredByRol.length!==1?"s":""}</p></div>
@@ -129,6 +133,7 @@ function BandejaPedidos({pedidos,rol,onSelect,onNew,pedidoDetalle,proveedores,pr
         <span className="text-gray-500">{p.num_articulos||0} artículos</span>
         <span className="font-semibold text-gray-700">{fmt(p.total_teorico)}</span>
         {p.articulos_sin_precio>0&&<span className="text-amber-600 text-xs">{p.articulos_sin_precio} sin precio</span>}
+        {rol==="sucursal"&&pendRecep(p.id)>0&&<Badge v="warning">Pendiente de recepción ({pendRecep(p.id)})</Badge>}
       </div></button>
     </div>))}</div>}
   </div>);
@@ -179,7 +184,7 @@ function CrearPedido({catalogo,proveedores,onSave,onCancel}){
 }
 
 // ======================== DETALLE PEDIDO (COMPRAS) ========================
-function DetallePedido({pedido:ped,detalle,catalogo,proveedores,provEstatus,onBack,onAction,onReasignar,onUpdatePrecio,onUpdateCantidad,onAddItem,rol}){
+function DetallePedido({pedido:ped,detalle,catalogo,proveedores,provEstatus,onBack,onAction,onReasignar,onUpdatePrecio,onUpdateCantidad,onAddItem,rol,recepciones}){
   const [addingTo,setAddingTo]=useState(null);
   const [addProduct,setAddProduct]=useState("");
   const [addQty,setAddQty]=useState(0);
@@ -193,14 +198,18 @@ function DetallePedido({pedido:ped,detalle,catalogo,proveedores,provEstatus,onBa
   });
 
   const allHavePrice=detalle.every(d=>d.costo_real!=null);
-  const allProvComplete=provEstatus.every(pe=>["completo","precios_capturados","surtido"].includes(pe.estatus));
-  const canClose=allHavePrice&&allProvComplete;
+  const allProvComplete=provEstatus.every(pe=>["completo","precios_capturados","surtido","recibido_completo","recibido_con_faltantes"].includes(pe.estatus));
+  const allRecibidos=provEstatus.every(pe=>(recepciones||[]).some(r=>r.pedido_id===ped.id&&r.proveedor_id===pe.proveedor_id));
+  const canClose=allHavePrice&&allProvComplete&&allRecibidos;
   const totalTeo=detalle.reduce((s,d)=>s+d.cantidad*d.costo_referencia,0);
   const totalReal=detalle.reduce((s,d)=>s+d.cantidad*(d.costo_real||d.costo_referencia),0);
 
   const closeBlockers=[];
   if(!allHavePrice){const n=detalle.filter(d=>d.costo_real==null).length;closeBlockers.push(`${n} artículo${n>1?"s":""} sin precio real`);}
-  provEstatus.forEach(pe=>{const prov=proveedores.find(p=>p.id===pe.proveedor_id);if(pe.estatus==="pendiente")closeBlockers.push(`${prov?.nombre||"?"}: no enviado`);if(pe.estatus==="enviado")closeBlockers.push(`${prov?.nombre||"?"}: esperando confirmación`);});
+  provEstatus.forEach(pe=>{const prov=proveedores.find(p=>p.id===pe.proveedor_id);if(pe.estatus==="pendiente")closeBlockers.push(`${prov?.nombre||"?"}: no enviado`);if(pe.estatus==="enviado")closeBlockers.push(`${prov?.nombre||"?"}: esperando confirmación`);
+    const hasRecepcion=(recepciones||[]).some(r=>r.pedido_id===ped.id&&r.proveedor_id===pe.proveedor_id);
+    if(!hasRecepcion&&["precios_capturados","completo","surtido"].includes(pe.estatus))closeBlockers.push(`${prov?.nombre||"?"}: pendiente de recepción por Sucursal`);
+  });
   const isCompras=["admin","compras"].includes(rol);
 
   const handleAdd=(provId)=>{
@@ -780,7 +789,226 @@ function CatalogoView({catalogo,setCatalogo,proveedores,unidades,inventario}){
   </div>);
 }
 
-// ======================== APP v5.0 ========================
+// ======================== RECEPCIÓN DE MERCANCÍA (Sucursal) ========================
+function RecepcionView({pedidos,pedidoDetalle,proveedores,provEstatus,catalogo,recepciones,recepcionDetalle,onRecibir}){
+  const [recibiendo,setRecibiendo]=useState(null); // {pedId, provId}
+  const [cantRecibida,setCantRecibida]=useState({});
+  const [notasRecep,setNotasRecep]=useState({});
+  const [saving,setSaving]=useState(false);
+
+  // Pedidos con proveedores pendientes de recepción
+  const pendientes=[];
+  pedidos.forEach(p=>{
+    if(p.estatus==="cerrado")return;
+    provEstatus.filter(pe=>pe.pedido_id===p.id).forEach(pe=>{
+      if(!["precios_capturados","completo","surtido"].includes(pe.estatus))return;
+      const yaRecibido=recepciones.some(r=>r.pedido_id===p.id&&r.proveedor_id===pe.proveedor_id);
+      if(yaRecibido)return;
+      const prov=proveedores.find(pr=>pr.id===pe.proveedor_id);
+      const items=pedidoDetalle.filter(d=>d.pedido_id===p.id&&d.proveedor_id===pe.proveedor_id);
+      if(items.length>0)pendientes.push({pedido:p,proveedor:prov,pe,items});
+    });
+  });
+
+  // Recientes (ya recibidos)
+  const recientes=recepciones.slice().sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).slice(0,10);
+
+  const startRecibir=(pedId,provId,items)=>{
+    setRecibiendo({pedId,provId});
+    const c={};const n={};
+    items.forEach(d=>{c[d.id]=d.cantidad;n[d.id]="";});
+    setCantRecibida(c);setNotasRecep(n);
+  };
+
+  const confirmarRecepcion=async()=>{
+    if(!recibiendo||saving)return;
+    setSaving(true);
+    const{pedId,provId}=recibiendo;
+    const items=pedidoDetalle.filter(d=>d.pedido_id===pedId&&d.proveedor_id===provId);
+    const hayFaltante=items.some(d=>(cantRecibida[d.id]||0)!==d.cantidad);
+    const estatus=hayFaltante?"con_faltantes":"completo";
+    await onRecibir(pedId,provId,estatus,items.map(d=>({pedido_detalle_id:d.id,cantidad_esperada:d.cantidad,cantidad_recibida:cantRecibida[d.id]||0,tiene_discrepancia:(cantRecibida[d.id]||0)!==d.cantidad,nota:notasRecep[d.id]||null})));
+    setRecibiendo(null);setSaving(false);
+  };
+
+  if(recibiendo){
+    const{pedId,provId}=recibiendo;
+    const ped=pedidos.find(p=>p.id===pedId);
+    const prov=proveedores.find(p=>p.id===provId);
+    const items=pedidoDetalle.filter(d=>d.pedido_id===pedId&&d.proveedor_id===provId);
+    const hayFaltante=items.some(d=>(cantRecibida[d.id]||0)!==d.cantidad);
+    const todoOk=items.every(d=>(cantRecibida[d.id]||0)===d.cantidad);
+    return(<div>
+      <button onClick={()=>setRecibiendo(null)} className="text-sm text-gray-500 hover:text-gray-700 mb-4">← Volver</button>
+      <div className="flex items-center justify-between mb-4"><div><h2 className="text-lg font-bold text-gray-900">Recepción — {prov?.nombre}</h2><p className="text-sm text-gray-500">Pedido {ped?.numero_pedido} — Valida cantidades recibidas</p></div>
+        {todoOk&&<Badge v="success">Todo coincide</Badge>}
+        {hayFaltante&&<Badge v="warning">Hay diferencias</Badge>}
+      </div>
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden mb-4"><table className="w-full text-sm"><thead className="bg-gray-50"><tr>
+        {["Artículo","Esperado","Recibido","Nota"].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${h==="Esperado"||h==="Recibido"?"text-center":"text-left"}`}>{h}</th>)}
+      </tr></thead><tbody>{items.map(d=>{
+        const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};
+        const esperado=d.cantidad;
+        const recibido=cantRecibida[d.id]||0;
+        const diff=recibido!==esperado;
+        return(<tr key={d.id} className={`border-t border-gray-100 ${diff?"bg-orange-50":""}`}>
+          <td className="px-3 py-2 font-medium text-gray-900">{cat.articulo} <span className="text-gray-400 text-xs">{cat.unidad_clave}</span></td>
+          <td className="px-3 py-2 text-center text-gray-500">{cat.unidad_clave==="kg"?fmtQ(esperado,"kg"):esperado}</td>
+          <td className="px-3 py-2 text-center"><input type="number" min="0" step={cat.unidad_clave==="kg"?"0.25":"1"} className={`w-20 text-center border rounded-lg px-1 py-1 text-sm ${diff?"border-orange-400 bg-orange-50":"border-gray-200"}`} value={cantRecibida[d.id]||""} onChange={e=>setCantRecibida({...cantRecibida,[d.id]:parseFloat(e.target.value)||0})}/></td>
+          <td className="px-3 py-2"><input className="w-full border border-gray-200 rounded-lg px-2 py-1 text-xs" placeholder="Nota opcional" value={notasRecep[d.id]||""} onChange={e=>setNotasRecep({...notasRecep,[d.id]:e.target.value})}/></td>
+        </tr>);})}</tbody></table></div>
+      {hayFaltante&&<div className="bg-orange-50 border border-orange-200 rounded-xl p-3 mb-3"><p className="text-sm font-semibold text-orange-800">Artículos con diferencias:</p><div className="text-xs text-orange-700 mt-1">{items.filter(d=>(cantRecibida[d.id]||0)!==d.cantidad).map(d=>{const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};return<p key={d.id}>{cat.articulo}: esperado {d.cantidad} → recibido {cantRecibida[d.id]||0}</p>;})}</div></div>}
+      <div className="flex justify-end gap-2">
+        <Btn onClick={()=>{const c={};items.forEach(d=>{c[d.id]=d.cantidad;});setCantRecibida(c);}} color="amber">Todo correcto</Btn>
+        <Btn onClick={confirmarRecepcion} disabled={saving} color="green">{saving?"Guardando...":hayFaltante?"Confirmar con faltantes":"Recepción completa ✓"}</Btn>
+      </div>
+    </div>);
+  }
+
+  return(<div>
+    <h2 className="text-lg font-bold text-gray-900 mb-1">Recepción de mercancía</h2>
+    <p className="text-sm text-gray-500 mb-4">Valida que la mercancía llegó completa</p>
+    {pendientes.length===0&&recientes.length===0&&<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400">No hay recepciones pendientes</p></div>}
+    {pendientes.length>0&&<div className="rounded-xl p-4 border-2 border-amber-300 bg-amber-50 mb-4"><h3 className="text-sm font-bold text-amber-800 mb-3">Pendientes de recepción ({pendientes.length})</h3>
+      {pendientes.map((p,i)=>{const tot=p.items.reduce((s,d)=>s+d.cantidad*(d.costo_real||d.costo_referencia),0);return(<div key={i} className="bg-white rounded-xl p-3 mb-2 border border-amber-200"><div className="flex justify-between items-center mb-2"><div><span className="font-bold text-gray-900">Pedido {p.pedido.numero_pedido}</span><span className="text-xs text-gray-500 ml-2">{p.proveedor?.nombre}</span><span className="text-xs text-gray-400 ml-2">{p.items.length} artículos</span></div><div className="flex items-center gap-2"><span className="text-sm font-semibold text-gray-700">{fmt(tot)}</span><Btn onClick={()=>startRecibir(p.pedido.id,p.proveedor?.id,p.items)}>Recibir mercancía</Btn></div></div>
+        <div className="text-xs text-gray-600">{p.items.map(d=>{const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};return<span key={d.id} className="inline-block bg-gray-100 rounded px-2 py-0.5 mr-1 mb-1">{cat.articulo} ({cat.unidad_clave==="kg"?fmtQ(d.cantidad,"kg"):d.cantidad+" "+cat.unidad_clave})</span>})}</div>
+      </div>);})}
+    </div>}
+    {recientes.length>0&&<div className="rounded-xl p-4 border border-emerald-200 bg-emerald-50"><h3 className="text-sm font-bold text-emerald-800 mb-3">Recepciones recientes</h3>
+      {recientes.map(r=>{const ped=pedidos.find(p=>p.id===r.pedido_id);const prov=proveedores.find(p=>p.id===r.proveedor_id);return(<div key={r.id} className="flex items-center justify-between py-2 border-b border-emerald-100 last:border-0"><div className="flex items-center gap-2"><span className="font-medium text-gray-800">Pedido {ped?.numero_pedido}</span><span className="text-xs text-gray-500">{prov?.nombre}</span></div><div className="flex items-center gap-2"><Badge v={r.estatus==="completo"?"success":"warning"}>{r.estatus==="completo"?"Completo":"Con faltantes"}</Badge><span className="text-xs text-gray-400">{new Date(r.created_at).toLocaleDateString("es-MX")}</span></div></div>);})}
+    </div>}
+  </div>);
+}
+
+// ======================== FINANZAS CxP ========================
+function FinanzasView({cxp,setCxp,pagos,setPagos,pedidos,proveedores,pedidoDetalle,catalogo}){
+  const [tab,setTab]=useState("pendientes");
+  const [editingCxp,setEditingCxp]=useState(null);
+  const [editFact,setEditFact]=useState({numero:"",fecha:""});
+  const [newPago,setNewPago]=useState({cxp_id:"",monto:0,metodo:"transferencia",referencia:"",notas:""});
+  const [saving,setSaving]=useState(false);
+
+  const pendientes=cxp.filter(c=>c.estatus!=="pagado");
+  const pagados=cxp.filter(c=>c.estatus==="pagado");
+  const totalAdeudado=pendientes.reduce((s,c)=>s+(parseFloat(c.monto_total)-parseFloat(c.monto_pagado||0)),0);
+  const totalPagadoMes=pagos.filter(p=>{const f=p.fecha_pago||p.created_at?.split("T")[0];const hoy=new Date();const mesInicio=new Date(hoy.getFullYear(),hoy.getMonth(),1).toISOString().split("T")[0];return f>=mesInicio;}).reduce((s,p)=>s+parseFloat(p.monto),0);
+
+  // By proveedor
+  const byProv={};
+  pendientes.forEach(c=>{const prov=proveedores.find(p=>p.id===c.proveedor_id);const k=prov?.nombre||"?";if(!byProv[k])byProv[k]={total:0,count:0};byProv[k].total+=parseFloat(c.monto_total)-parseFloat(c.monto_pagado||0);byProv[k].count++;});
+  const provSorted=Object.entries(byProv).sort((a,b)=>b[1].total-a[1].total);
+  const maxProv=provSorted.length>0?provSorted[0][1].total:1;
+
+  const saveFact=async(cxpId)=>{
+    setSaving(true);
+    await sbPatch("cuentas_por_pagar",cxpId,{numero_factura:editFact.numero||null,fecha_factura:editFact.fecha||null});
+    setCxp(cxp.map(c=>c.id===cxpId?{...c,numero_factura:editFact.numero,fecha_factura:editFact.fecha}:c));
+    setEditingCxp(null);setSaving(false);
+  };
+
+  const registrarPago=async()=>{
+    if(!newPago.cxp_id||newPago.monto<=0)return;
+    setSaving(true);
+    const res=await sbPost("pagos",{cxp_id:newPago.cxp_id,monto:newPago.monto,fecha_pago:new Date().toISOString().split("T")[0],metodo_pago:newPago.metodo,referencia:newPago.referencia||null,notas:newPago.notas||null});
+    if(res&&res[0]){
+      setPagos([...pagos,res[0]]);
+      const c=cxp.find(x=>x.id===newPago.cxp_id);
+      if(c){
+        const nuevoMontoPagado=parseFloat(c.monto_pagado||0)+newPago.monto;
+        const nuevoEstatus=nuevoMontoPagado>=parseFloat(c.monto_total)?"pagado":"parcial";
+        await sbPatch("cuentas_por_pagar",c.id,{monto_pagado:nuevoMontoPagado,estatus:nuevoEstatus});
+        setCxp(cxp.map(x=>x.id===c.id?{...x,monto_pagado:nuevoMontoPagado,estatus:nuevoEstatus}:x));
+      }
+      setNewPago({cxp_id:"",monto:0,metodo:"transferencia",referencia:"",notas:""});
+      alert("Pago registrado");
+    }
+    setSaving(false);
+  };
+
+  const tabs3=[{id:"pendientes",l:`Pendientes (${pendientes.length})`},{id:"pagar",l:"Registrar pago"},{id:"historial",l:"Historial"},{id:"resumen",l:"Resumen"}];
+
+  return(<div>
+    <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <div><h2 className="text-lg font-bold text-gray-900">Finanzas — Cuentas por Pagar</h2><p className="text-sm text-gray-500">Control de facturas y pagos</p></div>
+      <div className="flex gap-3">
+        <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-2 text-right"><p className="text-xs text-red-600">Total adeudado</p><p className="text-xl font-bold text-red-700">{fmt(totalAdeudado)}</p></div>
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2 text-right"><p className="text-xs text-emerald-600">Pagado este mes</p><p className="text-xl font-bold text-emerald-700">{fmt(totalPagadoMes)}</p></div>
+      </div>
+    </div>
+
+    <div className="flex gap-1 mb-4">{tabs3.map(t=><button key={t.id} onClick={()=>setTab(t.id)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${tab===t.id?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={tab===t.id?{background:"#2D2D2D"}:{}}>{t.l}</button>)}</div>
+
+    {/* PENDIENTES */}
+    {tab==="pendientes"&&<div>{pendientes.length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400">Sin cuentas pendientes</p></div>
+    :<div className="bg-white border border-gray-200 rounded-xl overflow-hidden"><table className="w-full text-sm"><thead className="bg-gray-50"><tr>
+      {["Pedido","Proveedor","Monto","Pagado","Saldo","Factura","Estatus",""].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Monto","Pagado","Saldo"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
+    </tr></thead><tbody>{pendientes.map(c=>{
+      const ped=pedidos.find(p=>p.id===c.pedido_id);
+      const prov=proveedores.find(p=>p.id===c.proveedor_id);
+      const saldo=parseFloat(c.monto_total)-parseFloat(c.monto_pagado||0);
+      const isEdit=editingCxp===c.id;
+      return(<tr key={c.id} className={`border-t border-gray-100 ${isEdit?"bg-amber-50":""}`}>
+        <td className="px-3 py-2 font-medium text-gray-800">{ped?.numero_pedido||"—"}</td>
+        <td className="px-3 py-2 text-gray-600 text-xs">{prov?.nombre||"?"}</td>
+        <td className="px-3 py-2 text-right font-semibold">{fmt(c.monto_total)}</td>
+        <td className="px-3 py-2 text-right text-emerald-600">{fmt(c.monto_pagado||0)}</td>
+        <td className="px-3 py-2 text-right font-bold text-red-600">{fmt(saldo)}</td>
+        <td className="px-3 py-2">{isEdit?<div className="flex gap-1"><input className="w-24 border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" placeholder="# factura" value={editFact.numero} onChange={e=>setEditFact({...editFact,numero:e.target.value})}/><input type="date" className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editFact.fecha} onChange={e=>setEditFact({...editFact,fecha:e.target.value})}/><button onClick={()=>saveFact(c.id)} className="text-xs bg-emerald-500 text-white px-2 py-0.5 rounded">✓</button></div>:<span className="text-xs text-gray-500">{c.numero_factura||<button onClick={()=>{setEditingCxp(c.id);setEditFact({numero:c.numero_factura||"",fecha:c.fecha_factura||""});}} className="text-amber-600 hover:text-amber-800 font-medium">+ Factura</button>}</span>}</td>
+        <td className="px-3 py-2"><Badge v={c.estatus==="pagado"?"success":c.estatus==="parcial"?"warning":"danger"}>{c.estatus}</Badge></td>
+        <td className="px-3 py-2">{!isEdit&&c.numero_factura&&<button onClick={()=>{setEditingCxp(c.id);setEditFact({numero:c.numero_factura||"",fecha:c.fecha_factura||""});}} className="text-xs text-amber-600 hover:text-amber-800">Editar</button>}</td>
+      </tr>);})}</tbody></table></div>}</div>}
+
+    {/* REGISTRAR PAGO */}
+    {tab==="pagar"&&<div className="bg-white border-2 border-emerald-300 rounded-xl p-4">
+      <h3 className="text-sm font-bold text-emerald-800 mb-3">Registrar pago</h3>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
+        <div><label className="text-xs text-gray-500 block mb-1">Cuenta por pagar</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newPago.cxp_id} onChange={e=>{setNewPago({...newPago,cxp_id:e.target.value});const c=pendientes.find(x=>x.id===e.target.value);if(c)setNewPago(p=>({...p,cxp_id:e.target.value,monto:parseFloat(c.monto_total)-parseFloat(c.monto_pagado||0)}));}}><option value="">Seleccionar...</option>{pendientes.map(c=>{const ped=pedidos.find(p=>p.id===c.pedido_id);const prov=proveedores.find(p=>p.id===c.proveedor_id);const saldo=parseFloat(c.monto_total)-parseFloat(c.monto_pagado||0);return<option key={c.id} value={c.id}>{ped?.numero_pedido} — {prov?.nombre} — Saldo: {fmt(saldo)}</option>;})}</select></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Monto a pagar</label><input type="number" min="0" step="0.01" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newPago.monto||""} onChange={e=>setNewPago({...newPago,monto:parseFloat(e.target.value)||0})}/></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Método de pago</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newPago.metodo} onChange={e=>setNewPago({...newPago,metodo:e.target.value})}><option value="transferencia">Transferencia</option><option value="efectivo">Efectivo</option><option value="tarjeta">Tarjeta</option></select></div>
+      </div>
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        <div><label className="text-xs text-gray-500 block mb-1">Referencia</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="# transferencia, recibo, etc." value={newPago.referencia} onChange={e=>setNewPago({...newPago,referencia:e.target.value})}/></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Notas</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Opcional" value={newPago.notas} onChange={e=>setNewPago({...newPago,notas:e.target.value})}/></div>
+      </div>
+      <Btn onClick={registrarPago} disabled={saving||!newPago.cxp_id||newPago.monto<=0} color="green">{saving?"Guardando...":"Registrar pago"}</Btn>
+    </div>}
+
+    {/* HISTORIAL */}
+    {tab==="historial"&&<div className="bg-white border border-gray-200 rounded-xl overflow-hidden">{pagos.length===0?<div className="p-8 text-center"><p className="text-gray-400">Sin pagos registrados</p></div>
+    :<table className="w-full text-sm"><thead className="bg-gray-50"><tr>
+      {["Fecha","Pedido","Proveedor","Monto","Método","Referencia"].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${h==="Monto"?"text-right":"text-left"}`}>{h}</th>)}
+    </tr></thead><tbody>{pagos.slice().sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).map(p=>{
+      const c=cxp.find(x=>x.id===p.cxp_id);
+      const ped=pedidos.find(x=>x.id===c?.pedido_id);
+      const prov=proveedores.find(x=>x.id===c?.proveedor_id);
+      return(<tr key={p.id} className="border-t border-gray-100">
+        <td className="px-3 py-2 text-gray-600 text-xs">{new Date(p.fecha_pago||p.created_at).toLocaleDateString("es-MX")}</td>
+        <td className="px-3 py-2 font-medium text-gray-800">{ped?.numero_pedido||"—"}</td>
+        <td className="px-3 py-2 text-gray-600 text-xs">{prov?.nombre||"?"}</td>
+        <td className="px-3 py-2 text-right font-bold text-emerald-600">{fmt(p.monto)}</td>
+        <td className="px-3 py-2"><Badge v={p.metodo_pago==="transferencia"?"info":p.metodo_pago==="efectivo"?"warning":"purple"}>{p.metodo_pago}</Badge></td>
+        <td className="px-3 py-2 text-gray-400 text-xs">{p.referencia||"—"}</td>
+      </tr>);})}</tbody></table>}</div>}
+
+    {/* RESUMEN */}
+    {tab==="resumen"&&<div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-white border border-gray-200 rounded-xl p-4"><h3 className="text-sm font-bold text-gray-700 mb-3">Saldos por proveedor</h3>
+          {provSorted.length===0?<p className="text-sm text-gray-400">Sin saldos pendientes</p>:provSorted.map(([prov,data])=>{
+            const pct=maxProv>0?(data.total/maxProv)*100:0;
+            return(<div key={prov} className="mb-3"><div className="flex justify-between text-sm mb-1"><span className="text-gray-700 font-medium">{prov} <span className="text-gray-400 text-xs">({data.count} facturas)</span></span><span className="font-bold text-red-600">{fmt(data.total)}</span></div><div className="w-full bg-gray-100 rounded-full h-3"><div className="h-3 rounded-full transition-all" style={{width:`${Math.min(pct,100)}%`,background:"#ef4444"}}/></div></div>);
+          })}
+          {provSorted.length>0&&<div className="border-t border-gray-100 pt-2 mt-2 flex justify-between font-bold text-sm"><span>Total adeudado</span><span className="text-red-600">{fmt(totalAdeudado)}</span></div>}
+        </div>
+        <div className="bg-white border border-gray-200 rounded-xl p-4"><h3 className="text-sm font-bold text-gray-700 mb-3">Métodos de pago (este mes)</h3>
+          {(()=>{const hoy=new Date();const mesInicio=new Date(hoy.getFullYear(),hoy.getMonth(),1).toISOString().split("T")[0];const pagosMes=pagos.filter(p=>(p.fecha_pago||p.created_at?.split("T")[0])>=mesInicio);const byMetodo={};pagosMes.forEach(p=>{const m=p.metodo_pago||"otro";if(!byMetodo[m])byMetodo[m]=0;byMetodo[m]+=parseFloat(p.monto);});const metodos=Object.entries(byMetodo).sort((a,b)=>b[1]-a[1]);return metodos.length===0?<p className="text-sm text-gray-400">Sin pagos este mes</p>:metodos.map(([m,total])=><div key={m} className="flex justify-between py-2 border-b border-gray-50 last:border-0"><div className="flex items-center gap-2"><Badge v={m==="transferencia"?"info":m==="efectivo"?"warning":"purple"}>{m}</Badge></div><span className="font-bold text-gray-800">{fmt(total)}</span></div>);})()}
+        </div>
+      </div>
+    </div>}
+  </div>);
+}
+
+// ======================== APP v6.0 ========================
 function App(){
   const [rol,setRol]=useState(null);
   const [view,setView]=useState("bandeja");
@@ -799,6 +1027,10 @@ function App(){
   const [unidades,setUnidades]=useState([]);
   const [lotes,setLotes]=useState([]);
   const [provToken,setProvToken]=useState(null);
+  const [recepciones,setRecepciones]=useState([]);
+  const [recepcionDetalle,setRecepcionDetalle]=useState([]);
+  const [cxp,setCxp]=useState([]);
+  const [pagos,setPagos]=useState([]);
 
   // Check URL for provider token
   useEffect(()=>{
@@ -810,7 +1042,7 @@ function App(){
   useEffect(()=>{
     async function load(){
       setLoadMsg("Conectando...");
-      const tables=["catalogo","proveedores","tipos_flujo_costo","unidades_medida","inventario_almacen","pedidos","pedido_detalle","pedido_proveedor_estatus","lotes_almacen"];
+      const tables=["catalogo","proveedores","tipos_flujo_costo","unidades_medida","inventario_almacen","pedidos","pedido_detalle","pedido_proveedor_estatus","lotes_almacen","recepciones","recepcion_detalle","cuentas_por_pagar","pagos"];
       const results={};
       for(const t of tables){setLoadMsg(`Cargando ${t}...`);results[t]=await sbGet(t);}
       
@@ -828,6 +1060,10 @@ function App(){
       setProvEstatus(results.pedido_proveedor_estatus||[]);
       setUnidades((results.unidades_medida||[]).filter(u=>u.activa!==false));
       setLotes(results.lotes_almacen||[]);
+      setRecepciones(results.recepciones||[]);
+      setRecepcionDetalle(results.recepcion_detalle||[]);
+      setCxp(results.cuentas_por_pagar||[]);
+      setPagos(results.pagos||[]);
 
       // Handle provider token access
       if(provToken){
@@ -885,10 +1121,23 @@ function App(){
       setProvEstatus(provEstatus.map(x=>x.pedido_id===pedId&&x.proveedor_id===provId?{...x,estatus:est}:x));
     }
     if(action==="cerrar_pedido"){
-      await sbPatch("pedidos",pedId,{estatus:"cerrado",total_real:pedidoDetalle.filter(d=>d.pedido_id===pedId).reduce((s,d)=>s+d.cantidad*(d.costo_real||d.costo_referencia),0)});
+      const totalReal=pedidoDetalle.filter(d=>d.pedido_id===pedId).reduce((s,d)=>s+d.cantidad*(d.costo_real||d.costo_referencia),0);
+      await sbPatch("pedidos",pedId,{estatus:"cerrado",total_real:totalReal});
+      // Auto-generate CxP per proveedor
+      const provIds=[...new Set(pedidoDetalle.filter(d=>d.pedido_id===pedId).map(d=>d.proveedor_id))];
+      const newCxps=[];
+      for(const pid of provIds){
+        const items=pedidoDetalle.filter(d=>d.pedido_id===pedId&&d.proveedor_id===pid);
+        const monto=items.reduce((s,d)=>s+d.cantidad*(d.costo_real||d.costo_referencia),0);
+        if(monto>0){
+          const res=await sbPost("cuentas_por_pagar",{pedido_id:pedId,proveedor_id:pid,monto_total:Math.round(monto*100)/100,estatus:"pendiente"});
+          if(res&&res[0])newCxps.push(res[0]);
+        }
+      }
+      setCxp([...cxp,...newCxps]);
       setPedidos(pedidos.map(p=>p.id===pedId?{...p,estatus:"cerrado"}:p));
       setSelectedPedido({...selectedPedido,estatus:"cerrado"});
-      alert("Pedido cerrado");
+      alert("Pedido cerrado — CxP generadas por proveedor");
     }
   };
 
@@ -950,6 +1199,35 @@ function App(){
     window.location.href=window.location.pathname;
   };
 
+  // RECEPCIÓN DE MERCANCÍA
+  const handleRecibir=async(pedId,provId,estatus,items)=>{
+    const res=await sbPost("recepciones",{pedido_id:pedId,proveedor_id:provId,estatus:estatus,recibido_por:"sucursal"});
+    if(res&&res[0]){
+      const recId=res[0].id;
+      for(const item of items){
+        await sbPost("recepcion_detalle",{recepcion_id:recId,...item});
+      }
+      // Update pedido_proveedor_estatus
+      const pe=provEstatus.find(x=>x.pedido_id===pedId&&x.proveedor_id===provId);
+      const newEst=estatus==="completo"?"recibido_completo":"recibido_con_faltantes";
+      if(pe){
+        await sbPatch("pedido_proveedor_estatus",pe.id,{estatus:newEst,fecha_completado:new Date().toISOString()});
+        setProvEstatus(provEstatus.map(x=>x.id===pe.id?{...x,estatus:newEst}:x));
+      }
+      // Update pedido_detalle with received quantities
+      for(const item of items){
+        if(item.cantidad_recibida!==item.cantidad_esperada){
+          await sbPatch("pedido_detalle",item.pedido_detalle_id,{cantidad:item.cantidad_recibida});
+          setPedidoDetalle(prev=>prev.map(d=>d.id===item.pedido_detalle_id?{...d,cantidad:item.cantidad_recibida}:d));
+        }
+      }
+      setRecepciones([...recepciones,res[0]]);
+      const detRes=await sbGet("recepcion_detalle",`recepcion_id=eq.${recId}`);
+      setRecepcionDetalle([...recepcionDetalle,...(detRes||[])]);
+      alert(estatus==="completo"?"Recepción completa registrada":"Recepción con faltantes registrada — Compras puede ver las discrepancias");
+    }
+  };
+
   if(loading)return(<div className="min-h-screen flex flex-col items-center justify-center" style={{background:"#2D2D2D"}}><Logo size={56}/><p className="text-amber-400 mt-4 text-sm animate-pulse">{loadMsg}</p></div>);
   if(error)return(<div className="min-h-screen flex items-center justify-center p-4" style={{background:"#2D2D2D"}}><div className="max-w-lg text-center"><Logo size={56}/><p className="text-red-400 mt-4 text-sm">{error}</p><button onClick={()=>window.location.href=window.location.pathname} className="mt-4 px-4 py-2 rounded-lg text-sm font-medium" style={{background:"#F5B731",color:"#2D2D2D"}}>Reintentar</button></div></div>);
 
@@ -962,13 +1240,14 @@ function App(){
     return<ProveedorTokenView detalle={det} catalogo={catalogo} pedido={selectedPedido} provNombre={provNombre} onConfirm={handleProvConfirm} readOnly={isReadOnly}/>;
   }
 
-  if(!rol)return<LoginScreen onLogin={r=>{setRol(r);setView("bandeja");}}/>;
+  if(!rol)return<LoginScreen onLogin={r=>{setRol(r);setView(r==="finanzas"?"finanzas":r==="almacen"?"almacen":"bandeja");}}/>;
 
   const tabs=[];
-  if(["admin","compras"].includes(rol)){tabs.push({id:"bandeja",l:"Pedidos"},{id:"almacen",l:"Almacén"},{id:"dashboard",l:"Dashboard"});if(rol==="admin")tabs.push({id:"catalogo",l:"Catálogo"});}
-  else if(rol==="sucursal")tabs.push({id:"bandeja",l:"Mis pedidos"});
+  if(["admin","compras"].includes(rol)){tabs.push({id:"bandeja",l:"Pedidos"},{id:"almacen",l:"Almacén"},{id:"finanzas",l:"Finanzas"},{id:"dashboard",l:"Dashboard"});if(rol==="admin")tabs.push({id:"catalogo",l:"Catálogo"});}
+  else if(rol==="sucursal")tabs.push({id:"bandeja",l:"Mis pedidos"},{id:"recepcion",l:"Recepción"});
   else if(rol==="proveedor")tabs.push({id:"bandeja",l:"Mis pedidos"});
   else if(rol==="almacen")tabs.push({id:"almacen",l:"Inventario"},{id:"bandeja",l:"Pedidos"});
+  else if(rol==="finanzas")tabs.push({id:"finanzas",l:"Finanzas"},{id:"dashboard",l:"Dashboard"});
   else tabs.push({id:"dashboard",l:"Dashboard"});
 
   const currentDetalle=selectedPedido?pedidoDetalle.filter(d=>d.pedido_id===selectedPedido.id):[];
@@ -984,10 +1263,10 @@ function App(){
       </div>
     </div></div></div>
     <div className="max-w-6xl mx-auto px-4 py-6">
-      {view==="bandeja"&&!selectedPedido&&subview!=="crear"&&<BandejaPedidos pedidos={pedidos} rol={rol} onSelect={p=>{setSelectedPedido(p);}} onNew={()=>setSubview("crear")} pedidoDetalle={pedidoDetalle} proveedores={proveedores} provEstatus={provEstatus} onDelete={handleDeletePedido}/>}
+      {view==="bandeja"&&!selectedPedido&&subview!=="crear"&&<BandejaPedidos pedidos={pedidos} rol={rol} onSelect={p=>{setSelectedPedido(p);}} onNew={()=>setSubview("crear")} pedidoDetalle={pedidoDetalle} proveedores={proveedores} provEstatus={provEstatus} onDelete={handleDeletePedido} recepciones={recepciones}/>}
       {view==="bandeja"&&subview==="crear"&&<CrearPedido catalogo={catalogo} proveedores={proveedores} onSave={handleCreatePedido} onCancel={()=>setSubview(null)}/>}
-      {view==="bandeja"&&selectedPedido&&["admin","compras"].includes(rol)&&<DetallePedido pedido={selectedPedido} detalle={currentDetalle} catalogo={catalogo} proveedores={proveedores} provEstatus={currentProvEst} onBack={()=>setSelectedPedido(null)} onAction={handleAction} onReasignar={handleReasignar} onUpdatePrecio={handleUpdatePrecio} onUpdateCantidad={handleUpdateCantidad} onAddItem={handleAddItem} rol={rol}/>}
-      {view==="bandeja"&&selectedPedido&&rol==="sucursal"&&<DetallePedido pedido={selectedPedido} detalle={currentDetalle} catalogo={catalogo} proveedores={proveedores} provEstatus={currentProvEst} onBack={()=>setSelectedPedido(null)} onAction={()=>{}} onReasignar={()=>{}} onUpdatePrecio={()=>{}} onUpdateCantidad={()=>{}} onAddItem={()=>{}} rol={rol}/>}
+      {view==="bandeja"&&selectedPedido&&["admin","compras"].includes(rol)&&<DetallePedido pedido={selectedPedido} detalle={currentDetalle} catalogo={catalogo} proveedores={proveedores} provEstatus={currentProvEst} onBack={()=>setSelectedPedido(null)} onAction={handleAction} onReasignar={handleReasignar} onUpdatePrecio={handleUpdatePrecio} onUpdateCantidad={handleUpdateCantidad} onAddItem={handleAddItem} rol={rol} recepciones={recepciones}/>}
+      {view==="bandeja"&&selectedPedido&&rol==="sucursal"&&<DetallePedido pedido={selectedPedido} detalle={currentDetalle} catalogo={catalogo} proveedores={proveedores} provEstatus={currentProvEst} onBack={()=>setSelectedPedido(null)} onAction={()=>{}} onReasignar={()=>{}} onUpdatePrecio={()=>{}} onUpdateCantidad={()=>{}} onAddItem={()=>{}} rol={rol} recepciones={recepciones}/>}
       {view==="bandeja"&&selectedPedido&&rol==="proveedor"&&(()=>{
         const jcProv=proveedores.find(p=>p.nombre==="Juan Carlos Botello");
         const provDet=currentDetalle.filter(d=>d.proveedor_id===jcProv?.id);
@@ -1047,6 +1326,8 @@ function App(){
       }}/>}
       {view==="dashboard"&&<DashboardView pedidos={pedidos} catalogo={catalogo} proveedores={proveedores} pedidoDetalle={pedidoDetalle} inventario={inventario}/>}
       {view==="catalogo"&&rol==="admin"&&<CatalogoView catalogo={catalogo} setCatalogo={setCatalogo} proveedores={proveedores} unidades={unidades} inventario={inventario}/>}
+      {view==="recepcion"&&rol==="sucursal"&&<RecepcionView pedidos={pedidos} pedidoDetalle={pedidoDetalle} proveedores={proveedores} provEstatus={provEstatus} catalogo={catalogo} recepciones={recepciones} recepcionDetalle={recepcionDetalle} onRecibir={handleRecibir}/>}
+      {view==="finanzas"&&["admin","compras","finanzas"].includes(rol)&&<FinanzasView cxp={cxp} setCxp={setCxp} pagos={pagos} setPagos={setPagos} pedidos={pedidos} proveedores={proveedores} pedidoDetalle={pedidoDetalle} catalogo={catalogo}/>}
     </div>
   </div>);
 }
