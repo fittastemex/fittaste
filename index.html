@@ -293,7 +293,7 @@ function DetallePedido({pedido:ped,detalle,catalogo,proveedores,provEstatus,onBa
 
 // ======================== VISTA PROVEEDOR (por token) ========================
 function ProveedorTokenView({detalle,catalogo,pedido:ped,provNombre,onConfirm,readOnly}){
-  const [precios,setPrecios]=useState({});
+  const [precios,setPrecios]=useState(()=>{const p={};detalle.forEach(d=>{if(d.costo_real!=null)p[d.id]=d.costo_real;});return p;});
   const [cantidades,setCantidades]=useState(()=>{const c={};detalle.forEach(d=>{c[d.id]=d.cantidad;});return c;});
   const items=detalle;
   const total=items.reduce((s,d)=>s+(precios[d.id]||0)*(cantidades[d.id]||0),0);
@@ -1270,11 +1270,12 @@ function App(){
       {view==="bandeja"&&selectedPedido&&rol==="proveedor"&&(()=>{
         const jcProv=proveedores.find(p=>p.nombre==="Juan Carlos Botello");
         const provDet=currentDetalle.filter(d=>d.proveedor_id===jcProv?.id);
-        return<ProveedorTokenView detalle={provDet} catalogo={catalogo} pedido={selectedPedido} provNombre={jcProv?.nombre||"Proveedor"} onConfirm={async(precios,cantidades)=>{
+        const pe=provEstatus.find(x=>x.pedido_id===selectedPedido.id&&x.proveedor_id===jcProv?.id);
+        const isReadOnly=pe&&["precios_capturados","recibido_completo","recibido_con_faltantes"].includes(pe.estatus);
+        return<ProveedorTokenView detalle={provDet} catalogo={catalogo} pedido={selectedPedido} provNombre={jcProv?.nombre||"Proveedor"} readOnly={isReadOnly} onConfirm={async(precios,cantidades)=>{
           for(const[detId,precio]of Object.entries(precios)){if(precio==null)continue;const cant=cantidades[detId];await sbPatch("pedido_detalle",detId,{costo_real:precio,cantidad:cant,capturado_por:"proveedor",fecha_captura:new Date().toISOString()});}
-          const pe=provEstatus.find(x=>x.pedido_id===selectedPedido.id&&x.proveedor_id===jcProv?.id);
-          if(pe)await sbPatch("pedido_proveedor_estatus",pe.id,{estatus:"precios_capturados",fecha_completado:new Date().toISOString()});
-          setProvEstatus(provEstatus.map(x=>x.pedido_id===selectedPedido.id&&x.proveedor_id===jcProv?.id?{...x,estatus:"precios_capturados"}:x));
+          if(pe)await sbPatch("pedido_proveedor_estatus",pe.id,{estatus:"precios_capturados",token_activo:false,fecha_completado:new Date().toISOString()});
+          setProvEstatus(provEstatus.map(x=>x.pedido_id===selectedPedido.id&&x.proveedor_id===jcProv?.id?{...x,estatus:"precios_capturados",token_activo:false}:x));
           setPedidoDetalle(pedidoDetalle.map(d=>{const pr=precios[d.id];if(pr!=null)return{...d,costo_real:pr,cantidad:cantidades[d.id]||d.cantidad};return d;}));
           alert("Precios confirmados");setSelectedPedido(null);
         }}/>;
