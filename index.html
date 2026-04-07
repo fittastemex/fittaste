@@ -35,7 +35,7 @@ const LOGO_SRC="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMgAAABnCAIAAADKcJ
 const Logo=({size=32})=><img src={LOGO_SRC} width={size} height={size} style={{objectFit:"contain"}} alt="Fit Taste"/>;
 const Btn=({children,onClick,disabled,color="amber"})=><button onClick={onClick} disabled={disabled} className={`text-sm font-semibold px-4 py-2 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed`} style={{background:disabled?"#ccc":color==="amber"?"#F5B731":color==="green"?"#10b981":color==="red"?"#ef4444":"#8b5cf6",color:color==="amber"?"#2D2D2D":"white"}}>{children}</button>;
 
-const estatusBadge=(e)=>{const m={creado:"nuevo",en_proceso:"proceso",enviado_proveedor:"enviado",enviado:"enviado",entregado:"warning",precios_capturados:"success",completo:"success",surtido:"purple",recibido_completo:"success",recibido_con_faltantes:"danger",cerrado:"cerrado",pendiente:"default"};return<Badge v={m[e]||"default"}>{e.replace(/_/g," ")}</Badge>;};
+const estatusBadge=(e)=>{const m={creado:"nuevo",en_proceso:"proceso",enviado_proveedor:"enviado",enviado:"enviado",entregado:"warning",precios_capturados:"success",completo:"success",surtido:"purple",comprado:"info",recibido_completo:"success",recibido_con_faltantes:"danger",cerrado:"cerrado",pendiente:"default"};return<Badge v={m[e]||"default"}>{e.replace(/_/g," ")}</Badge>;};
 
 // ======================== CONTRASEÑAS POR ROL ========================
 // Cambia estas contraseñas cuando quieras
@@ -120,7 +120,7 @@ function BandejaPedidos({pedidos,rol,onSelect,onNew,pedidoDetalle,proveedores,pr
       {(rol==="sucursal"||rol==="admin")&&<Btn onClick={onNew}>+ Nuevo pedido</Btn>}
     </div>
     {filteredByRol.length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400">No hay pedidos</p>{(rol==="sucursal"||rol==="admin")&&<Btn onClick={onNew}>Crear primer pedido</Btn>}</div>
-    :<div className="space-y-2">{filteredByRol.map(p=>(<div key={p.id} className="w-full bg-white border border-gray-200 rounded-xl p-4 hover:border-amber-400 transition-all text-left">
+    :<div className="space-y-2">{filteredByRol.map(p=>{const bc={creado:"#F5B731",en_proceso:"#3b82f6",comprado:"#10b981",cerrado:"#9ca3af"}[p.estatus]||"#e5e7eb";return(<div key={p.id} className="w-full bg-white border border-gray-200 rounded-xl p-4 hover:border-amber-400 transition-all text-left" style={{borderLeft:`4px solid ${bc}`}}>
       <div className="flex items-center justify-between mb-2">
         <button onClick={()=>onSelect(p)} className="flex items-center gap-2 flex-1 text-left"><span className="font-bold text-gray-900">Pedido {p.numero_pedido||"#—"}</span>{estatusBadge(p.estatus)}</button>
         <div className="flex items-center gap-2">
@@ -135,7 +135,7 @@ function BandejaPedidos({pedidos,rol,onSelect,onNew,pedidoDetalle,proveedores,pr
         {p.articulos_sin_precio>0&&<span className="text-amber-600 text-xs">{p.articulos_sin_precio} sin precio</span>}
         {rol==="sucursal"&&pendRecep(p.id)>0&&<Badge v="warning">Pendiente de recepción ({pendRecep(p.id)})</Badge>}
       </div></button>
-    </div>))}</div>}
+    </div>)})}</div>}
   </div>);
 }
 
@@ -197,19 +197,15 @@ function DetallePedido({pedido:ped,detalle,catalogo,proveedores,provEstatus,onBa
     byProv[k].items.push(d);
   });
 
-  const allHavePrice=detalle.every(d=>d.costo_real!=null);
+  const allHavePrice=detalle.every(d=>d.cantidad===0||d.costo_real!=null);
   const allProvComplete=provEstatus.every(pe=>["completo","precios_capturados","surtido","recibido_completo","recibido_con_faltantes"].includes(pe.estatus));
-  const allRecibidos=provEstatus.every(pe=>(recepciones||[]).some(r=>r.pedido_id===ped.id&&r.proveedor_id===pe.proveedor_id));
-  const canClose=allHavePrice&&allProvComplete&&allRecibidos;
+  const canComprar=allHavePrice&&allProvComplete;
   const totalTeo=detalle.reduce((s,d)=>s+d.cantidad*d.costo_referencia,0);
   const totalReal=detalle.reduce((s,d)=>s+d.cantidad*(d.costo_real||d.costo_referencia),0);
 
   const closeBlockers=[];
-  if(!allHavePrice){const n=detalle.filter(d=>d.costo_real==null).length;closeBlockers.push(`${n} artículo${n>1?"s":""} sin precio real`);}
-  provEstatus.forEach(pe=>{const prov=proveedores.find(p=>p.id===pe.proveedor_id);if(pe.estatus==="pendiente")closeBlockers.push(`${prov?.nombre||"?"}: no enviado`);if(pe.estatus==="enviado")closeBlockers.push(`${prov?.nombre||"?"}: esperando confirmación`);
-    const hasRecepcion=(recepciones||[]).some(r=>r.pedido_id===ped.id&&r.proveedor_id===pe.proveedor_id);
-    if(!hasRecepcion&&["precios_capturados","completo","surtido"].includes(pe.estatus))closeBlockers.push(`${prov?.nombre||"?"}: pendiente de recepción por Sucursal`);
-  });
+  if(!allHavePrice){const n=detalle.filter(d=>d.cantidad>0&&d.costo_real==null).length;if(n>0)closeBlockers.push(`${n} artículo${n>1?"s":""} sin precio real`);}
+  provEstatus.forEach(pe=>{const prov=proveedores.find(p=>p.id===pe.proveedor_id);if(pe.estatus==="pendiente")closeBlockers.push(`${prov?.nombre||"?"}: no enviado`);if(pe.estatus==="enviado")closeBlockers.push(`${prov?.nombre||"?"}: esperando confirmación`);});
   const isCompras=["admin","compras"].includes(rol);
 
   const handleAdd=(provId)=>{
@@ -284,10 +280,12 @@ function DetallePedido({pedido:ped,detalle,catalogo,proveedores,provEstatus,onBa
       </div>);
     })}
 
-    {ped.estatus!=="cerrado"&&isCompras&&<div className="mt-4">
-      {closeBlockers.length>0&&<div className="bg-red-50 border border-red-200 rounded-xl p-3 mb-3"><p className="text-sm font-semibold text-red-800 mb-1">No se puede cerrar el pedido:</p><ul className="text-xs text-red-700 space-y-0.5">{closeBlockers.map((b,i)=><li key={i}>• {b}</li>)}</ul></div>}
-      <div className="flex justify-end"><Btn onClick={()=>{if(!canClose){alert("No se puede cerrar el pedido:\n\n"+closeBlockers.join("\n"));return;}onAction("cerrar_pedido");}} color={canClose?"green":"amber"}>{canClose?"Cerrar pedido":"Intentar cerrar pedido"}</Btn></div>
+    {ped.estatus!=="cerrado"&&ped.estatus!=="comprado"&&isCompras&&<div className="mt-4">
+      {closeBlockers.length>0&&<div className="bg-red-50 border border-red-200 rounded-xl p-3 mb-3"><p className="text-sm font-semibold text-red-800 mb-1">No se puede marcar como comprado:</p><ul className="text-xs text-red-700 space-y-0.5">{closeBlockers.map((b,i)=><li key={i}>• {b}</li>)}</ul></div>}
+      <div className="flex justify-end"><Btn onClick={()=>{if(!canComprar){alert("No se puede marcar como comprado:\n\n"+closeBlockers.join("\n"));return;}onAction("comprado");}} color={canComprar?"green":"amber"}>{canComprar?"Pedido comprado ✓":"Intentar marcar comprado"}</Btn></div>
     </div>}
+    {ped.estatus==="comprado"&&isCompras&&<div className="mt-4"><div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3"><p className="text-sm font-medium text-emerald-800">✓ Pedido comprado — pendiente de recepción por Sucursal</p><p className="text-xs text-emerald-600 mt-1">El pedido se cerrará automáticamente cuando Sucursal confirme la recepción de todos los proveedores</p></div></div>}
+    {ped.estatus==="cerrado"&&isCompras&&<div className="mt-4"><div className="bg-gray-100 border border-gray-200 rounded-xl p-3"><p className="text-sm font-medium text-gray-700">✓ Pedido cerrado — CxP generadas para Finanzas</p></div></div>}
   </div>);
 }
 
@@ -1120,24 +1118,12 @@ function App(){
       if(pe)await sbPatch("pedido_proveedor_estatus",pe.id,{estatus:est,fecha_completado:new Date().toISOString()});
       setProvEstatus(provEstatus.map(x=>x.pedido_id===pedId&&x.proveedor_id===provId?{...x,estatus:est}:x));
     }
-    if(action==="cerrar_pedido"){
+    if(action==="comprado"){
       const totalReal=pedidoDetalle.filter(d=>d.pedido_id===pedId).reduce((s,d)=>s+d.cantidad*(d.costo_real||d.costo_referencia),0);
-      await sbPatch("pedidos",pedId,{estatus:"cerrado",total_real:totalReal});
-      // Auto-generate CxP per proveedor
-      const provIds=[...new Set(pedidoDetalle.filter(d=>d.pedido_id===pedId).map(d=>d.proveedor_id))];
-      const newCxps=[];
-      for(const pid of provIds){
-        const items=pedidoDetalle.filter(d=>d.pedido_id===pedId&&d.proveedor_id===pid);
-        const monto=items.reduce((s,d)=>s+d.cantidad*(d.costo_real||d.costo_referencia),0);
-        if(monto>0){
-          const res=await sbPost("cuentas_por_pagar",{pedido_id:pedId,proveedor_id:pid,monto_total:Math.round(monto*100)/100,estatus:"pendiente"});
-          if(res&&res[0])newCxps.push(res[0]);
-        }
-      }
-      setCxp([...cxp,...newCxps]);
-      setPedidos(pedidos.map(p=>p.id===pedId?{...p,estatus:"cerrado"}:p));
-      setSelectedPedido({...selectedPedido,estatus:"cerrado"});
-      alert("Pedido cerrado — CxP generadas por proveedor");
+      await sbPatch("pedidos",pedId,{estatus:"comprado",total_real:totalReal});
+      setPedidos(pedidos.map(p=>p.id===pedId?{...p,estatus:"comprado",total_real:totalReal}:p));
+      setSelectedPedido({...selectedPedido,estatus:"comprado"});
+      alert("Pedido marcado como comprado — pendiente de recepción por Sucursal");
     }
   };
 
@@ -1224,7 +1210,33 @@ function App(){
       setRecepciones([...recepciones,res[0]]);
       const detRes=await sbGet("recepcion_detalle",`recepcion_id=eq.${recId}`);
       setRecepcionDetalle([...recepcionDetalle,...(detRes||[])]);
-      alert(estatus==="completo"?"Recepción completa registrada":"Recepción con faltantes registrada — Compras puede ver las discrepancias");
+      
+      // Check if ALL providers for this pedido now have reception → auto-close + generate CxP
+      const updatedReceps=[...recepciones,res[0]];
+      const allProvForPed=provEstatus.filter(x=>x.pedido_id===pedId);
+      const allReceived=allProvForPed.every(x=>updatedReceps.some(r=>r.pedido_id===pedId&&r.proveedor_id===x.proveedor_id));
+      
+      if(allReceived){
+        // Auto-close pedido
+        const totalReal=pedidoDetalle.filter(d=>d.pedido_id===pedId).reduce((s,d)=>s+d.cantidad*(d.costo_real||d.costo_referencia),0);
+        await sbPatch("pedidos",pedId,{estatus:"cerrado",total_real:totalReal});
+        setPedidos(prev=>prev.map(p=>p.id===pedId?{...p,estatus:"cerrado",total_real:totalReal}:p));
+        // Generate CxP per proveedor
+        const provIds=[...new Set(pedidoDetalle.filter(d=>d.pedido_id===pedId).map(d=>d.proveedor_id))];
+        const newCxps=[];
+        for(const pid of provIds){
+          const provItems=pedidoDetalle.filter(d=>d.pedido_id===pedId&&d.proveedor_id===pid);
+          const monto=provItems.reduce((s,d)=>s+d.cantidad*(d.costo_real||d.costo_referencia),0);
+          if(monto>0){
+            const cxpRes=await sbPost("cuentas_por_pagar",{pedido_id:pedId,proveedor_id:pid,monto_total:Math.round(monto*100)/100,estatus:"pendiente"});
+            if(cxpRes&&cxpRes[0])newCxps.push(cxpRes[0]);
+          }
+        }
+        setCxp(prev=>[...prev,...newCxps]);
+        alert("Recepción registrada — Todas las recepciones completas. Pedido cerrado y CxP generadas para Finanzas.");
+      } else {
+        alert(estatus==="completo"?"Recepción completa registrada":"Recepción con faltantes registrada — Compras puede ver las discrepancias");
+      }
     }
   };
 
