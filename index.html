@@ -349,6 +349,13 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
   const [savingInv,setSavingInv]=useState(false);
   const isAdmin=rol==="admin";
 
+  // Auto-serial MP-XXX
+  const genInvSku=()=>{
+    const existing=inventario.filter(i=>i.sku.startsWith("MP")).map(i=>parseInt(i.sku.replace("MP",""))||0);
+    const next=existing.length>0?Math.max(...existing)+1:1;
+    return`MP${String(next).padStart(3,"0")}`;
+  };
+
   const cap=inventario.reduce((s,p)=>s+p.existencia*p.costo_unitario_actual,0);
   const pedidoItems=surtiendo?pedidoDetalle.filter(d=>d.pedido_id===surtiendo&&proveedores.find(pr=>pr.id===d.proveedor_id)?.tipo_flujo==="Almacen interno"):[];
   const totalSurtidos=pedidoItems.filter(d=>surtidos[d.id]).length;
@@ -383,7 +390,7 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
 
   // Change #6: Add product to almacén (admin only)
   const handleAddInv=async()=>{
-    if(!newInv.sku||!newInv.descripcion){alert("Completa SKU y descripción");return;}
+    if(!newInv.descripcion){alert("Completa la descripción");return;}
     setSavingInv(true);
     const unid=await sbGet("unidades_medida",`clave=eq.${newInv.unidad_clave}&limit=1`);
     const uid=unid[0]?.id||null;
@@ -434,7 +441,7 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
 
     {/* INVENTARIO con costos PEPS */}
     {tab==="inventario"&&<div>
-      {isAdmin&&<div className="mb-3 flex justify-end">{addingInv?<div className="bg-white border-2 border-teal-300 rounded-xl p-3 w-full"><h3 className="text-sm font-bold text-teal-800 mb-2">Agregar producto al almacén</h3><div className="flex gap-2 items-end flex-wrap"><div><label className="text-xs text-gray-500 block mb-1">SKU</label><input className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm w-28" placeholder="ALM-XXX" value={newInv.sku} onChange={e=>setNewInv({...newInv,sku:e.target.value})}/></div><div className="flex-1"><label className="text-xs text-gray-500 block mb-1">Descripción</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="NOMBRE DEL PRODUCTO" value={newInv.descripcion} onChange={e=>setNewInv({...newInv,descripcion:e.target.value})}/></div><div><label className="text-xs text-gray-500 block mb-1">Unidad</label><select className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newInv.unidad_clave} onChange={e=>setNewInv({...newInv,unidad_clave:e.target.value})}><option value="kg">kg</option><option value="pz">pz</option><option value="lt">lt</option><option value="paq">paq</option></select></div><Btn onClick={handleAddInv} disabled={savingInv} color="purple">{savingInv?"Guardando...":"Agregar"}</Btn><button onClick={()=>setAddingInv(false)} className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1.5">Cancelar</button></div></div>:<Btn onClick={()=>setAddingInv(true)} color="purple">+ Agregar producto</Btn>}</div>}
+      {isAdmin&&<div className="mb-3 flex justify-end">{addingInv?<div className="bg-white border-2 border-teal-300 rounded-xl p-3 w-full"><h3 className="text-sm font-bold text-teal-800 mb-2">Agregar producto al almacén</h3><div className="flex gap-2 items-end flex-wrap"><div><label className="text-xs text-gray-500 block mb-1">SKU <span className="text-teal-600">(auto)</span></label><input className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm w-28 bg-gray-50 text-gray-600" value={newInv.sku} readOnly/></div><div className="flex-1"><label className="text-xs text-gray-500 block mb-1">Descripción</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="NOMBRE DEL PRODUCTO" value={newInv.descripcion} onChange={e=>setNewInv({...newInv,descripcion:e.target.value})}/></div><div><label className="text-xs text-gray-500 block mb-1">Unidad</label><select className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newInv.unidad_clave} onChange={e=>setNewInv({...newInv,unidad_clave:e.target.value})}><option value="kg">kg</option><option value="pz">pz</option><option value="lt">lt</option><option value="paq">paq</option></select></div><Btn onClick={handleAddInv} disabled={savingInv} color="purple">{savingInv?"Guardando...":"Agregar"}</Btn><button onClick={()=>setAddingInv(false)} className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1.5">Cancelar</button></div></div>:<Btn onClick={()=>{setNewInv({sku:genInvSku(),descripcion:"",unidad_clave:"kg"});setAddingInv(true);}} color="purple">+ Agregar producto</Btn>}</div>}
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
       <table className="w-full text-sm"><thead className="bg-gray-50"><tr>
         {["SKU","Producto","Existencia","Costo PEPS","Valor PEPS","Lotes","Estado"].concat(isAdmin?[""]:[]).map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Existencia","Costo PEPS","Valor PEPS","Lotes"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
@@ -709,6 +716,26 @@ function CatalogoView({catalogo,setCatalogo,proveedores,unidades,inventario}){
   const [saving,setSaving]=useState(false);
   const [msg,setMsg]=useState(null);
 
+  // Auto-serial SKU por tipo
+  const prefixMap={PROTEINAS:"PRO",SUPLEMENTO:"SUP",EMPAQUE:"EMP",VERDURA:"VER",FRUTA:"FRU",LIMPIEZA:"LIM",ABARROTES:"ABA",COCINA:"COC",OTRO:"OTR"};
+  const genCatSku=(tipo)=>{
+    const prefix=prefixMap[tipo]||tipo.substring(0,3).toUpperCase();
+    const existing=catalogo.filter(c=>c.sku.startsWith(prefix+"-")).map(c=>parseInt(c.sku.split("-")[1])||0);
+    const next=existing.length>0?Math.max(...existing)+1:1;
+    return`${prefix}-${String(next).padStart(3,"0")}`;
+  };
+
+  // Delete product (soft delete)
+  const handleDelete=async(p)=>{
+    if(!confirm(`¿Eliminar "${p.articulo}" del catálogo?`))return;
+    setSaving(true);
+    await sbPatch("catalogo",p.id,{activo:false});
+    setCatalogo(catalogo.filter(c=>c.id!==p.id));
+    setMsg(`${p.articulo} eliminado`);
+    setSaving(false);
+    setTimeout(()=>setMsg(null),3000);
+  };
+
   const filtered=catalogo.filter(p=>{const textMatch=p.articulo.toLowerCase().includes(filter.toLowerCase())||p.sku.toLowerCase().includes(filter.toLowerCase())||p.tipo_producto.toLowerCase().includes(filter.toLowerCase())||p.proveedor_nombre.toLowerCase().includes(filter.toLowerCase());const provMatch=!filterProv||p.proveedor_id===filterProv;return textMatch&&provMatch;});
   const tipos=[...new Set(catalogo.map(c=>c.tipo_producto))].sort();
 
@@ -749,7 +776,7 @@ function CatalogoView({catalogo,setCatalogo,proveedores,unidades,inventario}){
   return(<div>
     <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
       <div><h2 className="text-lg font-bold text-gray-900">Catálogo de productos</h2><p className="text-sm text-gray-500">{catalogo.length} SKUs — edición directa a Supabase</p></div>
-      <Btn onClick={()=>setAdding(!adding)}>{adding?"Cancelar":"+ Nuevo SKU"}</Btn>
+      <Btn onClick={()=>{if(!adding){setNewItem({sku:genCatSku("VERDURA"),articulo:"",tipo_producto:"VERDURA",unidad_clave:"kg",costo_referencia:0,proveedor_id:"",notas:""});}setAdding(!adding);}}>{adding?"Cancelar":"+ Nuevo SKU"}</Btn>
     </div>
 
     {msg&&<div className={`rounded-xl p-3 mb-4 text-sm font-medium ${msg.includes("Error")?"bg-red-50 text-red-800 border border-red-200":"bg-emerald-50 text-emerald-800 border border-emerald-200"}`}>{msg}</div>}
@@ -757,9 +784,9 @@ function CatalogoView({catalogo,setCatalogo,proveedores,unidades,inventario}){
     {adding&&<div className="bg-white border-2 border-amber-300 rounded-xl p-4 mb-4">
       <h3 className="text-sm font-bold text-gray-700 mb-3">Agregar nuevo producto</h3>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
-        <div><label className="text-xs text-gray-500 block mb-1">SKU</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-amber-400" placeholder="COC-050" value={newItem.sku} onChange={e=>setNewItem({...newItem,sku:e.target.value})}/></div>
+        <div><label className="text-xs text-gray-500 block mb-1">SKU <span className="text-amber-600">(auto)</span></label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-gray-50 text-gray-600" value={newItem.sku} readOnly/></div>
         <div><label className="text-xs text-gray-500 block mb-1">Artículo</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-amber-400" placeholder="NOMBRE DEL PRODUCTO" value={newItem.articulo} onChange={e=>setNewItem({...newItem,articulo:e.target.value})}/></div>
-        <div><label className="text-xs text-gray-500 block mb-1">Tipo</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newItem.tipo_producto} onChange={e=>setNewItem({...newItem,tipo_producto:e.target.value})}>{tipos.map(t=><option key={t} value={t}>{t}</option>)}<option value="OTRO">OTRO</option></select></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Tipo</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newItem.tipo_producto} onChange={e=>{const t=e.target.value;setNewItem({...newItem,tipo_producto:t,sku:genCatSku(t)});}}>{tipos.map(t=><option key={t} value={t}>{t}</option>)}<option value="OTRO">OTRO</option></select></div>
         <div><label className="text-xs text-gray-500 block mb-1">Unidad</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newItem.unidad_clave} onChange={e=>setNewItem({...newItem,unidad_clave:e.target.value})}>{unidades.map(u=><option key={u.clave} value={u.clave}>{u.nombre} ({u.clave})</option>)}</select></div>
       </div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -793,7 +820,7 @@ function CatalogoView({catalogo,setCatalogo,proveedores,unidades,inventario}){
           <td className="px-3 py-2">{isEditing?<select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.proveedor_id} onChange={e=>setEditData({...editData,proveedor_id:e.target.value})}>{proveedores.map(pr=><option key={pr.id} value={pr.id}>{pr.nombre}</option>)}</select>:<span className="text-gray-600 text-xs">{p.proveedor_nombre}</span>}</td>
           <td className="px-3 py-2">{isEditing?<select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.inv_id||""} onChange={e=>setEditData({...editData,inv_id:e.target.value||null})}><option value="">Sin vincular</option>{inventario.map(i=><option key={i.id} value={i.id}>{i.descripcion} ({i.unidad_clave})</option>)}</select>:p.inv_id?<span className="text-xs text-teal-600 font-medium">{inventario.find(i=>i.id===p.inv_id)?.descripcion||"Vinculado"}</span>:<span className="text-xs text-gray-400">—</span>}</td>
           <td className="px-3 py-2">{isEditing?<input className="w-full border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.notas} onChange={e=>setEditData({...editData,notas:e.target.value})}/>:<span className="text-gray-400 text-xs">{p.notas||""}</span>}</td>
-          <td className="px-3 py-2 text-right">{isEditing?<div className="flex gap-1"><button onClick={()=>saveEdit(p)} disabled={saving} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded hover:bg-emerald-600">{saving?"...":"Guardar"}</button><button onClick={()=>setEditing(null)} className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded hover:bg-gray-300">X</button></div>:<button onClick={()=>startEdit(p)} className="text-xs text-amber-700 hover:text-amber-900 font-medium hover:bg-amber-100 px-2 py-1 rounded">Editar</button>}</td>
+          <td className="px-3 py-2 text-right">{isEditing?<div className="flex gap-1"><button onClick={()=>saveEdit(p)} disabled={saving} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded hover:bg-emerald-600">{saving?"...":"Guardar"}</button><button onClick={()=>setEditing(null)} className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded hover:bg-gray-300">X</button></div>:<div className="flex gap-1"><button onClick={()=>startEdit(p)} className="text-xs text-amber-700 hover:text-amber-900 font-medium hover:bg-amber-100 px-2 py-1 rounded">Editar</button><button onClick={()=>handleDelete(p)} className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded" title="Eliminar">✕</button></div>}</td>
         </tr>);})}</tbody></table>
     </div>
     <p className="text-xs text-gray-400 mt-2 text-right">Mostrando {filtered.length} de {catalogo.length} productos</p>
