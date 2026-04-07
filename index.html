@@ -197,14 +197,15 @@ function DetallePedido({pedido:ped,detalle,catalogo,proveedores,provEstatus,onBa
     byProv[k].items.push(d);
   });
 
-  const allHavePrice=detalle.every(d=>d.cantidad===0||d.costo_real!=null);
+  const isAlmacenInterno=(provId)=>{const prov=proveedores.find(p=>p.id===provId);return prov?.tipo_flujo==="Almacen interno";};
+  const allHavePrice=detalle.every(d=>d.cantidad===0||d.costo_real!=null||isAlmacenInterno(d.proveedor_id));
   const allProvComplete=provEstatus.every(pe=>["completo","precios_capturados","surtido","recibido_completo","recibido_con_faltantes"].includes(pe.estatus));
   const canComprar=allHavePrice&&allProvComplete;
   const totalTeo=detalle.reduce((s,d)=>s+d.cantidad*d.costo_referencia,0);
   const totalReal=detalle.reduce((s,d)=>s+d.cantidad*(d.costo_real||d.costo_referencia),0);
 
   const closeBlockers=[];
-  if(!allHavePrice){const n=detalle.filter(d=>d.cantidad>0&&d.costo_real==null).length;if(n>0)closeBlockers.push(`${n} artículo${n>1?"s":""} sin precio real`);}
+  if(!allHavePrice){const n=detalle.filter(d=>d.cantidad>0&&d.costo_real==null&&!isAlmacenInterno(d.proveedor_id)).length;if(n>0)closeBlockers.push(`${n} artículo${n>1?"s":""} sin precio real`);}
   provEstatus.forEach(pe=>{const prov=proveedores.find(p=>p.id===pe.proveedor_id);if(pe.estatus==="pendiente")closeBlockers.push(`${prov?.nombre||"?"}: no enviado`);if(pe.estatus==="enviado")closeBlockers.push(`${prov?.nombre||"?"}: esperando confirmación`);});
   const isCompras=["admin","compras"].includes(rol);
 
