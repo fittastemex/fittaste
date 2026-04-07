@@ -4,6 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Fit Taste v6.0 — Sistema de Compras e Inventario</title>
+<link href="https://fonts.googleapis.com/css2?family=Raleway:wght@400;600;700;900&display=swap" rel="stylesheet">
+<style>
+  body{font-family:'Raleway',sans-serif;margin:0}
+  h1,h2,h3,.ft-title{font-family:'Raleway',sans-serif;font-weight:900}
+</style>
 <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
@@ -30,10 +35,10 @@ function genSerial(pedidos){const hoy=new Date();const ymd=hoy.toISOString().spl
 
 const fmt=(n)=>n==null?"-":`$${Number(n).toLocaleString("es-MX",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 const fmtQ=(n,u)=>`${n.toLocaleString("es-MX",{maximumFractionDigits:2})} ${u}`;
-const Badge=({children,v="default"})=>{const s={default:"bg-gray-100 text-gray-700",success:"bg-emerald-100 text-emerald-800",danger:"bg-red-100 text-red-800",warning:"bg-orange-100 text-orange-800",info:"bg-sky-100 text-sky-800",purple:"bg-violet-100 text-violet-800",commodity:"bg-amber-200 text-amber-900",manual:"bg-sky-200 text-sky-900",almacen:"bg-violet-200 text-violet-900",nuevo:"bg-amber-400 text-amber-950",proceso:"bg-blue-200 text-blue-900",enviado:"bg-orange-200 text-orange-900",cerrado:"bg-gray-300 text-gray-800"};return<span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${s[v]||s.default}`}>{children}</span>;};
+const Badge=({children,v="default"})=>{const s={default:"bg-gray-100 text-gray-700",success:"bg-emerald-100 text-emerald-800",danger:"bg-red-100 text-red-800",warning:"bg-orange-100 text-orange-800",info:"bg-sky-100 text-sky-800",purple:"bg-teal-100 text-teal-800",commodity:"bg-amber-200 text-amber-900",manual:"bg-sky-200 text-sky-900",almacen:"bg-teal-200 text-teal-900",nuevo:"bg-amber-400 text-amber-950",proceso:"bg-blue-200 text-blue-900",enviado:"bg-orange-200 text-orange-900",cerrado:"bg-gray-300 text-gray-800"};return<span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${s[v]||s.default}`}>{children}</span>;};
 const LOGO_SRC="data:image/png;base64,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";
-const Logo=({size=32})=><img src={LOGO_SRC} width={size} height={size} style={{objectFit:"contain"}} alt="Fit Taste"/>;
-const Btn=({children,onClick,disabled,color="amber"})=><button onClick={onClick} disabled={disabled} className={`text-sm font-semibold px-4 py-2 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed`} style={{background:disabled?"#ccc":color==="amber"?"#F5B731":color==="green"?"#10b981":color==="red"?"#ef4444":"#8b5cf6",color:color==="amber"?"#2D2D2D":"white"}}>{children}</button>;
+const Logo=({size=32})=><img src={LOGO_SRC} height={size} style={{objectFit:"contain",borderRadius:6,background:"#2D2D2D",padding:2}} alt="Fit Taste"/>;
+const Btn=({children,onClick,disabled,color="amber"})=><button onClick={onClick} disabled={disabled} className={`text-sm font-semibold px-4 py-2 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed`} style={{background:disabled?"#ccc":color==="amber"?"#e2a52a":color==="green"?"#10b981":color==="red"?"#ef4444":color==="purple"?"#77b7b4":"#77b7b4",color:color==="amber"?"#2D2D2D":"white"}}>{children}</button>;
 
 const estatusBadge=(e)=>{const m={creado:"nuevo",en_proceso:"proceso",enviado_proveedor:"enviado",enviado:"enviado",entregado:"warning",precios_capturados:"success",completo:"success",surtido:"purple",comprado:"info",recibido_completo:"success",recibido_con_faltantes:"danger",cerrado:"cerrado",pendiente:"default"};return<Badge v={m[e]||"default"}>{e.replace(/_/g," ")}</Badge>;};
 
@@ -54,7 +59,7 @@ function LoginScreen({onLogin,provToken}){
   const [selected,setSelected]=useState(null);
   const [pass,setPass]=useState("");
   const [error,setError]=useState("");
-  const roles=[{rol:"admin",label:"Admin / Dueño",desc:"Acceso total",icon:"★"},{rol:"compras",label:"Compras",desc:"Gestiona pedidos",icon:"◈"},{rol:"sucursal",label:"Sucursal",desc:"Crea pedidos",icon:"◉"},{rol:"proveedor",label:"Proveedor",desc:"Captura precios",icon:"◇"},{rol:"almacen",label:"Almacén",desc:"Inventario",icon:"◫"},{rol:"finanzas",label:"Finanzas",desc:"Cuentas por pagar",icon:"◎"}];
+  const roles=[{rol:"admin",label:"Admin / Dueño",desc:"Acceso total",icon:"★",color:"#e2a52a"},{rol:"compras",label:"Compras",desc:"Gestiona pedidos",icon:"◈",color:"#e2a52a"},{rol:"sucursal",label:"Sucursal",desc:"Crea pedidos",icon:"◉",color:"#bfcd3b"},{rol:"proveedor",label:"Proveedor",desc:"Captura precios",icon:"◇",color:"#d6816c"},{rol:"almacen",label:"Almacén",desc:"Inventario",icon:"◫",color:"#77b7b4"},{rol:"finanzas",label:"Finanzas",desc:"Cuentas por pagar",icon:"◎",color:"#d6816c"}];
 
   const handleLogin=()=>{
     if(PASSWORDS[selected]===pass){setError("");onLogin(selected);}
@@ -65,15 +70,15 @@ function LoginScreen({onLogin,provToken}){
     <div className="max-w-sm w-full">
       <div className="text-center mb-8">
         <div className="flex justify-center mb-4"><Logo size={56}/></div>
-        <p className="text-amber-400 text-sm tracking-widest font-medium">SER FIT NUNCA SUPO TAN RICO</p>
+        <p className="text-sm tracking-widest font-medium" style={{color:"#e2a52a"}}>SER FIT NUNCA SUPO TAN RICO</p>
         <p className="text-gray-500 text-xs mt-3">Sistema de compras e inventario v{V}</p>
       </div>
 
       {!selected?<div>
         <p className="text-gray-400 text-sm text-center mb-3">Selecciona tu rol</p>
         <div className="space-y-2">{roles.map(r=>(
-          <button key={r.rol} onClick={()=>{setSelected(r.rol);setPass("");setError("");}} className="w-full flex items-center gap-3 p-3 rounded-xl border border-gray-700 bg-gray-800/50 hover:border-amber-500 hover:bg-amber-500/10 transition-all text-left group">
-            <span className="w-10 h-10 rounded-lg bg-amber-500/20 flex items-center justify-center text-amber-400 font-bold group-hover:bg-amber-500/30">{r.icon}</span>
+          <button key={r.rol} onClick={()=>{setSelected(r.rol);setPass("");setError("");}} className="w-full flex items-center gap-3 p-3 rounded-xl border border-gray-700 bg-gray-800/50 hover:bg-gray-800 transition-all text-left group" style={{borderLeftWidth:3,borderLeftColor:r.color}}>
+            <span className="w-10 h-10 rounded-lg flex items-center justify-center font-bold" style={{background:r.color+"22",color:r.color}}>{r.icon}</span>
             <div><p className="font-semibold text-white text-sm">{r.label}</p><p className="text-xs text-gray-500">{r.desc}</p></div>
           </button>
         ))}</div>
@@ -81,9 +86,9 @@ function LoginScreen({onLogin,provToken}){
 
       :<div>
         <button onClick={()=>{setSelected(null);setError("");}} className="text-gray-500 text-sm hover:text-gray-300 mb-4">← Cambiar rol</button>
-        <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4">
+        <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4" style={{borderTopWidth:3,borderTopColor:roles.find(r=>r.rol===selected)?.color}}>
           <div className="flex items-center gap-3 mb-4">
-            <span className="w-10 h-10 rounded-lg bg-amber-500/20 flex items-center justify-center text-amber-400 font-bold">{roles.find(r=>r.rol===selected)?.icon}</span>
+            <span className="w-10 h-10 rounded-lg flex items-center justify-center font-bold" style={{background:(roles.find(r=>r.rol===selected)?.color||"#e2a52a")+"22",color:roles.find(r=>r.rol===selected)?.color}}>{roles.find(r=>r.rol===selected)?.icon}</span>
             <div><p className="font-semibold text-white">{roles.find(r=>r.rol===selected)?.label}</p><p className="text-xs text-gray-500">{roles.find(r=>r.rol===selected)?.desc}</p></div>
           </div>
           <div className="mb-3">
@@ -120,7 +125,7 @@ function BandejaPedidos({pedidos,rol,onSelect,onNew,pedidoDetalle,proveedores,pr
       {(rol==="sucursal"||rol==="admin")&&<Btn onClick={onNew}>+ Nuevo pedido</Btn>}
     </div>
     {filteredByRol.length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400">No hay pedidos</p>{(rol==="sucursal"||rol==="admin")&&<Btn onClick={onNew}>Crear primer pedido</Btn>}</div>
-    :<div className="space-y-2">{filteredByRol.map(p=>{const bc={creado:"#F5B731",en_proceso:"#3b82f6",comprado:"#10b981",cerrado:"#9ca3af"}[p.estatus]||"#e5e7eb";return(<div key={p.id} className="w-full bg-white border border-gray-200 rounded-xl p-4 hover:border-amber-400 transition-all text-left" style={{borderLeft:`4px solid ${bc}`}}>
+    :<div className="space-y-2">{filteredByRol.map(p=>{const bc={creado:"#e2a52a",en_proceso:"#77b7b4",comprado:"#bfcd3b",cerrado:"#9ca3af"}[p.estatus]||"#e5e7eb";return(<div key={p.id} className="w-full bg-white border border-gray-200 rounded-xl p-4 hover:border-amber-400 transition-all text-left" style={{borderLeft:`4px solid ${bc}`}}>
       <div className="flex items-center justify-between mb-2">
         <button onClick={()=>onSelect(p)} className="flex items-center gap-2 flex-1 text-left"><span className="font-bold text-gray-900">Pedido {p.numero_pedido||"#—"}</span>{estatusBadge(p.estatus)}</button>
         <div className="flex items-center gap-2">
@@ -264,7 +269,7 @@ function DetallePedido({pedido:ped,detalle,catalogo,proveedores,provEstatus,onBa
             <td className="px-3 py-2 text-center">{isCompras?<input type="number" min="0" step={cat.unidad_clave==="kg"?"0.25":"1"} className="w-20 text-center border border-gray-200 rounded px-1 py-0.5 text-sm focus:ring-2 focus:ring-amber-400" value={d.cantidad} onChange={e=>onUpdateCantidad(d.id,parseFloat(e.target.value)||0)}/>:<span className="text-gray-600">{cat.unidad_clave==="kg"?fmtQ(d.cantidad,"kg"):d.cantidad}</span>}</td>
             {isCompras&&<td className="px-3 py-2"><select className="text-xs border border-gray-200 rounded px-1 py-0.5" value={d.proveedor_id} onChange={e=>onReasignar(d.id,e.target.value)}>{proveedores.map(pr=><option key={pr.id} value={pr.id}>{pr.nombre}</option>)}</select></td>}
             <td className="px-3 py-2 text-right text-gray-400">{fmt(d.costo_referencia)}</td>
-            <td className="px-3 py-2 text-right">{quien==="compras"&&isCompras?<input type="number" step="0.01" className="w-20 text-right border border-gray-200 rounded px-1 py-0.5 text-sm focus:ring-2 focus:ring-amber-400" value={d.costo_real||""} onChange={e=>onUpdatePrecio(d.id,parseFloat(e.target.value)||null)}/>:d.costo_real?<span className="font-semibold">{fmt(d.costo_real)}</span>:flujo==="Almacen interno"?<span className="text-violet-600">{fmt(d.costo_referencia)}</span>:<span className="text-amber-500 text-xs">Pendiente</span>}</td>
+            <td className="px-3 py-2 text-right">{quien==="compras"&&isCompras?<input type="number" step="0.01" className="w-20 text-right border border-gray-200 rounded px-1 py-0.5 text-sm focus:ring-2 focus:ring-amber-400" value={d.costo_real||""} onChange={e=>onUpdatePrecio(d.id,parseFloat(e.target.value)||null)}/>:d.costo_real?<span className="font-semibold">{fmt(d.costo_real)}</span>:flujo==="Almacen interno"?<span className="text-teal-600">{fmt(d.costo_referencia)}</span>:<span className="text-amber-500 text-xs">Pendiente</span>}</td>
             <td className="px-3 py-2 text-right">{diff!=null?<Badge v={Math.abs(diff)>15?"danger":Math.abs(diff)>5?"warning":"success"}>{diff>0?"+":""}{diff.toFixed(0)}%</Badge>:flujo==="Almacen interno"?<Badge v="purple">Fijo</Badge>:"-"}</td>
             <td className="px-3 py-2 text-right font-semibold text-gray-700">{fmt(d.cantidad*(d.costo_real||d.costo_referencia))}</td>
           </tr>);})}</tbody></table>
@@ -372,7 +377,7 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
     const items=pedidoDetalle.filter(d=>d.pedido_id===pedId&&proveedores.find(pr=>pr.id===d.proveedor_id)?.tipo_flujo==="Almacen interno");
     const rows=items.map(d=>{const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};return`<tr><td style="padding:6px;border-bottom:1px solid #eee">${cat.articulo||"?"}</td><td style="padding:6px;border-bottom:1px solid #eee;text-align:center">${d.cantidad} ${cat.unidad_clave||""}</td></tr>`;}).join("");
     const w=window.open("","_blank","width=400,height=600");
-    w.document.write(`<html><head><title>Pedido ${ped?.numero_pedido||""}</title><style>body{font-family:sans-serif;padding:20px}table{width:100%;border-collapse:collapse}th{text-align:left;padding:6px;border-bottom:2px solid #333;font-size:12px;text-transform:uppercase}td{font-size:13px}@media print{button{display:none}}</style></head><body><div style="text-align:center;margin-bottom:16px"><strong style="font-size:18px">Fit Taste</strong><br><span style="font-size:12px;color:#888">Pedido ${ped?.numero_pedido||""} — ${new Date().toLocaleDateString("es-MX")}</span></div><table><thead><tr><th>Artículo</th><th style="text-align:center">Cantidad</th></tr></thead><tbody>${rows}</tbody></table><br><button onclick="window.print()" style="padding:8px 16px;background:#F5B731;border:none;border-radius:8px;font-weight:bold;cursor:pointer">Imprimir</button></body></html>`);
+    w.document.write(`<html><head><title>Pedido ${ped?.numero_pedido||""}</title><style>body{font-family:sans-serif;padding:20px}table{width:100%;border-collapse:collapse}th{text-align:left;padding:6px;border-bottom:2px solid #333;font-size:12px;text-transform:uppercase}td{font-size:13px}@media print{button{display:none}}</style></head><body><div style="text-align:center;margin-bottom:16px"><strong style="font-size:18px">Fit Taste</strong><br><span style="font-size:12px;color:#888">Pedido ${ped?.numero_pedido||""} — ${new Date().toLocaleDateString("es-MX")}</span></div><table><thead><tr><th>Artículo</th><th style="text-align:center">Cantidad</th></tr></thead><tbody>${rows}</tbody></table><br><button onclick="window.print()" style="padding:8px 16px;background:#e2a52a;border:none;border-radius:8px;font-weight:bold;cursor:pointer">Imprimir</button></body></html>`);
     w.document.close();
   };
 
@@ -422,14 +427,14 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
   return(<div>
     <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
       <div><h2 className="text-lg font-bold text-gray-900">Almacén — Control PEPS</h2><p className="text-sm text-gray-500">Primeras Entradas, Primeras Salidas</p></div>
-      <div className="bg-violet-50 border border-violet-200 rounded-xl px-4 py-2 text-right"><p className="text-xs text-violet-600">Capital</p><p className="text-xl font-bold text-violet-700">{fmt(cap)}</p></div>
+      <div className="bg-teal-50 border border-teal-200 rounded-xl px-4 py-2 text-right"><p className="text-xs text-teal-600">Capital</p><p className="text-xl font-bold text-teal-700">{fmt(cap)}</p></div>
     </div>
 
-    <div className="flex gap-1 mb-4">{tabs2.map(t=><button key={t.id} onClick={()=>{setTab(t.id);if(t.id!=="surtir")setSurtiendo(null);}} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${tab===t.id?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={tab===t.id?{background:"#8b5cf6"}:{}}>{t.l}</button>)}</div>
+    <div className="flex gap-1 mb-4">{tabs2.map(t=><button key={t.id} onClick={()=>{setTab(t.id);if(t.id!=="surtir")setSurtiendo(null);}} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${tab===t.id?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={tab===t.id?{background:"#77b7b4"}:{}}>{t.l}</button>)}</div>
 
     {/* INVENTARIO con costos PEPS */}
     {tab==="inventario"&&<div>
-      {isAdmin&&<div className="mb-3 flex justify-end">{addingInv?<div className="bg-white border-2 border-violet-300 rounded-xl p-3 w-full"><h3 className="text-sm font-bold text-violet-800 mb-2">Agregar producto al almacén</h3><div className="flex gap-2 items-end flex-wrap"><div><label className="text-xs text-gray-500 block mb-1">SKU</label><input className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm w-28" placeholder="ALM-XXX" value={newInv.sku} onChange={e=>setNewInv({...newInv,sku:e.target.value})}/></div><div className="flex-1"><label className="text-xs text-gray-500 block mb-1">Descripción</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="NOMBRE DEL PRODUCTO" value={newInv.descripcion} onChange={e=>setNewInv({...newInv,descripcion:e.target.value})}/></div><div><label className="text-xs text-gray-500 block mb-1">Unidad</label><select className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newInv.unidad_clave} onChange={e=>setNewInv({...newInv,unidad_clave:e.target.value})}><option value="kg">kg</option><option value="pz">pz</option><option value="lt">lt</option><option value="paq">paq</option></select></div><Btn onClick={handleAddInv} disabled={savingInv} color="purple">{savingInv?"Guardando...":"Agregar"}</Btn><button onClick={()=>setAddingInv(false)} className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1.5">Cancelar</button></div></div>:<Btn onClick={()=>setAddingInv(true)} color="purple">+ Agregar producto</Btn>}</div>}
+      {isAdmin&&<div className="mb-3 flex justify-end">{addingInv?<div className="bg-white border-2 border-teal-300 rounded-xl p-3 w-full"><h3 className="text-sm font-bold text-teal-800 mb-2">Agregar producto al almacén</h3><div className="flex gap-2 items-end flex-wrap"><div><label className="text-xs text-gray-500 block mb-1">SKU</label><input className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm w-28" placeholder="ALM-XXX" value={newInv.sku} onChange={e=>setNewInv({...newInv,sku:e.target.value})}/></div><div className="flex-1"><label className="text-xs text-gray-500 block mb-1">Descripción</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="NOMBRE DEL PRODUCTO" value={newInv.descripcion} onChange={e=>setNewInv({...newInv,descripcion:e.target.value})}/></div><div><label className="text-xs text-gray-500 block mb-1">Unidad</label><select className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newInv.unidad_clave} onChange={e=>setNewInv({...newInv,unidad_clave:e.target.value})}><option value="kg">kg</option><option value="pz">pz</option><option value="lt">lt</option><option value="paq">paq</option></select></div><Btn onClick={handleAddInv} disabled={savingInv} color="purple">{savingInv?"Guardando...":"Agregar"}</Btn><button onClick={()=>setAddingInv(false)} className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1.5">Cancelar</button></div></div>:<Btn onClick={()=>setAddingInv(true)} color="purple">+ Agregar producto</Btn>}</div>}
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
       <table className="w-full text-sm"><thead className="bg-gray-50"><tr>
         {["SKU","Producto","Existencia","Costo PEPS","Valor PEPS","Lotes","Estado"].concat(isAdmin?[""]:[]).map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Existencia","Costo PEPS","Valor PEPS","Lotes"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
@@ -444,7 +449,7 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
           <td className="px-3 py-2 text-right font-bold">{fmtQ(p.existencia,p.unidad_clave)}</td>
           <td className="px-3 py-2 text-right text-gray-600">{fmt(costoPeps)}<span className="text-gray-400 text-xs">/{p.unidad_clave}</span></td>
           <td className="px-3 py-2 text-right font-medium text-gray-700">{fmt(valorPeps||p.existencia*p.costo_unitario_actual)}</td>
-          <td className="px-3 py-2 text-right"><span className={`text-xs font-medium ${prodLotes.length>0?"text-violet-600":"text-gray-400"}`}>{prodLotes.length}</span></td>
+          <td className="px-3 py-2 text-right"><span className={`text-xs font-medium ${prodLotes.length>0?"text-teal-600":"text-gray-400"}`}>{prodLotes.length}</span></td>
           <td className="px-3 py-2">{p.existencia===0?<Badge v="danger">Agotado</Badge>:low?<Badge v="warning">Bajo</Badge>:<Badge v="success">OK</Badge>}</td>
           {isAdmin&&<td className="px-3 py-2 text-right"><button onClick={()=>handleDeleteInv(p.id)} className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded" title="Eliminar producto">✕</button></td>}
         </tr>);
@@ -456,9 +461,9 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
       {Object.entries(lotesByProd).length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400">Sin lotes activos</p><Btn onClick={()=>setTab("entrada")}>Registrar primera entrada</Btn></div>
       :Object.entries(lotesByProd).map(([nombre,{prod,lotes:pLotes}])=>(
         <div key={nombre} className="bg-white border border-gray-200 rounded-xl mb-3 overflow-hidden">
-          <div className="px-4 py-2 bg-violet-50 border-b border-violet-100 flex justify-between items-center">
-            <span className="font-semibold text-violet-900">{nombre} <span className="text-xs text-violet-600">({prod?.unidad_clave})</span></span>
-            <span className="text-sm font-bold text-violet-700">{pLotes.length} lote{pLotes.length>1?"s":""}</span>
+          <div className="px-4 py-2 bg-teal-50 border-b border-teal-100 flex justify-between items-center">
+            <span className="font-semibold text-teal-900">{nombre} <span className="text-xs text-teal-600">({prod?.unidad_clave})</span></span>
+            <span className="text-sm font-bold text-teal-700">{pLotes.length} lote{pLotes.length>1?"s":""}</span>
           </div>
           <table className="w-full text-xs"><thead><tr className="border-b border-gray-100">
             {["Fecha","Original","Restante","Costo unit.","IVA","Costo total/u","Valor restante","Proveedor"].map(h=><th key={h} className={`px-3 py-1.5 font-medium text-gray-500 ${h==="Fecha"||h==="Proveedor"?"text-left":"text-right"}`}>{h}</th>)}
@@ -467,13 +472,13 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
             const cu=parseFloat(l.costo_unitario)||0;
             const iv=parseFloat(l.iva)||0;
             const ct=cu+iv;
-            return(<tr key={l.id} className={`border-t border-gray-50 ${i===0?"bg-violet-50/30":""}`}>
-              <td className="px-3 py-1.5 text-gray-600">{new Date(l.fecha_entrada).toLocaleDateString("es-MX")}{i===0&&<span className="ml-1 text-violet-600 font-semibold">← PEPS</span>}</td>
+            return(<tr key={l.id} className={`border-t border-gray-50 ${i===0?"bg-teal-50/30":""}`}>
+              <td className="px-3 py-1.5 text-gray-600">{new Date(l.fecha_entrada).toLocaleDateString("es-MX")}{i===0&&<span className="ml-1 text-teal-600 font-semibold">← PEPS</span>}</td>
               <td className="px-3 py-1.5 text-right text-gray-400">{fmtQ(l.cantidad,prod?.unidad_clave||"?")}</td>
               <td className="px-3 py-1.5 text-right font-bold text-gray-800">{fmtQ(rest,prod?.unidad_clave||"?")}</td>
               <td className="px-3 py-1.5 text-right">{fmt(cu)}</td>
               <td className="px-3 py-1.5 text-right">{fmt(iv)}</td>
-              <td className="px-3 py-1.5 text-right font-semibold text-violet-700">{fmt(ct)}</td>
+              <td className="px-3 py-1.5 text-right font-semibold text-teal-700">{fmt(ct)}</td>
               <td className="px-3 py-1.5 text-right">{fmt(rest*ct)}</td>
               <td className="px-3 py-1.5 text-gray-500">{l.proveedor_origen||"-"}</td>
             </tr>);})}</tbody></table>
@@ -482,8 +487,8 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
     </div>}
 
     {/* ENTRADA DE LOTE */}
-    {tab==="entrada"&&<div className="bg-white border-2 border-violet-300 rounded-xl p-4">
-      <h3 className="text-sm font-bold text-violet-800 mb-3">Registrar entrada de lote</h3>
+    {tab==="entrada"&&<div className="bg-white border-2 border-teal-300 rounded-xl p-4">
+      <h3 className="text-sm font-bold text-teal-800 mb-3">Registrar entrada de lote</h3>
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
         <div><label className="text-xs text-gray-500 block mb-1">Producto</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={nLote.inv_id} onChange={e=>setNLote({...nLote,inv_id:e.target.value})}><option value="">Seleccionar...</option>{inventario.map(p=><option key={p.id} value={p.id}>{p.descripcion} ({p.unidad_clave})</option>)}</select></div>
         <div><label className="text-xs text-gray-500 block mb-1">Cantidad</label><input type="number" min="0" step="0.25" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={nLote.cantidad||""} onChange={e=>setNLote({...nLote,cantidad:parseFloat(e.target.value)||0})}/></div>
@@ -494,12 +499,12 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
         <div><label className="text-xs text-gray-500 block mb-1">Proveedor origen</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Nombre del proveedor" value={nLote.proveedor} onChange={e=>setNLote({...nLote,proveedor:e.target.value})}/></div>
         <div><label className="text-xs text-gray-500 block mb-1">Nota</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Opcional" value={nLote.nota} onChange={e=>setNLote({...nLote,nota:e.target.value})}/></div>
       </div>
-      {nLote.costo_unitario>0&&nLote.cantidad>0&&<div className="bg-violet-50 rounded-xl p-3 mb-4">
+      {nLote.costo_unitario>0&&nLote.cantidad>0&&<div className="bg-teal-50 rounded-xl p-3 mb-4">
         <div className="grid grid-cols-4 gap-3 text-sm">
-          <div><p className="text-xs text-violet-600">Costo/u</p><p className="font-bold text-violet-800">{fmt(nLote.costo_unitario)}</p></div>
-          <div><p className="text-xs text-violet-600">IVA/u</p><p className="font-bold text-violet-800">{fmt(nLote.iva||0)}</p></div>
-          <div><p className="text-xs text-violet-600">Total/u</p><p className="font-bold text-violet-900">{fmt(nLote.costo_unitario+(nLote.iva||0))}</p></div>
-          <div><p className="text-xs text-violet-600">Total lote</p><p className="font-bold text-violet-900">{fmt(nLote.cantidad*(nLote.costo_unitario+(nLote.iva||0)))}</p></div>
+          <div><p className="text-xs text-teal-600">Costo/u</p><p className="font-bold text-teal-800">{fmt(nLote.costo_unitario)}</p></div>
+          <div><p className="text-xs text-teal-600">IVA/u</p><p className="font-bold text-teal-800">{fmt(nLote.iva||0)}</p></div>
+          <div><p className="text-xs text-teal-600">Total/u</p><p className="font-bold text-teal-900">{fmt(nLote.costo_unitario+(nLote.iva||0))}</p></div>
+          <div><p className="text-xs text-teal-600">Total lote</p><p className="font-bold text-teal-900">{fmt(nLote.cantidad*(nLote.costo_unitario+(nLote.iva||0)))}</p></div>
         </div>
       </div>}
       <Btn onClick={handleNewLote} disabled={savingLote||!nLote.inv_id||nLote.cantidad<=0||nLote.costo_unitario<=0} color="purple">{savingLote?"Guardando...":"Registrar lote de entrada"}</Btn>
@@ -517,11 +522,11 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
       </div>}
     </div>}
 
-    {tab==="surtir"&&surtiendo&&<div className="rounded-xl mb-4 border-2 border-violet-300 bg-violet-50 overflow-hidden">
-      <div className="px-4 py-3 bg-violet-100 border-b border-violet-200 flex items-center justify-between"><div><h3 className="font-bold text-violet-900">Surtiendo Pedido #{pedidosAlm.find(p=>p.id===surtiendo)?.numero_pedido}</h3><p className="text-xs text-violet-700">{totalSurtidos} de {pedidoItems.length} marcados</p></div><button onClick={()=>setSurtiendo(null)} className="text-xs text-violet-700 hover:text-violet-900 px-3 py-1.5 border border-violet-300 rounded-lg">← Volver</button></div>
-      <div className="w-full bg-violet-200 h-2"><div className="bg-violet-600 h-2 transition-all" style={{width:`${pedidoItems.length>0?(totalSurtidos/pedidoItems.length*100):0}%`}}/></div>
+    {tab==="surtir"&&surtiendo&&<div className="rounded-xl mb-4 border-2 border-teal-300 bg-teal-50 overflow-hidden">
+      <div className="px-4 py-3 bg-teal-100 border-b border-teal-200 flex items-center justify-between"><div><h3 className="font-bold text-teal-900">Surtiendo Pedido #{pedidosAlm.find(p=>p.id===surtiendo)?.numero_pedido}</h3><p className="text-xs text-teal-700">{totalSurtidos} de {pedidoItems.length} marcados</p></div><button onClick={()=>setSurtiendo(null)} className="text-xs text-teal-700 hover:text-teal-900 px-3 py-1.5 border border-teal-300 rounded-lg">← Volver</button></div>
+      <div className="w-full bg-teal-200 h-2"><div className="bg-teal-600 h-2 transition-all" style={{width:`${pedidoItems.length>0?(totalSurtidos/pedidoItems.length*100):0}%`}}/></div>
       <div className="p-4">
-        <p className="text-xs text-violet-700 mb-3">Ajusta cantidad surtida. Al confirmar, se descontará por PEPS (lote más antiguo primero).</p>
+        <p className="text-xs text-teal-700 mb-3">Ajusta cantidad surtida. Al confirmar, se descontará por PEPS (lote más antiguo primero).</p>
         {pedidoItems.map(d=>{
           const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};
           const done=surtidos[d.id];
@@ -534,7 +539,7 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
           const alcanza=existencia>=cs;
           return(<div key={d.id} className={`p-3 mb-2 rounded-xl border-2 transition-all ${done?"border-emerald-400 bg-emerald-50":"border-gray-200 bg-white"}`}>
             <div className="flex items-center gap-3">
-              <div onClick={()=>setSurtidos({...surtidos,[d.id]:!surtidos[d.id]})} className={`w-7 h-7 rounded-lg border-2 flex items-center justify-center text-sm cursor-pointer shrink-0 ${done?"border-emerald-500 bg-emerald-500 text-white":"border-gray-300 hover:border-violet-400"}`}>{done?"✓":""}</div>
+              <div onClick={()=>setSurtidos({...surtidos,[d.id]:!surtidos[d.id]})} className={`w-7 h-7 rounded-lg border-2 flex items-center justify-center text-sm cursor-pointer shrink-0 ${done?"border-emerald-500 bg-emerald-500 text-white":"border-gray-300 hover:border-teal-400"}`}>{done?"✓":""}</div>
               <div className="flex-1">
                 <p className={`font-medium ${done?"text-emerald-800":"text-gray-900"}`}>{cat.articulo}</p>
                 <p className="text-xs text-gray-500">Solicitado: {cat.unidad_clave==="kg"?fmtQ(d.cantidad,"kg"):`${d.cantidad} ${cat.unidad_clave}`}</p>
@@ -551,7 +556,7 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
                 Existencia: <span className="font-bold">{inv?fmtQ(existencia,cat.unidad_clave):"No vinculado"}</span>
                 {cs>0&&existencia>0&&<span className="ml-1">→ quedarían {fmtQ(Math.max(0,existencia-cs),cat.unidad_clave)}</span>}
               </div>
-              {prodLotes.length>0&&<div className="text-xs text-violet-600">
+              {prodLotes.length>0&&<div className="text-xs text-teal-600">
                 {prodLotes.length} lote{prodLotes.length>1?"s":""}: {prodLotes.map((l,i)=>{const rest=l.existencia_restante||0;const cu=parseFloat(l.costo_unitario)+(parseFloat(l.iva)||0);return<span key={l.id} className={`inline-block mr-1 ${i===0?"font-bold":""}`}>{fmtQ(rest,cat.unidad_clave)} @{fmt(cu)}{i<prodLotes.length-1?",":""}</span>;})}
               </div>}
               {!inv&&<span className="text-xs text-red-600 font-medium">No vinculado a inventario</span>}
@@ -636,7 +641,7 @@ function DashboardView({pedidos,catalogo,proveedores,pedidoDetalle,inventario}){
       <div className="bg-white border border-gray-200 rounded-xl p-3"><p className="text-xs text-gray-500">Costo teórico</p><p className="text-xl font-bold text-gray-500">{fmt(costoTeoricoMes)}</p></div>
       <div className="bg-white border border-gray-200 rounded-xl p-3"><p className="text-xs text-gray-500">Desviación</p><p className={`text-xl font-bold ${desvMes>5?"text-red-600":desvMes<-5?"text-emerald-600":"text-gray-800"}`}>{desvMes>0?"+":""}{desvMes.toFixed(1)}%</p></div>
       <div className="bg-white border border-gray-200 rounded-xl p-3"><p className="text-xs text-gray-500">Pedidos mes</p><p className="text-xl font-bold text-amber-600">{pedidosMes.length}<span className="text-xs text-gray-400 ml-1">({pedidosCerradosMes.length} cerrados)</span></p></div>
-      <div className="bg-white border border-gray-200 rounded-xl p-3"><p className="text-xs text-gray-500">Capital almacén</p><p className="text-xl font-bold text-violet-600">{fmt(capAlmacen)}</p></div>
+      <div className="bg-white border border-gray-200 rounded-xl p-3"><p className="text-xs text-gray-500">Capital almacén</p><p className="text-xl font-bold text-teal-600">{fmt(capAlmacen)}</p></div>
     </div>
 
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
@@ -651,7 +656,7 @@ function DashboardView({pedidos,catalogo,proveedores,pedidoDetalle,inventario}){
               <span className="text-gray-700 font-medium">{prov} <span className="text-gray-400 text-xs">({data.items} artículos)</span></span>
               <div className="flex items-center gap-2"><Badge v={Math.abs(desv)>10?"danger":Math.abs(desv)>5?"warning":"success"}>{desv>0?"+":""}{desv.toFixed(0)}%</Badge><span className="font-bold text-gray-800">{fmt(data.total_real)}</span></div>
             </div>
-            <div className="w-full bg-gray-100 rounded-full h-3"><div className="h-3 rounded-full transition-all" style={{width:`${Math.min(pct,100)}%`,background:"#F5B731"}}/></div>
+            <div className="w-full bg-gray-100 rounded-full h-3"><div className="h-3 rounded-full transition-all" style={{width:`${Math.min(pct,100)}%`,background:"#e2a52a"}}/></div>
           </div>);
         })}
         {provSorted.length>0&&<div className="border-t border-gray-100 pt-2 mt-2 flex justify-between font-bold text-sm"><span>Total</span><span>{fmt(costoRealMes)}</span></div>}
@@ -671,7 +676,7 @@ function DashboardView({pedidos,catalogo,proveedores,pedidoDetalle,inventario}){
             <td className="px-2 py-1.5 text-right text-gray-600">{data.unidad==="kg"?fmtQ(data.cantidad,"kg"):`${data.cantidad} ${data.unidad}`}</td>
             <td className="px-2 py-1.5 text-right"><span className="font-semibold">{fmt(data.total_real)}</span>{Math.abs(desv)>5&&<span className={`text-xs ml-1 ${desv>0?"text-red-500":"text-emerald-500"}`}>{desv>0?"+":""}{desv.toFixed(0)}%</span>}</td>
             <td className="px-2 py-1.5 text-right">
-              <div className="flex items-center justify-end gap-1"><div className="w-12 bg-gray-100 rounded-full h-1.5"><div className="h-1.5 rounded-full" style={{width:`${Math.min(pctTotal,100)}%`,background:"#F5B731"}}/></div><span className="text-xs text-gray-500 w-8">{pctTotal.toFixed(0)}%</span></div>
+              <div className="flex items-center justify-end gap-1"><div className="w-12 bg-gray-100 rounded-full h-1.5"><div className="h-1.5 rounded-full" style={{width:`${Math.min(pctTotal,100)}%`,background:"#e2a52a"}}/></div><span className="text-xs text-gray-500 w-8">{pctTotal.toFixed(0)}%</span></div>
             </td>
           </tr>);})}</tbody></table></div>}
       </div>
@@ -696,6 +701,7 @@ function DashboardView({pedidos,catalogo,proveedores,pedidoDetalle,inventario}){
 // ======================== CATÁLOGO (solo Admin) ========================
 function CatalogoView({catalogo,setCatalogo,proveedores,unidades,inventario}){
   const [filter,setFilter]=useState("");
+  const [filterProv,setFilterProv]=useState("");
   const [editing,setEditing]=useState(null);
   const [editData,setEditData]=useState({});
   const [adding,setAdding]=useState(false);
@@ -703,7 +709,7 @@ function CatalogoView({catalogo,setCatalogo,proveedores,unidades,inventario}){
   const [saving,setSaving]=useState(false);
   const [msg,setMsg]=useState(null);
 
-  const filtered=catalogo.filter(p=>p.articulo.toLowerCase().includes(filter.toLowerCase())||p.sku.toLowerCase().includes(filter.toLowerCase())||p.tipo_producto.toLowerCase().includes(filter.toLowerCase())||p.proveedor_nombre.toLowerCase().includes(filter.toLowerCase()));
+  const filtered=catalogo.filter(p=>{const textMatch=p.articulo.toLowerCase().includes(filter.toLowerCase())||p.sku.toLowerCase().includes(filter.toLowerCase())||p.tipo_producto.toLowerCase().includes(filter.toLowerCase())||p.proveedor_nombre.toLowerCase().includes(filter.toLowerCase());const provMatch=!filterProv||p.proveedor_id===filterProv;return textMatch&&provMatch;});
   const tipos=[...new Set(catalogo.map(c=>c.tipo_producto))].sort();
 
   const startEdit=(p)=>{setEditing(p.id);setEditData({articulo:p.articulo,costo_referencia:p.costo_referencia,proveedor_id:p.proveedor_id,unidad_clave:p.unidad_clave,notas:p.notas||"",aplica_iva:p.aplica_iva!==false,inv_id:p.inv_id||""});};
@@ -764,7 +770,13 @@ function CatalogoView({catalogo,setCatalogo,proveedores,unidades,inventario}){
       </div>
     </div>}
 
-    <input className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm mb-4 focus:ring-2 focus:ring-amber-400" placeholder="Buscar por SKU, artículo, tipo o proveedor..." value={filter} onChange={e=>setFilter(e.target.value)}/>
+    <div className="flex gap-2 mb-4">
+      <input className="flex-1 border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-amber-400" placeholder="Buscar por SKU, artículo, tipo..." value={filter} onChange={e=>setFilter(e.target.value)}/>
+      <select className="border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-white" value={filterProv} onChange={e=>setFilterProv(e.target.value)}>
+        <option value="">Todos los proveedores</option>
+        {proveedores.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
+      </select>
+    </div>
 
     <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
       <table className="w-full text-sm"><thead className="bg-gray-50"><tr>
@@ -779,7 +791,7 @@ function CatalogoView({catalogo,setCatalogo,proveedores,unidades,inventario}){
           <td className="px-3 py-2 text-right">{isEditing?<input type="number" step="0.01" className="w-24 text-right border border-amber-300 rounded px-1 py-0.5 text-sm bg-amber-50 focus:ring-2 focus:ring-amber-400" value={editData.costo_referencia} onChange={e=>setEditData({...editData,costo_referencia:parseFloat(e.target.value)||0})}/>:<span className="font-semibold text-gray-800">{fmt(p.costo_referencia)}</span>}</td>
           <td className="px-3 py-2 text-center">{isEditing?<label className="flex items-center justify-center gap-1 cursor-pointer"><input type="checkbox" checked={editData.aplica_iva} onChange={e=>setEditData({...editData,aplica_iva:e.target.checked})} className="w-4 h-4 rounded border-amber-300 text-amber-500 focus:ring-amber-400"/><span className="text-xs">{editData.aplica_iva?"Sí":"No"}</span></label>:p.aplica_iva?<span className="text-xs text-gray-500">16%</span>:<span className="text-xs text-emerald-600 font-semibold">Exento</span>}</td>
           <td className="px-3 py-2">{isEditing?<select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.proveedor_id} onChange={e=>setEditData({...editData,proveedor_id:e.target.value})}>{proveedores.map(pr=><option key={pr.id} value={pr.id}>{pr.nombre}</option>)}</select>:<span className="text-gray-600 text-xs">{p.proveedor_nombre}</span>}</td>
-          <td className="px-3 py-2">{isEditing?<select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.inv_id||""} onChange={e=>setEditData({...editData,inv_id:e.target.value||null})}><option value="">Sin vincular</option>{inventario.map(i=><option key={i.id} value={i.id}>{i.descripcion} ({i.unidad_clave})</option>)}</select>:p.inv_id?<span className="text-xs text-violet-600 font-medium">{inventario.find(i=>i.id===p.inv_id)?.descripcion||"Vinculado"}</span>:<span className="text-xs text-gray-400">—</span>}</td>
+          <td className="px-3 py-2">{isEditing?<select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.inv_id||""} onChange={e=>setEditData({...editData,inv_id:e.target.value||null})}><option value="">Sin vincular</option>{inventario.map(i=><option key={i.id} value={i.id}>{i.descripcion} ({i.unidad_clave})</option>)}</select>:p.inv_id?<span className="text-xs text-teal-600 font-medium">{inventario.find(i=>i.id===p.inv_id)?.descripcion||"Vinculado"}</span>:<span className="text-xs text-gray-400">—</span>}</td>
           <td className="px-3 py-2">{isEditing?<input className="w-full border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.notas} onChange={e=>setEditData({...editData,notas:e.target.value})}/>:<span className="text-gray-400 text-xs">{p.notas||""}</span>}</td>
           <td className="px-3 py-2 text-right">{isEditing?<div className="flex gap-1"><button onClick={()=>saveEdit(p)} disabled={saving} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded hover:bg-emerald-600">{saving?"...":"Guardar"}</button><button onClick={()=>setEditing(null)} className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded hover:bg-gray-300">X</button></div>:<button onClick={()=>startEdit(p)} className="text-xs text-amber-700 hover:text-amber-900 font-medium hover:bg-amber-100 px-2 py-1 rounded">Editar</button>}</td>
         </tr>);})}</tbody></table>
@@ -935,7 +947,7 @@ function FinanzasView({cxp,setCxp,pagos,setPagos,pedidos,proveedores,pedidoDetal
       </div>
     </div>
 
-    <div className="flex gap-1 mb-4">{tabs3.map(t=><button key={t.id} onClick={()=>setTab(t.id)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${tab===t.id?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={tab===t.id?{background:"#2D2D2D"}:{}}>{t.l}</button>)}</div>
+    <div className="flex gap-1 mb-4">{tabs3.map(t=><button key={t.id} onClick={()=>setTab(t.id)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${tab===t.id?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={tab===t.id?{background:"#d6816c"}:{}}>{t.l}</button>)}</div>
 
     {/* PENDIENTES */}
     {tab==="pendientes"&&<div>{pendientes.length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400">Sin cuentas pendientes</p></div>
@@ -1242,7 +1254,7 @@ function App(){
   };
 
   if(loading)return(<div className="min-h-screen flex flex-col items-center justify-center" style={{background:"#2D2D2D"}}><Logo size={56}/><p className="text-amber-400 mt-4 text-sm animate-pulse">{loadMsg}</p></div>);
-  if(error)return(<div className="min-h-screen flex items-center justify-center p-4" style={{background:"#2D2D2D"}}><div className="max-w-lg text-center"><Logo size={56}/><p className="text-red-400 mt-4 text-sm">{error}</p><button onClick={()=>window.location.href=window.location.pathname} className="mt-4 px-4 py-2 rounded-lg text-sm font-medium" style={{background:"#F5B731",color:"#2D2D2D"}}>Reintentar</button></div></div>);
+  if(error)return(<div className="min-h-screen flex items-center justify-center p-4" style={{background:"#2D2D2D"}}><div className="max-w-lg text-center"><Logo size={56}/><p className="text-red-400 mt-4 text-sm">{error}</p><button onClick={()=>window.location.href=window.location.pathname} className="mt-4 px-4 py-2 rounded-lg text-sm font-medium" style={{background:"#e2a52a",color:"#2D2D2D"}}>Reintentar</button></div></div>);
 
   // Provider token view
   if(rol==="proveedor_token"&&selectedPedido){
@@ -1271,7 +1283,7 @@ function App(){
     <div className="border-b border-gray-200" style={{background:"#2D2D2D"}}><div className="max-w-6xl mx-auto px-4"><div className="flex items-center justify-between py-3">
       <div className="flex items-center gap-3"><Logo size={32}/><div><h1 className="text-sm font-bold text-white leading-tight">Fit Taste Roma</h1><p className="text-xs text-emerald-400">{rol} — {catalogo.length} productos</p></div></div>
       <div className="flex items-center gap-1">
-        {tabs.map(t=><button key={t.id} onClick={()=>{setView(t.id);setSelectedPedido(null);setSubview(null);}} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${view===t.id?"text-gray-900":"text-gray-400 hover:text-white"}`} style={view===t.id?{background:"#F5B731"}:{}}>{t.l}</button>)}
+        {tabs.map(t=><button key={t.id} onClick={()=>{setView(t.id);setSelectedPedido(null);setSubview(null);}} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${view===t.id?"text-gray-900":"text-gray-400 hover:text-white"}`} style={view===t.id?{background:"#e2a52a"}:{}}>{t.l}</button>)}
         <button onClick={()=>{setRol(null);setView("bandeja");setSelectedPedido(null);}} className="ml-3 px-2 py-1.5 rounded-lg text-xs text-gray-500 hover:text-red-400">Salir</button>
       </div>
     </div></div></div>
