@@ -116,7 +116,7 @@ function BandejaPedidos({pedidos,rol,onSelect,onNew,pedidoDetalle,proveedores,pr
   }
   // Count pending recepciones per pedido (for sucursal)
   const pendRecep=(pedId)=>{
-    const pes=provEstatus.filter(pe=>pe.pedido_id===pedId&&["precios_capturados","completo","surtido"].includes(pe.estatus));
+    const pes=provEstatus.filter(pe=>pe.pedido_id===pedId&&["enviado","precios_capturados","completo","surtido"].includes(pe.estatus));
     return pes.filter(pe=>!(recepciones||[]).some(r=>r.pedido_id===pedId&&r.proveedor_id===pe.proveedor_id)).length;
   };
   return(<div>
@@ -839,7 +839,7 @@ function RecepcionView({pedidos,pedidoDetalle,proveedores,provEstatus,catalogo,r
   pedidos.forEach(p=>{
     if(p.estatus==="cerrado")return;
     provEstatus.filter(pe=>pe.pedido_id===p.id).forEach(pe=>{
-      if(!["precios_capturados","completo","surtido"].includes(pe.estatus))return;
+      if(!["enviado","precios_capturados","completo","surtido"].includes(pe.estatus))return;
       const yaRecibido=recepciones.some(r=>r.pedido_id===p.id&&r.proveedor_id===pe.proveedor_id);
       if(yaRecibido)return;
       const prov=proveedores.find(pr=>pr.id===pe.proveedor_id);
@@ -1160,10 +1160,29 @@ function App(){
     }
     if(action==="comprado"){
       const totalReal=pedidoDetalle.filter(d=>d.pedido_id===pedId).reduce((s,d)=>s+d.cantidad*(d.costo_real||d.costo_referencia),0);
-      await sbPatch("pedidos",pedId,{estatus:"comprado",total_real:totalReal});
-      setPedidos(pedidos.map(p=>p.id===pedId?{...p,estatus:"comprado",total_real:totalReal}:p));
-      setSelectedPedido({...selectedPedido,estatus:"comprado"});
-      alert("Pedido marcado como comprado — pendiente de recepción por Sucursal");
+      // Check if all receptions already exist → auto-close
+      const allProvForPed=provEstatus.filter(x=>x.pedido_id===pedId);
+      const allReceived=allProvForPed.every(x=>recepciones.some(r=>r.pedido_id===pedId&&r.proveedor_id===x.proveedor_id));
+      if(allReceived){
+        await sbPatch("pedidos",pedId,{estatus:"cerrado",total_real:totalReal});
+        setPedidos(pedidos.map(p=>p.id===pedId?{...p,estatus:"cerrado",total_real:totalReal}:p));
+        setSelectedPedido({...selectedPedido,estatus:"cerrado"});
+        // Generate CxP
+        const provIds=[...new Set(pedidoDetalle.filter(d=>d.pedido_id===pedId).map(d=>d.proveedor_id))];
+        const newCxps=[];
+        for(const pid of provIds){
+          const provItems=pedidoDetalle.filter(d=>d.pedido_id===pedId&&d.proveedor_id===pid);
+          const monto=provItems.reduce((s,d)=>s+d.cantidad*(d.costo_real||d.costo_referencia),0);
+          if(monto>0){const cxpRes=await sbPost("cuentas_por_pagar",{pedido_id:pedId,proveedor_id:pid,monto_total:Math.round(monto*100)/100,estatus:"pendiente"});if(cxpRes&&cxpRes[0])newCxps.push(cxpRes[0]);}
+        }
+        setCxp([...cxp,...newCxps]);
+        alert("Pedido comprado y cerrado — recepciones ya estaban completas. CxP generadas.");
+      } else {
+        await sbPatch("pedidos",pedId,{estatus:"comprado",total_real:totalReal});
+        setPedidos(pedidos.map(p=>p.id===pedId?{...p,estatus:"comprado",total_real:totalReal}:p));
+        setSelectedPedido({...selectedPedido,estatus:"comprado"});
+        alert("Pedido marcado como comprado — pendiente de recepción por Sucursal");
+      }
     }
   };
 
@@ -1251,13 +1270,14 @@ function App(){
       const detRes=await sbGet("recepcion_detalle",`recepcion_id=eq.${recId}`);
       setRecepcionDetalle([...recepcionDetalle,...(detRes||[])]);
       
-      // Check if ALL providers for this pedido now have reception → auto-close + generate CxP
+      // Check if ALL providers for this pedido now have reception → auto-close only if pedido is "comprado"
       const updatedReceps=[...recepciones,res[0]];
       const allProvForPed=provEstatus.filter(x=>x.pedido_id===pedId);
       const allReceived=allProvForPed.every(x=>updatedReceps.some(r=>r.pedido_id===pedId&&r.proveedor_id===x.proveedor_id));
+      const ped=pedidos.find(p=>p.id===pedId);
       
-      if(allReceived){
-        // Auto-close pedido
+      if(allReceived&&ped?.estatus==="comprado"){
+        // Auto-close pedido + generate CxP
         const totalReal=pedidoDetalle.filter(d=>d.pedido_id===pedId).reduce((s,d)=>s+d.cantidad*(d.costo_real||d.costo_referencia),0);
         await sbPatch("pedidos",pedId,{estatus:"cerrado",total_real:totalReal});
         setPedidos(prev=>prev.map(p=>p.id===pedId?{...p,estatus:"cerrado",total_real:totalReal}:p));
@@ -1273,7 +1293,9 @@ function App(){
           }
         }
         setCxp(prev=>[...prev,...newCxps]);
-        alert("Recepción registrada — Todas las recepciones completas. Pedido cerrado y CxP generadas para Finanzas.");
+        alert("Recepción registrada — Pedido cerrado y CxP generadas para Finanzas.");
+      } else if(allReceived){
+        alert("Recepción registrada — Todas las recepciones completas. Falta que Compras marque como comprado para cerrar.");
       } else {
         alert(estatus==="completo"?"Recepción completa registrada":"Recepción con faltantes registrada — Compras puede ver las discrepancias");
       }
