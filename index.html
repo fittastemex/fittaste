@@ -706,7 +706,7 @@ function DashboardView({pedidos,catalogo,proveedores,pedidoDetalle,inventario}){
 }
 
 // ======================== CATÁLOGO (solo Admin) ========================
-function CatalogoView({catalogo,setCatalogo,proveedores,unidades,inventario}){
+function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,inventario,flujos}){
   const [filter,setFilter]=useState("");
   const [filterProv,setFilterProv]=useState("");
   const [editing,setEditing]=useState(null);
@@ -715,6 +715,8 @@ function CatalogoView({catalogo,setCatalogo,proveedores,unidades,inventario}){
   const [newItem,setNewItem]=useState({sku:"",articulo:"",tipo_producto:"VERDURA",unidad_clave:"kg",costo_referencia:0,proveedor_id:"",notas:""});
   const [saving,setSaving]=useState(false);
   const [msg,setMsg]=useState(null);
+  const [addingProv,setAddingProv]=useState(false);
+  const [newProv,setNewProv]=useState({nombre:"",tipo_flujo_id:""});
 
   // Auto-serial SKU por tipo
   const prefixMap={PROTEINAS:"PRO",SUPLEMENTO:"SUP",EMPAQUE:"EMP",VERDURA:"VER",FRUTA:"FRU",LIMPIEZA:"LIM",ABARROTES:"ABA",COCINA:"COC",OTRO:"OTR"};
@@ -742,6 +744,22 @@ function CatalogoView({catalogo,setCatalogo,proveedores,unidades,inventario}){
     }
     setCatalogo(catalogo.filter(c=>c.id!==p.id));
     setMsg(`${p.articulo} eliminado${hasInv?" (catálogo + almacén)":""}`);
+    setSaving(false);
+    setTimeout(()=>setMsg(null),3000);
+  };
+
+  // Add new provider (Admin only)
+  const handleAddProv=async()=>{
+    if(!newProv.nombre.trim()||!newProv.tipo_flujo_id){setMsg("Completa nombre y tipo de flujo");return;}
+    setSaving(true);
+    const res=await sbPost("proveedores",{nombre:newProv.nombre.trim(),tipo_flujo_id:newProv.tipo_flujo_id,activo:true});
+    if(res&&res[0]){
+      const fl=(flujos||[]).find(f=>f.id===newProv.tipo_flujo_id)||{};
+      setProveedores([...proveedores,{id:res[0].id,nombre:newProv.nombre.trim(),tipo_flujo:fl.nombre||"?",quien_captura:fl.quien_captura_precio||"?"}]);
+      setMsg(`Proveedor "${newProv.nombre.trim()}" agregado`);
+      setNewProv({nombre:"",tipo_flujo_id:""});
+      setAddingProv(false);
+    }else{setMsg("Error al agregar proveedor");}
     setSaving(false);
     setTimeout(()=>setMsg(null),3000);
   };
@@ -787,10 +805,23 @@ function CatalogoView({catalogo,setCatalogo,proveedores,unidades,inventario}){
   return(<div>
     <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
       <div><h2 className="text-lg font-bold text-gray-900">Catálogo de productos</h2><p className="text-sm text-gray-500">{catalogo.length} SKUs — edición directa a Supabase</p></div>
-      <Btn onClick={()=>{if(!adding){setNewItem({sku:genCatSku("VERDURA"),articulo:"",tipo_producto:"VERDURA",unidad_clave:"kg",costo_referencia:0,proveedor_id:"",notas:""});}setAdding(!adding);}}>{adding?"Cancelar":"+ Nuevo SKU"}</Btn>
+      <div className="flex gap-2">
+        <Btn onClick={()=>{if(!adding){setNewItem({sku:genCatSku("VERDURA"),articulo:"",tipo_producto:"VERDURA",unidad_clave:"kg",costo_referencia:0,proveedor_id:"",notas:""});}setAdding(!adding);setAddingProv(false);}}>{adding?"Cancelar":"+ Nuevo SKU"}</Btn>
+        <button onClick={()=>{setAddingProv(!addingProv);setAdding(false);}} className="text-sm font-semibold px-4 py-2 rounded-lg transition-all border-2" style={{borderColor:"#d6816c",color:addingProv?"white":"#d6816c",background:addingProv?"#d6816c":"transparent"}}>{addingProv?"Cancelar":"+ Nuevo proveedor"}</button>
+      </div>
     </div>
 
     {msg&&<div className={`rounded-xl p-3 mb-4 text-sm font-medium ${msg.includes("Error")?"bg-red-50 text-red-800 border border-red-200":"bg-emerald-50 text-emerald-800 border border-emerald-200"}`}>{msg}</div>}
+
+    {addingProv&&<div className="bg-white border-2 rounded-xl p-4 mb-4" style={{borderColor:"#d6816c"}}>
+      <h3 className="text-sm font-bold text-gray-700 mb-3">Agregar nuevo proveedor</h3>
+      <div className="flex gap-3 items-end flex-wrap">
+        <div className="flex-1"><label className="text-xs text-gray-500 block mb-1">Nombre</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2" style={{"--tw-ring-color":"#d6816c"}} placeholder="Nombre del proveedor" value={newProv.nombre} onChange={e=>setNewProv({...newProv,nombre:e.target.value})}/></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Tipo de flujo</label><select className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newProv.tipo_flujo_id} onChange={e=>setNewProv({...newProv,tipo_flujo_id:e.target.value})}><option value="">Seleccionar...</option>{(flujos||[]).map(f=><option key={f.id} value={f.id}>{f.nombre}</option>)}</select></div>
+        <Btn onClick={handleAddProv} disabled={saving||!newProv.nombre.trim()||!newProv.tipo_flujo_id}>{saving?"Guardando...":"Agregar proveedor"}</Btn>
+      </div>
+      <p className="text-xs text-gray-400 mt-2">Commodity = proveedor captura precios • Compra manual = Compras captura • Almacen interno = costo por lotes PEPS • Directo = Sucursal paga al recibir</p>
+    </div>}
 
     {adding&&<div className="bg-white border-2 border-amber-300 rounded-xl p-4 mb-4">
       <h3 className="text-sm font-bold text-gray-700 mb-3">Agregar nuevo producto</h3>
@@ -1220,6 +1251,7 @@ function App(){
   const [comprasDirectas,setComprasDirectas]=useState([]);
   const [gastosOp,setGastosOp]=useState([]);
   const [catGastos,setCatGastos]=useState([]);
+  const [flujos,setFlujos]=useState([]);
 
   // Check URL for provider token
   useEffect(()=>{
@@ -1256,6 +1288,7 @@ function App(){
       setComprasDirectas(results.compras_directas||[]);
       setGastosOp(results.gastos_operativos||[]);
       setCatGastos((results.categorias_gastos||[]).filter(c=>c.activa!==false));
+      setFlujos((results.tipos_flujo_costo||[]).map(f=>({id:f.id,nombre:f.nombre,quien_captura_precio:f.quien_captura_precio})));
 
       // Handle provider token access
       if(provToken){
@@ -1565,7 +1598,7 @@ function App(){
         alert("Pedido surtido con PEPS — lotes e inventario actualizados");
       }}/>}
       {view==="dashboard"&&<DashboardView pedidos={pedidos} catalogo={catalogo} proveedores={proveedores} pedidoDetalle={pedidoDetalle} inventario={inventario}/>}
-      {view==="catalogo"&&rol==="admin"&&<CatalogoView catalogo={catalogo} setCatalogo={setCatalogo} proveedores={proveedores} unidades={unidades} inventario={inventario}/>}
+      {view==="catalogo"&&rol==="admin"&&<CatalogoView catalogo={catalogo} setCatalogo={setCatalogo} proveedores={proveedores} setProveedores={setProveedores} unidades={unidades} inventario={inventario} flujos={flujos}/>}
       {view==="recepcion"&&rol==="sucursal"&&<RecepcionView pedidos={pedidos} pedidoDetalle={pedidoDetalle} proveedores={proveedores} provEstatus={provEstatus} catalogo={catalogo} recepciones={recepciones} recepcionDetalle={recepcionDetalle} onRecibir={handleRecibir}/>}
       {view==="finanzas"&&["admin","compras","finanzas"].includes(rol)&&<FinanzasView cxp={cxp} setCxp={setCxp} pagos={pagos} setPagos={setPagos} pedidos={pedidos} proveedores={proveedores} pedidoDetalle={pedidoDetalle} catalogo={catalogo}/>}
       {view==="compras_directas"&&["sucursal","admin","compras","finanzas"].includes(rol)&&<ComprasDirectasView comprasDirectas={comprasDirectas} setComprasDirectas={setComprasDirectas} catalogo={catalogo} proveedores={proveedores} cxp={cxp} setCxp={setCxp}/>}
