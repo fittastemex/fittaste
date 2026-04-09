@@ -580,7 +580,7 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
 }
 
 // ======================== DASHBOARD FINANCIERO ========================
-function DashboardView({pedidos,catalogo,proveedores,pedidoDetalle,inventario}){
+function DashboardView({pedidos,catalogo,proveedores,pedidoDetalle,inventario,comprasDirectas,gastosOp}){
   const [mesOffset,setMesOffset]=useState(0);
   const now=new Date();
   const mesActual=new Date(now.getFullYear(),now.getMonth()-mesOffset,1);
@@ -702,6 +702,24 @@ function DashboardView({pedidos,catalogo,proveedores,pedidoDetalle,inventario}){
         </div>);
       })}
     </div>}
+
+    {/* COMPRAS DIRECTAS Y GASTOS DEL MES */}
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
+      <div className="bg-white border border-gray-200 rounded-xl p-4">
+        <h3 className="text-sm font-bold text-gray-700 mb-3">Compras directas — <span className="capitalize">{mesNombre}</span></h3>
+        {(()=>{const cdMes=(comprasDirectas||[]).filter(c=>{const f=c.fecha||c.created_at?.split("T")[0];return f>=mesInicio&&f<=mesFin;});const totalCD=cdMes.reduce((s,c)=>s+parseFloat(c.costo_total||0),0);return cdMes.length===0?<p className="text-sm text-gray-400">Sin compras directas este mes</p>:<div>
+          <div className="flex justify-between mb-3"><span className="text-sm text-gray-600">{cdMes.length} compras</span><span className="font-bold" style={{color:"#e2a52a"}}>{fmt(totalCD)}</span></div>
+          <div className="space-y-1">{cdMes.slice(0,8).map(c=>{const cat=catalogo.find(x=>x.id===c.catalogo_id)||{};const prov=proveedores.find(x=>x.id===c.proveedor_id)||{};return(<div key={c.id} className="flex justify-between text-sm py-1 border-b border-gray-50"><div><span className="text-gray-800">{cat.articulo||"?"}</span><span className="text-gray-400 text-xs ml-2">{prov.nombre||""}</span></div><span className="font-semibold text-gray-700">{fmt(c.costo_total)}</span></div>);})}</div>
+        </div>;})()}
+      </div>
+      <div className="bg-white border border-gray-200 rounded-xl p-4">
+        <h3 className="text-sm font-bold text-gray-700 mb-3">Gastos operativos — <span className="capitalize">{mesNombre}</span></h3>
+        {(()=>{const gMes=(gastosOp||[]).filter(g=>{const f=g.fecha||g.created_at?.split("T")[0];return f>=mesInicio&&f<=mesFin;});const totalG=gMes.reduce((s,g)=>s+parseFloat(g.monto||0),0);const byCat={};gMes.forEach(g=>{const k=g.categoria||"Otros";if(!byCat[k])byCat[k]=0;byCat[k]+=parseFloat(g.monto||0);});const cats=Object.entries(byCat).sort((a,b)=>b[1]-a[1]);return gMes.length===0?<p className="text-sm text-gray-400">Sin gastos este mes</p>:<div>
+          <div className="flex justify-between mb-3"><span className="text-sm text-gray-600">{gMes.length} gastos</span><span className="font-bold text-red-600">{fmt(totalG)}</span></div>
+          {cats.map(([cat,total])=><div key={cat} className="flex justify-between text-sm py-1 border-b border-gray-50"><span className="text-gray-800">{cat}</span><span className="font-semibold text-red-600">{fmt(total)}</span></div>)}
+        </div>;})()}
+      </div>
+    </div>
   </div>);
 }
 
@@ -717,6 +735,9 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
   const [msg,setMsg]=useState(null);
   const [addingProv,setAddingProv]=useState(false);
   const [newProv,setNewProv]=useState({nombre:"",tipo_flujo_id:""});
+  const [catTab,setCatTab]=useState("productos");
+  const [editingProvId,setEditingProvId]=useState(null);
+  const [editProvData,setEditProvData]=useState({nombre:"",tipo_flujo_id:""});
 
   // Auto-serial SKU por tipo
   const prefixMap={PROTEINAS:"PRO",SUPLEMENTO:"SUP",EMPAQUE:"EMP",VERDURA:"VER",FRUTA:"FRU",LIMPIEZA:"LIM",ABARROTES:"ABA",COCINA:"COC",OTRO:"OTR"};
@@ -764,6 +785,30 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
     setTimeout(()=>setMsg(null),3000);
   };
 
+  const startEditProv=(p)=>{setEditingProvId(p.id);const fl=(flujos||[]).find(f=>f.nombre===p.tipo_flujo);setEditProvData({nombre:p.nombre,tipo_flujo_id:fl?.id||""});};
+
+  const saveEditProv=async(p)=>{
+    setSaving(true);
+    const fl=(flujos||[]).find(f=>f.id===editProvData.tipo_flujo_id)||{};
+    await sbPatch("proveedores",p.id,{nombre:editProvData.nombre.trim(),tipo_flujo_id:editProvData.tipo_flujo_id});
+    setProveedores(proveedores.map(pr=>pr.id===p.id?{...pr,nombre:editProvData.nombre.trim(),tipo_flujo:fl.nombre||pr.tipo_flujo,quien_captura:fl.quien_captura_precio||pr.quien_captura}:pr));
+    setMsg(`${editProvData.nombre.trim()} actualizado`);
+    setEditingProvId(null);setSaving(false);
+    setTimeout(()=>setMsg(null),3000);
+  };
+
+  const handleDeleteProv=async(p)=>{
+    const usedInCat=catalogo.some(c=>c.proveedor_id===p.id);
+    if(usedInCat){alert(`No se puede eliminar "${p.nombre}" — tiene productos asignados en catálogo. Reasígnalos primero.`);return;}
+    if(!confirm(`¿Eliminar proveedor "${p.nombre}"?`))return;
+    setSaving(true);
+    await sbPatch("proveedores",p.id,{activo:false});
+    setProveedores(proveedores.filter(pr=>pr.id!==p.id));
+    setMsg(`${p.nombre} eliminado`);
+    setSaving(false);
+    setTimeout(()=>setMsg(null),3000);
+  };
+
   const filtered=catalogo.filter(p=>{const textMatch=p.articulo.toLowerCase().includes(filter.toLowerCase())||p.sku.toLowerCase().includes(filter.toLowerCase())||p.tipo_producto.toLowerCase().includes(filter.toLowerCase())||p.proveedor_nombre.toLowerCase().includes(filter.toLowerCase());const provMatch=!filterProv||p.proveedor_id===filterProv;return textMatch&&provMatch;});
   const tipos=[...new Set(catalogo.map(c=>c.tipo_producto))].sort();
 
@@ -804,25 +849,22 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
 
   return(<div>
     <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-      <div><h2 className="text-lg font-bold text-gray-900">Catálogo de productos</h2><p className="text-sm text-gray-500">{catalogo.length} SKUs — edición directa a Supabase</p></div>
+      <div><h2 className="text-lg font-bold text-gray-900">Catálogo</h2><p className="text-sm text-gray-500">{catalogo.length} productos · {proveedores.length} proveedores</p></div>
       <div className="flex gap-2">
-        <Btn onClick={()=>{if(!adding){setNewItem({sku:genCatSku("VERDURA"),articulo:"",tipo_producto:"VERDURA",unidad_clave:"kg",costo_referencia:0,proveedor_id:"",notas:""});}setAdding(!adding);setAddingProv(false);}}>{adding?"Cancelar":"+ Nuevo SKU"}</Btn>
-        <button onClick={()=>{setAddingProv(!addingProv);setAdding(false);}} className="text-sm font-semibold px-4 py-2 rounded-lg transition-all border-2" style={{borderColor:"#d6816c",color:addingProv?"white":"#d6816c",background:addingProv?"#d6816c":"transparent"}}>{addingProv?"Cancelar":"+ Nuevo proveedor"}</button>
+        {catTab==="productos"&&<Btn onClick={()=>{if(!adding){setNewItem({sku:genCatSku("VERDURA"),articulo:"",tipo_producto:"VERDURA",unidad_clave:"kg",costo_referencia:0,proveedor_id:"",notas:""});}setAdding(!adding);}}>{adding?"Cancelar":"+ Nuevo SKU"}</Btn>}
+        {catTab==="proveedores"&&<Btn onClick={()=>setAddingProv(!addingProv)}>{addingProv?"Cancelar":"+ Nuevo proveedor"}</Btn>}
       </div>
     </div>
 
-    {msg&&<div className={`rounded-xl p-3 mb-4 text-sm font-medium ${msg.includes("Error")?"bg-red-50 text-red-800 border border-red-200":"bg-emerald-50 text-emerald-800 border border-emerald-200"}`}>{msg}</div>}
+    <div className="flex gap-1 mb-4">
+      <button onClick={()=>{setCatTab("productos");setAddingProv(false);}} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${catTab==="productos"?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={catTab==="productos"?{background:"#e2a52a"}:{}}>Productos ({catalogo.length})</button>
+      <button onClick={()=>{setCatTab("proveedores");setAdding(false);}} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${catTab==="proveedores"?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={catTab==="proveedores"?{background:"#d6816c"}:{}}>Proveedores ({proveedores.length})</button>
+    </div>
 
-    {addingProv&&<div className="bg-white border-2 rounded-xl p-4 mb-4" style={{borderColor:"#d6816c"}}>
-      <h3 className="text-sm font-bold text-gray-700 mb-3">Agregar nuevo proveedor</h3>
-      <div className="flex gap-3 items-end flex-wrap">
-        <div className="flex-1"><label className="text-xs text-gray-500 block mb-1">Nombre</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2" style={{"--tw-ring-color":"#d6816c"}} placeholder="Nombre del proveedor" value={newProv.nombre} onChange={e=>setNewProv({...newProv,nombre:e.target.value})}/></div>
-        <div><label className="text-xs text-gray-500 block mb-1">Tipo de flujo</label><select className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newProv.tipo_flujo_id} onChange={e=>setNewProv({...newProv,tipo_flujo_id:e.target.value})}><option value="">Seleccionar...</option>{(flujos||[]).map(f=><option key={f.id} value={f.id}>{f.nombre}</option>)}</select></div>
-        <Btn onClick={handleAddProv} disabled={saving||!newProv.nombre.trim()||!newProv.tipo_flujo_id}>{saving?"Guardando...":"Agregar proveedor"}</Btn>
-      </div>
-      <p className="text-xs text-gray-400 mt-2">Commodity = proveedor captura precios • Compra manual = Compras captura • Almacen interno = costo por lotes PEPS • Directo = Sucursal paga al recibir</p>
-    </div>}
+    {msg&&<div className={`rounded-xl p-3 mb-4 text-sm font-medium ${msg.includes("Error")||msg.includes("No se puede")?"bg-red-50 text-red-800 border border-red-200":"bg-emerald-50 text-emerald-800 border border-emerald-200"}`}>{msg}</div>}
 
+    {/* ===== PRODUCTOS TAB ===== */}
+    {catTab==="productos"&&<div>
     {adding&&<div className="bg-white border-2 border-amber-300 rounded-xl p-4 mb-4">
       <h3 className="text-sm font-bold text-gray-700 mb-3">Agregar nuevo producto</h3>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
@@ -838,7 +880,6 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
         <div className="flex items-end"><Btn onClick={saveNew} disabled={saving}>{saving?"Guardando...":"Guardar producto"}</Btn></div>
       </div>
     </div>}
-
     <div className="flex gap-2 mb-4">
       <input className="flex-1 border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-amber-400" placeholder="Buscar por SKU, artículo, tipo..." value={filter} onChange={e=>setFilter(e.target.value)}/>
       <select className="border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-white" value={filterProv} onChange={e=>setFilterProv(e.target.value)}>
@@ -846,7 +887,6 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
         {proveedores.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
       </select>
     </div>
-
     <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
       <table className="w-full text-sm"><thead className="bg-gray-50"><tr>
         {["SKU","Artículo","Tipo","Unidad","Costo ref","IVA","Proveedor","Almacén","Notas",""].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${h==="Costo ref"?"text-right":h==="IVA"?"text-center":"text-left"}`}>{h}</th>)}
@@ -866,6 +906,35 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
         </tr>);})}</tbody></table>
     </div>
     <p className="text-xs text-gray-400 mt-2 text-right">Mostrando {filtered.length} de {catalogo.length} productos</p>
+    </div>}
+
+    {/* ===== PROVEEDORES TAB ===== */}
+    {catTab==="proveedores"&&<div>
+    {addingProv&&<div className="bg-white border-2 rounded-xl p-4 mb-4" style={{borderColor:"#d6816c"}}>
+      <h3 className="text-sm font-bold text-gray-700 mb-3">Agregar nuevo proveedor</h3>
+      <div className="flex gap-3 items-end flex-wrap">
+        <div className="flex-1"><label className="text-xs text-gray-500 block mb-1">Nombre</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Nombre del proveedor" value={newProv.nombre} onChange={e=>setNewProv({...newProv,nombre:e.target.value})}/></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Tipo de flujo</label><select className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newProv.tipo_flujo_id} onChange={e=>setNewProv({...newProv,tipo_flujo_id:e.target.value})}><option value="">Seleccionar...</option>{(flujos||[]).map(f=><option key={f.id} value={f.id}>{f.nombre}</option>)}</select></div>
+        <Btn onClick={handleAddProv} disabled={saving||!newProv.nombre.trim()||!newProv.tipo_flujo_id}>{saving?"Guardando...":"Agregar"}</Btn>
+      </div>
+      <p className="text-xs text-gray-400 mt-2">Commodity = proveedor captura precios · Compra manual = Compras captura · Almacen interno = lotes PEPS · Directo = Sucursal paga</p>
+    </div>}
+    <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+      <table className="w-full text-sm"><thead className="bg-gray-50"><tr>
+        {["Nombre","Tipo de flujo","Quién captura precio","SKUs asignados",""].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${h==="SKUs asignados"?"text-center":"text-left"}`}>{h}</th>)}
+      </tr></thead><tbody>{proveedores.map(p=>{
+        const isEP=editingProvId===p.id;
+        const skuCount=catalogo.filter(c=>c.proveedor_id===p.id).length;
+        return(<tr key={p.id} className={`border-t border-gray-100 ${isEP?"bg-amber-50":"hover:bg-gray-50"}`}>
+          <td className="px-3 py-2 font-medium text-gray-900">{isEP?<input className="w-full border border-amber-300 rounded px-2 py-0.5 text-sm bg-amber-50" value={editProvData.nombre} onChange={e=>setEditProvData({...editProvData,nombre:e.target.value})}/>:p.nombre}</td>
+          <td className="px-3 py-2">{isEP?<select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editProvData.tipo_flujo_id} onChange={e=>setEditProvData({...editProvData,tipo_flujo_id:e.target.value})}>{(flujos||[]).map(f=><option key={f.id} value={f.id}>{f.nombre}</option>)}</select>:<Badge v={p.tipo_flujo==="Commodity"?"commodity":p.tipo_flujo==="Compra manual"?"manual":p.tipo_flujo==="Directo"?"warning":"almacen"}>{p.tipo_flujo}</Badge>}</td>
+          <td className="px-3 py-2 text-gray-600 text-xs">{p.quien_captura}</td>
+          <td className="px-3 py-2 text-center"><span className={`text-xs font-medium ${skuCount>0?"text-gray-800":"text-gray-400"}`}>{skuCount}</span></td>
+          <td className="px-3 py-2 text-right">{isEP?<div className="flex gap-1"><button onClick={()=>saveEditProv(p)} disabled={saving} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded">{saving?"...":"Guardar"}</button><button onClick={()=>setEditingProvId(null)} className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded">X</button></div>:<div className="flex gap-1"><button onClick={()=>startEditProv(p)} className="text-xs text-amber-700 hover:text-amber-900 font-medium hover:bg-amber-100 px-2 py-1 rounded">Editar</button><button onClick={()=>handleDeleteProv(p)} className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded" title="Eliminar">✕</button></div>}</td>
+        </tr>);})}</tbody></table>
+    </div>
+    <p className="text-xs text-gray-400 mt-2 text-right">{proveedores.length} proveedores activos</p>
+    </div>}
   </div>);
 }
 
@@ -1597,7 +1666,7 @@ function App(){
         setPedidoDetalle(pedidoDetalle.map(d=>{if(d.pedido_id===pedId&&proveedores.find(pr=>pr.id===d.proveedor_id)?.tipo_flujo==="Almacen interno"){return{...d,cantidad:cantSurtida[d.id]||0};}return d;}));
         alert("Pedido surtido con PEPS — lotes e inventario actualizados");
       }}/>}
-      {view==="dashboard"&&<DashboardView pedidos={pedidos} catalogo={catalogo} proveedores={proveedores} pedidoDetalle={pedidoDetalle} inventario={inventario}/>}
+      {view==="dashboard"&&<DashboardView pedidos={pedidos} catalogo={catalogo} proveedores={proveedores} pedidoDetalle={pedidoDetalle} inventario={inventario} comprasDirectas={comprasDirectas} gastosOp={gastosOp}/>}
       {view==="catalogo"&&rol==="admin"&&<CatalogoView catalogo={catalogo} setCatalogo={setCatalogo} proveedores={proveedores} setProveedores={setProveedores} unidades={unidades} inventario={inventario} flujos={flujos}/>}
       {view==="recepcion"&&rol==="sucursal"&&<RecepcionView pedidos={pedidos} pedidoDetalle={pedidoDetalle} proveedores={proveedores} provEstatus={provEstatus} catalogo={catalogo} recepciones={recepciones} recepcionDetalle={recepcionDetalle} onRecibir={handleRecibir}/>}
       {view==="finanzas"&&["admin","compras","finanzas"].includes(rol)&&<FinanzasView cxp={cxp} setCxp={setCxp} pagos={pagos} setPagos={setPagos} pedidos={pedidos} proveedores={proveedores} pedidoDetalle={pedidoDetalle} catalogo={catalogo}/>}
