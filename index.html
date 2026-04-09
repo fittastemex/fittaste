@@ -26,7 +26,7 @@ const V="6.0";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 async function sbGet(t,params=""){try{const r=await fetch(`${SB}/${t}?select=*${params?"&"+params:""}`,{headers:H});const d=await r.json();return Array.isArray(d)?d:[];}catch(e){console.error(t,e);return[];}}
-async function sbPost(t,data){try{const r=await fetch(`${SB}/${t}`,{method:"POST",headers:{...H,Prefer:"return=representation"},body:JSON.stringify(data)});return await r.json();}catch(e){console.error(t,e);return null;}}
+async function sbPost(t,data){try{const r=await fetch(`${SB}/${t}`,{method:"POST",headers:{...H,Prefer:"return=representation"},body:JSON.stringify(data)});if(!r.ok){const err=await r.json();console.error(`POST ${t} error:`,r.status,err);return null;}return await r.json();}catch(e){console.error(t,e);return null;}}
 async function sbPatch(t,id,data){try{const r=await fetch(`${SB}/${t}?id=eq.${id}`,{method:"PATCH",headers:{...H,Prefer:"return=representation"},body:JSON.stringify(data)});return await r.json();}catch(e){console.error(t,e);return null;}}
 async function sbDelete(t,id){try{const r=await fetch(`${SB}/${t}?id=eq.${id}`,{method:"DELETE",headers:H});return r.ok;}catch(e){console.error(t,e);return false;}}
 async function sbDeleteWhere(t,filter){try{const r=await fetch(`${SB}/${t}?${filter}`,{method:"DELETE",headers:H});return r.ok;}catch(e){console.error(t,e);return false;}}
@@ -760,15 +760,16 @@ function CatalogoView({catalogo,setCatalogo,proveedores,unidades,inventario}){
     if(!newItem.sku||!newItem.articulo||!newItem.proveedor_id){setMsg("Completa SKU, artículo y proveedor");return;}
     setSaving(true);setMsg(null);
     const unid=unidades.find(u=>u.clave===newItem.unidad_clave);
-    const data={sku:newItem.sku,articulo:newItem.articulo.toUpperCase(),tipo_producto:newItem.tipo_producto,unidad_id:unid?.id,costo_referencia:newItem.costo_referencia,proveedor_id:newItem.proveedor_id,notas:newItem.notas||null,activo:true};
+    if(!unid){setMsg(`Error: unidad "${newItem.unidad_clave}" no encontrada. Recarga la página.`);setSaving(false);return;}
+    const data={sku:newItem.sku,articulo:newItem.articulo.toUpperCase(),tipo_producto:newItem.tipo_producto,unidad_id:unid.id,costo_referencia:newItem.costo_referencia||0,proveedor_id:newItem.proveedor_id,notas:newItem.notas||null,activo:true};
     const res=await sbPost("catalogo",data);
     if(res&&res[0]){
       const prov=proveedores.find(pr=>pr.id===newItem.proveedor_id);
-      setCatalogo([...catalogo,{id:res[0].id,sku:newItem.sku,articulo:newItem.articulo.toUpperCase(),tipo_producto:newItem.tipo_producto,unidad_clave:newItem.unidad_clave,costo_referencia:parseFloat(newItem.costo_referencia),proveedor_id:newItem.proveedor_id,proveedor_nombre:prov?.nombre||"?",notas:newItem.notas}]);
+      setCatalogo([...catalogo,{id:res[0].id,sku:newItem.sku,articulo:newItem.articulo.toUpperCase(),tipo_producto:newItem.tipo_producto,unidad_clave:newItem.unidad_clave,costo_referencia:parseFloat(newItem.costo_referencia),proveedor_id:newItem.proveedor_id,proveedor_nombre:prov?.nombre||"?",notas:newItem.notas,aplica_iva:true,inv_id:res[0].inventario_almacen_id||null}]);
       setMsg(`${newItem.articulo} agregado`);
-      setNewItem({sku:"",articulo:"",tipo_producto:"VERDURA",unidad_clave:"kg",costo_referencia:0,proveedor_id:"",notas:""});
+      setNewItem({sku:genCatSku(newItem.tipo_producto),articulo:"",tipo_producto:newItem.tipo_producto,unidad_clave:"kg",costo_referencia:0,proveedor_id:"",notas:""});
       setAdding(false);
-    }else{setMsg("Error al agregar — verifica que el SKU no esté duplicado");}
+    }else{setMsg("Error al agregar — verifica los datos e intenta de nuevo");}
     setSaving(false);
     setTimeout(()=>setMsg(null),3000);
   };
