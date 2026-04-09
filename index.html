@@ -727,11 +727,21 @@ function CatalogoView({catalogo,setCatalogo,proveedores,unidades,inventario}){
 
   // Delete product (soft delete)
   const handleDelete=async(p)=>{
-    if(!confirm(`¿Eliminar "${p.articulo}" del catálogo?`))return;
+    const hasInv=p.inv_id;
+    const msg=hasInv?`¿Eliminar "${p.articulo}" del catálogo Y del inventario de almacén?`:`¿Eliminar "${p.articulo}" del catálogo?`;
+    if(!confirm(msg))return;
     setSaving(true);
+    // First desvinculate
+    if(hasInv)await sbPatch("catalogo",p.id,{inventario_almacen_id:null});
+    // Soft delete catálogo
     await sbPatch("catalogo",p.id,{activo:false});
+    // Delete almacén + lotes if linked
+    if(hasInv){
+      await sbDeleteWhere("lotes_almacen",`inventario_id=eq.${hasInv}`);
+      await sbDelete("inventario_almacen",hasInv);
+    }
     setCatalogo(catalogo.filter(c=>c.id!==p.id));
-    setMsg(`${p.articulo} eliminado`);
+    setMsg(`${p.articulo} eliminado${hasInv?" (catálogo + almacén)":""}`);
     setSaving(false);
     setTimeout(()=>setMsg(null),3000);
   };
@@ -1047,6 +1057,143 @@ function FinanzasView({cxp,setCxp,pagos,setPagos,pedidos,proveedores,pedidoDetal
   </div>);
 }
 
+// ======================== COMPRAS DIRECTAS (Sucursal) ========================
+function ComprasDirectasView({comprasDirectas,setComprasDirectas,catalogo,proveedores,cxp,setCxp}){
+  const [form,setForm]=useState({catalogo_id:"",proveedor_id:"",cantidad:0,costo_unitario:0,metodo_pago:"efectivo",nota:""});
+  const [saving,setSaving]=useState(false);
+  const [filter,setFilter]=useState("");
+
+  const total=form.cantidad*form.costo_unitario;
+  const recientes=comprasDirectas.slice().sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).slice(0,20);
+  const totalMes=(()=>{const hoy=new Date();const mesInicio=new Date(hoy.getFullYear(),hoy.getMonth(),1).toISOString().split("T")[0];return comprasDirectas.filter(c=>(c.fecha||c.created_at?.split("T")[0])>=mesInicio).reduce((s,c)=>s+parseFloat(c.costo_total||0),0);})();
+
+  const handleSave=async()=>{
+    if(!form.catalogo_id||!form.proveedor_id||form.cantidad<=0||form.costo_unitario<=0){alert("Completa todos los campos");return;}
+    setSaving(true);
+    const costoTotal=Math.round(form.cantidad*form.costo_unitario*100)/100;
+    const res=await sbPost("compras_directas",{catalogo_id:form.catalogo_id,proveedor_id:form.proveedor_id,cantidad:form.cantidad,costo_unitario:form.costo_unitario,costo_total:costoTotal,metodo_pago:form.metodo_pago,fecha:new Date().toISOString().split("T")[0],registrado_por:"sucursal",nota:form.nota||null});
+    if(res&&res[0]){
+      setComprasDirectas([res[0],...comprasDirectas]);
+      if(form.metodo_pago==="credito"){
+        const cxpRes=await sbPost("cuentas_por_pagar",{pedido_id:null,proveedor_id:form.proveedor_id,monto_total:costoTotal,estatus:"pendiente"});
+        if(cxpRes&&cxpRes[0])setCxp([...cxp,cxpRes[0]]);
+        alert("Compra registrada — CxP generada (crédito)");
+      }else{alert("Compra registrada");}
+      setForm({catalogo_id:"",proveedor_id:"",cantidad:0,costo_unitario:0,metodo_pago:"efectivo",nota:""});
+    }else{alert("Error al registrar");}
+    setSaving(false);
+  };
+
+  return(<div>
+    <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <div><h2 className="text-lg font-bold text-gray-900">Compras directas</h2><p className="text-sm text-gray-500">Registro de compras hechas directamente en sucursal</p></div>
+      <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2 text-right"><p className="text-xs" style={{color:"#e2a52a"}}>Total este mes</p><p className="text-xl font-bold" style={{color:"#e2a52a"}}>{fmt(totalMes)}</p></div>
+    </div>
+
+    <div className="bg-white border-2 border-amber-300 rounded-xl p-4 mb-4" style={{borderColor:"#e2a52a"}}>
+      <h3 className="text-sm font-bold text-gray-700 mb-3">Nueva compra directa</h3>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
+        <div><label className="text-xs text-gray-500 block mb-1">Proveedor</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={form.proveedor_id} onChange={e=>setForm({...form,proveedor_id:e.target.value})}><option value="">Seleccionar...</option>{proveedores.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}</select></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Artículo</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={form.catalogo_id} onChange={e=>{const cat=catalogo.find(c=>c.id===e.target.value);setForm({...form,catalogo_id:e.target.value,costo_unitario:cat?.costo_referencia||0});}}><option value="">Seleccionar...</option>{catalogo.map(c=><option key={c.id} value={c.id}>{c.articulo} ({c.unidad_clave})</option>)}</select></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Cantidad</label><input type="number" min="0" step="0.25" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={form.cantidad||""} onChange={e=>setForm({...form,cantidad:parseFloat(e.target.value)||0})}/></div>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+        <div><label className="text-xs text-gray-500 block mb-1">Costo unitario</label><input type="number" min="0" step="0.01" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={form.costo_unitario||""} onChange={e=>setForm({...form,costo_unitario:parseFloat(e.target.value)||0})}/></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Total</label><div className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-gray-50 font-bold">{fmt(total)}</div></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Método de pago</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={form.metodo_pago} onChange={e=>setForm({...form,metodo_pago:e.target.value})}><option value="efectivo">Efectivo</option><option value="transferencia">Transferencia</option><option value="tarjeta">Tarjeta</option><option value="credito">Crédito (genera CxP)</option></select></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Nota</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Opcional" value={form.nota} onChange={e=>setForm({...form,nota:e.target.value})}/></div>
+      </div>
+      <Btn onClick={handleSave} disabled={saving||!form.catalogo_id||!form.proveedor_id||form.cantidad<=0}>{saving?"Guardando...":"Registrar compra"}</Btn>
+    </div>
+
+    {recientes.length>0&&<div className="bg-white border border-gray-200 rounded-xl overflow-hidden"><table className="w-full text-sm"><thead className="bg-gray-50"><tr>
+      {["Fecha","Artículo","Proveedor","Cant","Costo u.","Total","Pago"].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Cant","Costo u.","Total"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
+    </tr></thead><tbody>{recientes.map(c=>{
+      const cat=catalogo.find(x=>x.id===c.catalogo_id)||{};
+      const prov=proveedores.find(x=>x.id===c.proveedor_id)||{};
+      return(<tr key={c.id} className="border-t border-gray-100">
+        <td className="px-3 py-2 text-gray-600 text-xs">{new Date(c.fecha||c.created_at).toLocaleDateString("es-MX")}</td>
+        <td className="px-3 py-2 font-medium text-gray-800">{cat.articulo||"?"}</td>
+        <td className="px-3 py-2 text-gray-600 text-xs">{prov.nombre||"?"}</td>
+        <td className="px-3 py-2 text-right">{c.cantidad} {cat.unidad_clave||""}</td>
+        <td className="px-3 py-2 text-right">{fmt(c.costo_unitario)}</td>
+        <td className="px-3 py-2 text-right font-bold">{fmt(c.costo_total)}</td>
+        <td className="px-3 py-2"><Badge v={c.metodo_pago==="credito"?"warning":c.metodo_pago==="efectivo"?"success":"info"}>{c.metodo_pago}</Badge></td>
+      </tr>);})}</tbody></table></div>}
+  </div>);
+}
+
+// ======================== GASTOS OPERATIVOS ========================
+function GastosView({gastosOp,setGastosOp,catGastos,setCatGastos,rol}){
+  const [form,setForm]=useState({categoria:"",descripcion:"",monto:0,metodo_pago:"transferencia",referencia:"",nota:""});
+  const [newCat,setNewCat]=useState("");
+  const [addingCat,setAddingCat]=useState(false);
+  const [saving,setSaving]=useState(false);
+
+  const recientes=gastosOp.slice().sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).slice(0,20);
+  const totalMes=(()=>{const hoy=new Date();const mesInicio=new Date(hoy.getFullYear(),hoy.getMonth(),1).toISOString().split("T")[0];return gastosOp.filter(g=>(g.fecha||g.created_at?.split("T")[0])>=mesInicio).reduce((s,g)=>s+parseFloat(g.monto||0),0);})();
+  const byCat={};
+  gastosOp.forEach(g=>{const k=g.categoria||"Otros";if(!byCat[k])byCat[k]=0;byCat[k]+=parseFloat(g.monto||0);});
+  const catSorted=Object.entries(byCat).sort((a,b)=>b[1]-a[1]);
+
+  const handleSave=async()=>{
+    if(!form.categoria||!form.descripcion||form.monto<=0){alert("Completa categoría, descripción y monto");return;}
+    setSaving(true);
+    const res=await sbPost("gastos_operativos",{categoria:form.categoria,descripcion:form.descripcion,monto:form.monto,metodo_pago:form.metodo_pago,fecha:new Date().toISOString().split("T")[0],referencia:form.referencia||null,registrado_por:rol,nota:form.nota||null});
+    if(res&&res[0]){
+      setGastosOp([res[0],...gastosOp]);
+      alert("Gasto registrado");
+      setForm({categoria:form.categoria,descripcion:"",monto:0,metodo_pago:"transferencia",referencia:"",nota:""});
+    }else{alert("Error al registrar");}
+    setSaving(false);
+  };
+
+  const handleAddCat=async()=>{
+    if(!newCat.trim())return;
+    const res=await sbPost("categorias_gastos",{nombre:newCat.trim(),activa:true});
+    if(res&&res[0]){setCatGastos([...catGastos,res[0]]);setNewCat("");setAddingCat(false);setForm({...form,categoria:newCat.trim()});}
+  };
+
+  return(<div>
+    <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <div><h2 className="text-lg font-bold text-gray-900">Gastos operativos</h2><p className="text-sm text-gray-500">Gastos indirectos: agua, luz, renta, nómina, etc.</p></div>
+      <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-2 text-right"><p className="text-xs text-red-600">Total este mes</p><p className="text-xl font-bold text-red-600">{fmt(totalMes)}</p></div>
+    </div>
+
+    <div className="bg-white border-2 border-red-200 rounded-xl p-4 mb-4">
+      <h3 className="text-sm font-bold text-gray-700 mb-3">Registrar gasto</h3>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
+        <div><label className="text-xs text-gray-500 block mb-1">Categoría</label><div className="flex gap-1">{addingCat?<><input className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Nueva categoría" value={newCat} onChange={e=>setNewCat(e.target.value)}/><button onClick={handleAddCat} className="text-xs bg-emerald-500 text-white px-2 py-1.5 rounded-lg">✓</button><button onClick={()=>setAddingCat(false)} className="text-xs text-gray-500 px-1">✕</button></>:<><select className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={form.categoria} onChange={e=>setForm({...form,categoria:e.target.value})}><option value="">Seleccionar...</option>{catGastos.map(c=><option key={c.id} value={c.nombre}>{c.nombre}</option>)}</select><button onClick={()=>setAddingCat(true)} className="text-xs text-amber-700 hover:bg-amber-100 px-2 py-1.5 rounded-lg" title="Nueva categoría">+</button></>}</div></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Descripción</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Pago de luz enero" value={form.descripcion} onChange={e=>setForm({...form,descripcion:e.target.value})}/></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Monto</label><input type="number" min="0" step="0.01" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={form.monto||""} onChange={e=>setForm({...form,monto:parseFloat(e.target.value)||0})}/></div>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
+        <div><label className="text-xs text-gray-500 block mb-1">Método de pago</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={form.metodo_pago} onChange={e=>setForm({...form,metodo_pago:e.target.value})}><option value="transferencia">Transferencia</option><option value="efectivo">Efectivo</option><option value="tarjeta">Tarjeta</option></select></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Referencia</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="# recibo, factura" value={form.referencia} onChange={e=>setForm({...form,referencia:e.target.value})}/></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Nota</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Opcional" value={form.nota} onChange={e=>setForm({...form,nota:e.target.value})}/></div>
+      </div>
+      <Btn onClick={handleSave} disabled={saving||!form.categoria||!form.descripcion||form.monto<=0}>{saving?"Guardando...":"Registrar gasto"}</Btn>
+    </div>
+
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {recientes.length>0&&<div className="bg-white border border-gray-200 rounded-xl overflow-hidden"><div className="px-4 py-2 bg-gray-50 border-b border-gray-100"><h3 className="text-sm font-bold text-gray-700">Gastos recientes</h3></div><table className="w-full text-sm"><thead><tr>
+        {["Fecha","Categoría","Descripción","Monto","Pago"].map(h=><th key={h} className={`px-3 py-2 font-medium text-gray-500 text-xs ${h==="Monto"?"text-right":"text-left"}`}>{h}</th>)}
+      </tr></thead><tbody>{recientes.map(g=>(<tr key={g.id} className="border-t border-gray-100">
+        <td className="px-3 py-2 text-gray-500 text-xs">{new Date(g.fecha||g.created_at).toLocaleDateString("es-MX")}</td>
+        <td className="px-3 py-2"><Badge v="danger">{g.categoria}</Badge></td>
+        <td className="px-3 py-2 text-gray-800 text-xs">{g.descripcion}</td>
+        <td className="px-3 py-2 text-right font-bold text-red-600">{fmt(g.monto)}</td>
+        <td className="px-3 py-2"><Badge v={g.metodo_pago==="efectivo"?"success":"info"}>{g.metodo_pago}</Badge></td>
+      </tr>))}</tbody></table></div>}
+
+      {catSorted.length>0&&<div className="bg-white border border-gray-200 rounded-xl p-4"><h3 className="text-sm font-bold text-gray-700 mb-3">Acumulado por categoría</h3>
+        {catSorted.map(([cat,total])=>{const pct=catSorted[0][1]>0?(total/catSorted[0][1])*100:0;return(<div key={cat} className="mb-3"><div className="flex justify-between text-sm mb-1"><span className="text-gray-700 font-medium">{cat}</span><span className="font-bold text-red-600">{fmt(total)}</span></div><div className="w-full bg-gray-100 rounded-full h-3"><div className="h-3 rounded-full transition-all" style={{width:`${Math.min(pct,100)}%`,background:"#d6816c"}}/></div></div>);})}
+        <div className="border-t border-gray-100 pt-2 mt-2 flex justify-between font-bold text-sm"><span>Total</span><span className="text-red-600">{fmt(catSorted.reduce((s,[,t])=>s+t,0))}</span></div>
+      </div>}
+    </div>
+  </div>);
+}
+
 // ======================== APP v6.0 ========================
 function App(){
   const [rol,setRol]=useState(null);
@@ -1070,6 +1217,9 @@ function App(){
   const [recepcionDetalle,setRecepcionDetalle]=useState([]);
   const [cxp,setCxp]=useState([]);
   const [pagos,setPagos]=useState([]);
+  const [comprasDirectas,setComprasDirectas]=useState([]);
+  const [gastosOp,setGastosOp]=useState([]);
+  const [catGastos,setCatGastos]=useState([]);
 
   // Check URL for provider token
   useEffect(()=>{
@@ -1081,7 +1231,7 @@ function App(){
   useEffect(()=>{
     async function load(){
       setLoadMsg("Conectando...");
-      const tables=["catalogo","proveedores","tipos_flujo_costo","unidades_medida","inventario_almacen","pedidos","pedido_detalle","pedido_proveedor_estatus","lotes_almacen","recepciones","recepcion_detalle","cuentas_por_pagar","pagos"];
+      const tables=["catalogo","proveedores","tipos_flujo_costo","unidades_medida","inventario_almacen","pedidos","pedido_detalle","pedido_proveedor_estatus","lotes_almacen","recepciones","recepcion_detalle","cuentas_por_pagar","pagos","compras_directas","gastos_operativos","categorias_gastos"];
       const results={};
       for(const t of tables){setLoadMsg(`Cargando ${t}...`);results[t]=await sbGet(t);}
       
@@ -1103,6 +1253,9 @@ function App(){
       setRecepcionDetalle(results.recepcion_detalle||[]);
       setCxp(results.cuentas_por_pagar||[]);
       setPagos(results.pagos||[]);
+      setComprasDirectas(results.compras_directas||[]);
+      setGastosOp(results.gastos_operativos||[]);
+      setCatGastos((results.categorias_gastos||[]).filter(c=>c.activa!==false));
 
       // Handle provider token access
       if(provToken){
@@ -1190,9 +1343,20 @@ function App(){
   const handleReasignar=async(detalleId,nuevoProvId)=>{
     const det=pedidoDetalle.find(d=>d.id===detalleId);
     if(!det)return;
-    await sbPost("pedido_reasignaciones",{pedido_detalle_id:detalleId,pedido_id:det.pedido_id,proveedor_original_id:det.proveedor_id,proveedor_nuevo_id:nuevoProvId});
+    const oldProvId=det.proveedor_id;
+    await sbPost("pedido_reasignaciones",{pedido_detalle_id:detalleId,pedido_id:det.pedido_id,proveedor_original_id:oldProvId,proveedor_nuevo_id:nuevoProvId});
     await sbPatch("pedido_detalle",detalleId,{proveedor_id:nuevoProvId});
-    setPedidoDetalle(pedidoDetalle.map(d=>d.id===detalleId?{...d,proveedor_id:nuevoProvId}:d));
+    const updatedDetalle=pedidoDetalle.map(d=>d.id===detalleId?{...d,proveedor_id:nuevoProvId}:d);
+    setPedidoDetalle(updatedDetalle);
+    // Clean orphan: if no items left for old provider, delete its estatus
+    const remainingForOldProv=updatedDetalle.filter(d=>d.pedido_id===det.pedido_id&&d.proveedor_id===oldProvId);
+    if(remainingForOldProv.length===0){
+      const orphanPE=provEstatus.find(pe=>pe.pedido_id===det.pedido_id&&pe.proveedor_id===oldProvId);
+      if(orphanPE){await sbDelete("pedido_proveedor_estatus",orphanPE.id);setProvEstatus(provEstatus.filter(pe=>pe.id!==orphanPE.id));}
+    }
+    // Ensure new provider has estatus
+    const existsPE=provEstatus.find(pe=>pe.pedido_id===det.pedido_id&&pe.proveedor_id===nuevoProvId);
+    if(!existsPE){const newPE=await sbPost("pedido_proveedor_estatus",{pedido_id:det.pedido_id,proveedor_id:nuevoProvId,estatus:"pendiente"});if(newPE&&newPE[0])setProvEstatus(prev=>[...prev,newPE[0]]);}
   };
 
   const handleUpdatePrecio=async(detalleId,precio)=>{
@@ -1318,11 +1482,11 @@ function App(){
   if(!rol)return<LoginScreen onLogin={r=>{setRol(r);setView(r==="finanzas"?"finanzas":r==="almacen"?"almacen":"bandeja");}}/>;
 
   const tabs=[];
-  if(["admin","compras"].includes(rol)){tabs.push({id:"bandeja",l:"Pedidos"},{id:"almacen",l:"Almacén"},{id:"finanzas",l:"Finanzas"},{id:"dashboard",l:"Dashboard"});if(rol==="admin")tabs.push({id:"catalogo",l:"Catálogo"});}
-  else if(rol==="sucursal")tabs.push({id:"bandeja",l:"Mis pedidos"},{id:"recepcion",l:"Recepción"});
+  if(["admin","compras"].includes(rol)){tabs.push({id:"bandeja",l:"Pedidos"},{id:"almacen",l:"Almacén"},{id:"finanzas",l:"Finanzas"},{id:"gastos",l:"Gastos"},{id:"dashboard",l:"Dashboard"});if(rol==="admin")tabs.push({id:"catalogo",l:"Catálogo"});}
+  else if(rol==="sucursal")tabs.push({id:"bandeja",l:"Mis pedidos"},{id:"recepcion",l:"Recepción"},{id:"compras_directas",l:"Compras directas"},{id:"gastos",l:"Gastos"});
   else if(rol==="proveedor")tabs.push({id:"bandeja",l:"Mis pedidos"});
   else if(rol==="almacen")tabs.push({id:"almacen",l:"Inventario"},{id:"bandeja",l:"Pedidos"});
-  else if(rol==="finanzas")tabs.push({id:"finanzas",l:"Finanzas"},{id:"dashboard",l:"Dashboard"});
+  else if(rol==="finanzas")tabs.push({id:"finanzas",l:"Finanzas"},{id:"gastos",l:"Gastos"},{id:"compras_directas",l:"Compras directas"},{id:"dashboard",l:"Dashboard"});
   else tabs.push({id:"dashboard",l:"Dashboard"});
 
   const currentDetalle=selectedPedido?pedidoDetalle.filter(d=>d.pedido_id===selectedPedido.id):[];
@@ -1404,6 +1568,8 @@ function App(){
       {view==="catalogo"&&rol==="admin"&&<CatalogoView catalogo={catalogo} setCatalogo={setCatalogo} proveedores={proveedores} unidades={unidades} inventario={inventario}/>}
       {view==="recepcion"&&rol==="sucursal"&&<RecepcionView pedidos={pedidos} pedidoDetalle={pedidoDetalle} proveedores={proveedores} provEstatus={provEstatus} catalogo={catalogo} recepciones={recepciones} recepcionDetalle={recepcionDetalle} onRecibir={handleRecibir}/>}
       {view==="finanzas"&&["admin","compras","finanzas"].includes(rol)&&<FinanzasView cxp={cxp} setCxp={setCxp} pagos={pagos} setPagos={setPagos} pedidos={pedidos} proveedores={proveedores} pedidoDetalle={pedidoDetalle} catalogo={catalogo}/>}
+      {view==="compras_directas"&&["sucursal","admin","compras","finanzas"].includes(rol)&&<ComprasDirectasView comprasDirectas={comprasDirectas} setComprasDirectas={setComprasDirectas} catalogo={catalogo} proveedores={proveedores} cxp={cxp} setCxp={setCxp}/>}
+      {view==="gastos"&&["sucursal","admin","compras","finanzas"].includes(rol)&&<GastosView gastosOp={gastosOp} setGastosOp={setGastosOp} catGastos={catGastos} setCatGastos={setCatGastos} rol={rol}/>}
     </div>
   </div>);
 }
