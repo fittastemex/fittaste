@@ -1,7 +1,7 @@
 # CODEOWNERS — Define quién debe aprobar cambios por carpeta/archivo.
 #
 # Sintaxis:
-#   <patrón>   <@usuario-o-@org/equipo>
+#   <patrón>   <@fittastemex> 
 #
 # El primer patrón que coincida gana. Estos usuarios serán solicitados
 # automáticamente como revisores cuando se abra un PR que toque sus archivos.
@@ -10,11 +10,11 @@
 # los usuarios o equipos reales de tu organización antes de hacer merge.
 
 # Dueños por defecto de todo el repositorio
-*                       @fittastemex/maintainers
+*                       @fittastemex
 
 # Configuración crítica e infraestructura
-/.github/               @fittastemex/maintainers
-/.mcp.json              @fittastemex/maintainers
+/.github/               @fittastemex
+/.mcp.json              @fittastemex
 
 # Aplicación principal
-/index.html             @fittastemex/maintainers
+/index.html             @fittastemex
