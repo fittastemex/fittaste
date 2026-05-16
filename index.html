@@ -22,7 +22,7 @@ const {useState,useEffect,useMemo} = React;
 // ======================== CONFIG v6.0 ========================
 const SB="https://jxyrbvgpjsxevbhaxprr.supabase.co/rest/v1";
 const KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4eXJidmdwanN4ZXZiaGF4cHJyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3MTgyNTMsImV4cCI6MjA5MDI5NDI1M30.Tvo6vZq3yoWNbSY-mNMQkF-eZw16Qu4z7LJGvhn-LYs";
-const V="6.0";
+const V="6.1";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 async function sbGet(t,params=""){try{const r=await fetch(`${SB}/${t}?select=*${params?"&"+params:""}`,{headers:H});const d=await r.json();return Array.isArray(d)?d:[];}catch(e){console.error(t,e);return[];}}
@@ -976,7 +976,7 @@ function RecepcionView({pedidos,pedidoDetalle,proveedores,provEstatus,catalogo,r
     const items=pedidoDetalle.filter(d=>d.pedido_id===pedId&&d.proveedor_id===provId);
     const hayFaltante=items.some(d=>(cantRecibida[d.id]||0)!==d.cantidad);
     const estatus=hayFaltante?"con_faltantes":"completo";
-    await onRecibir(pedId,provId,estatus,items.map(d=>({pedido_detalle_id:d.id,cantidad_esperada:d.cantidad,cantidad_recibida:cantRecibida[d.id]||0,tiene_discrepancia:(cantRecibida[d.id]||0)!==d.cantidad,nota:notasRecep[d.id]||null})));
+    await onRecibir(pedId,provId,estatus,items.map(d=>({pedido_detalle_id:d.id,cantidad_pedida:d.cantidad,cantidad_esperada:d.cantidad,cantidad_recibida:cantRecibida[d.id]||0,tiene_discrepancia:(cantRecibida[d.id]||0)!==d.cantidad,nota:notasRecep[d.id]||null})));
     setRecibiendo(null);setSaving(false);
   };
 
@@ -1638,6 +1638,9 @@ function App(){
           const cat=catalogo.find(c=>c.id===d.catalogo_id);if(!cat)continue;
           const inv=cat.inv_id?updatedInv.find(i=>i.id===cat.inv_id):updatedInv.find(i=>{const dL=i.descripcion.toLowerCase();const words=cat.articulo.toLowerCase().split(" ");return words.some(w=>w.length>3&&dL.includes(w));});
           if(!inv)continue;
+          // v6.1: Registrar movimiento de salida en BD (trazabilidad PEPS)
+          const movRes=await sbPost("movimientos_almacen",{inventario_id:inv.id,pedido_id:pedId,fecha:new Date().toISOString().split("T")[0],tipo:"salida",cantidad:cs,nota:`PEPS Pedido ${pedidosAlm.find(p=>p.id===pedId)?.numero_pedido||""}`});
+          const movId=movRes&&movRes[0]?movRes[0].id:null;
           // Get lotes for this product sorted by date (PEPS)
           const prodLotes=updatedLotes.filter(l=>l.inventario_id===inv.id&&(l.existencia_restante||0)>0).sort((a,b)=>new Date(a.fecha_entrada)-new Date(b.fecha_entrada));
           let remaining=cs;let costoPeps=0;
@@ -1647,6 +1650,8 @@ function App(){
             const take=Math.min(remaining,available);
             const costoU=parseFloat(lote.costo_unitario)+(parseFloat(lote.iva)||0);
             costoPeps+=take*costoU;
+            // v6.1: Registrar salida PEPS por lote (auditoría de costos)
+            await sbPost("salidas_peps",{movimiento_id:movId,lote_id:lote.id,cantidad_consumida:take,costo_unitario_lote:costoU,costo_total:Math.round(take*costoU*100)/100});
             // Update lote
             const newRest=available-take;
             await sbPatch("lotes_almacen",lote.id,{existencia_restante:newRest});
