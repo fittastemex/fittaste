@@ -1040,7 +1040,7 @@ function FinanzasView({cxp,setCxp,pagos,setPagos,pedidos,proveedores,pedidoDetal
   const pendientes=cxp.filter(c=>c.estatus!=="pagado");
   const pagados=cxp.filter(c=>c.estatus==="pagado");
   const totalAdeudado=pendientes.reduce((s,c)=>s+(parseFloat(c.monto_total)-parseFloat(c.monto_pagado||0)),0);
-  const totalPagadoMes=pagos.filter(p=>{const f=p.fecha_pago||p.created_at?.split("T")[0];const hoy=new Date();const mesInicio=new Date(hoy.getFullYear(),hoy.getMonth(),1).toISOString().split("T")[0];return f>=mesInicio;}).reduce((s,p)=>s+parseFloat(p.monto),0);
+  const totalPagadoMes=pagos.filter(p=>{const f=p.fecha_pago||p.created_at?.split("T")[0];const hoy=new Date();const mesInicio=new Date(hoy.getFullYear(),hoy.getMonth(),1).toISOString().split("T")[0];return f>=mesInicio;}).reduce((s,p)=>s+parseFloat(p.monto_pagado),0);
 
   // By proveedor
   const byProv={};
@@ -1058,7 +1058,7 @@ function FinanzasView({cxp,setCxp,pagos,setPagos,pedidos,proveedores,pedidoDetal
   const registrarPago=async()=>{
     if(!newPago.cxp_id||newPago.monto<=0)return;
     setSaving(true);
-    const res=await sbPost("pagos",{cxp_id:newPago.cxp_id,monto:newPago.monto,fecha_pago:new Date().toISOString().split("T")[0],metodo_pago:newPago.metodo,referencia:newPago.referencia||null,notas:newPago.notas||null});
+    const res=await sbPost("pagos",{cuenta_id:newPago.cxp_id,monto_pagado:newPago.monto,fecha_pago:new Date().toISOString().split("T")[0],metodo_pago:newPago.metodo,referencia:newPago.referencia||null,nota:newPago.notas||null});
     if(res&&res[0]){
       setPagos([...pagos,res[0]]);
       const c=cxp.find(x=>x.id===newPago.cxp_id);
@@ -1127,14 +1127,14 @@ function FinanzasView({cxp,setCxp,pagos,setPagos,pedidos,proveedores,pedidoDetal
     :<table className="w-full text-sm"><thead className="bg-gray-50"><tr>
       {["Fecha","Pedido","Proveedor","Monto","Método","Referencia"].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${h==="Monto"?"text-right":"text-left"}`}>{h}</th>)}
     </tr></thead><tbody>{pagos.slice().sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).map(p=>{
-      const c=cxp.find(x=>x.id===p.cxp_id);
+      const c=cxp.find(x=>x.id===p.cuenta_id);
       const ped=pedidos.find(x=>x.id===c?.pedido_id);
       const prov=proveedores.find(x=>x.id===c?.proveedor_id);
       return(<tr key={p.id} className="border-t border-gray-100">
         <td className="px-3 py-2 text-gray-600 text-xs">{new Date(p.fecha_pago||p.created_at).toLocaleDateString("es-MX")}</td>
         <td className="px-3 py-2 font-medium text-gray-800">{ped?.numero_pedido||"—"}</td>
         <td className="px-3 py-2 text-gray-600 text-xs">{prov?.nombre||"?"}</td>
-        <td className="px-3 py-2 text-right font-bold text-emerald-600">{fmt(p.monto)}</td>
+        <td className="px-3 py-2 text-right font-bold text-emerald-600">{fmt(p.monto_pagado)}</td>
         <td className="px-3 py-2"><Badge v={p.metodo_pago==="transferencia"?"info":p.metodo_pago==="efectivo"?"warning":"purple"}>{p.metodo_pago}</Badge></td>
         <td className="px-3 py-2 text-gray-400 text-xs">{p.referencia||"—"}</td>
       </tr>);})}</tbody></table>}</div>}
@@ -1150,7 +1150,7 @@ function FinanzasView({cxp,setCxp,pagos,setPagos,pedidos,proveedores,pedidoDetal
           {provSorted.length>0&&<div className="border-t border-gray-100 pt-2 mt-2 flex justify-between font-bold text-sm"><span>Total adeudado</span><span className="text-red-600">{fmt(totalAdeudado)}</span></div>}
         </div>
         <div className="bg-white border border-gray-200 rounded-xl p-4"><h3 className="text-sm font-bold text-gray-700 mb-3">Métodos de pago (este mes)</h3>
-          {(()=>{const hoy=new Date();const mesInicio=new Date(hoy.getFullYear(),hoy.getMonth(),1).toISOString().split("T")[0];const pagosMes=pagos.filter(p=>(p.fecha_pago||p.created_at?.split("T")[0])>=mesInicio);const byMetodo={};pagosMes.forEach(p=>{const m=p.metodo_pago||"otro";if(!byMetodo[m])byMetodo[m]=0;byMetodo[m]+=parseFloat(p.monto);});const metodos=Object.entries(byMetodo).sort((a,b)=>b[1]-a[1]);return metodos.length===0?<p className="text-sm text-gray-400">Sin pagos este mes</p>:metodos.map(([m,total])=><div key={m} className="flex justify-between py-2 border-b border-gray-50 last:border-0"><div className="flex items-center gap-2"><Badge v={m==="transferencia"?"info":m==="efectivo"?"warning":"purple"}>{m}</Badge></div><span className="font-bold text-gray-800">{fmt(total)}</span></div>);})()}
+          {(()=>{const hoy=new Date();const mesInicio=new Date(hoy.getFullYear(),hoy.getMonth(),1).toISOString().split("T")[0];const pagosMes=pagos.filter(p=>(p.fecha_pago||p.created_at?.split("T")[0])>=mesInicio);const byMetodo={};pagosMes.forEach(p=>{const m=p.metodo_pago||"otro";if(!byMetodo[m])byMetodo[m]=0;byMetodo[m]+=parseFloat(p.monto_pagado);});const metodos=Object.entries(byMetodo).sort((a,b)=>b[1]-a[1]);return metodos.length===0?<p className="text-sm text-gray-400">Sin pagos este mes</p>:metodos.map(([m,total])=><div key={m} className="flex justify-between py-2 border-b border-gray-50 last:border-0"><div className="flex items-center gap-2"><Badge v={m==="transferencia"?"info":m==="efectivo"?"warning":"purple"}>{m}</Badge></div><span className="font-bold text-gray-800">{fmt(total)}</span></div>);})()}
         </div>
       </div>
     </div>}
