@@ -1332,11 +1332,43 @@ function App(){
   useEffect(()=>{
     async function load(){
       setLoadMsg("Conectando...");
+
+      // Fast-path proveedor: cuando se entra con ?token=, cargar SOLO el pedido
+      // de ese proveedor en vez de toda la base. Antes se descargaban las 16
+      // tablas del negocio (incluyendo finanzas) lo que en celulares lentos
+      // dejaba al proveedor atorado en "Cargando..." y exponía datos privados.
+      if(provToken){
+        setLoadMsg("Validando link...");
+        const peRows=await sbGet("pedido_proveedor_estatus",`token_acceso=eq.${encodeURIComponent(provToken)}`);
+        const pe=(peRows||[])[0];
+        if(!pe){setError("Link expirado o inválido.");setLoading(false);return;}
+        setLoadMsg("Cargando pedido...");
+        const [pedRows,det,ums,provRows]=await Promise.all([
+          sbGet("pedidos",`id=eq.${pe.pedido_id}`),
+          sbGet("pedido_detalle",`pedido_id=eq.${pe.pedido_id}&proveedor_id=eq.${pe.proveedor_id}`),
+          sbGet("unidades_medida"),
+          sbGet("proveedores",`id=eq.${pe.proveedor_id}`)
+        ]);
+        const ped=(pedRows||[])[0];
+        if(!ped){setError("Link expirado o inválido.");setLoading(false);return;}
+        const uMap={};(ums||[]).forEach(u=>{uMap[u.id]=u;});
+        const catIds=[...new Set((det||[]).map(d=>d.catalogo_id).filter(Boolean))];
+        const catRows=catIds.length?await sbGet("catalogo",`id=in.(${catIds.join(",")})`):[];
+        setCatalogo((catRows||[]).map(c=>({id:c.id,sku:c.sku,articulo:c.articulo,unidad_clave:uMap[c.unidad_id]?.clave||"?",aplica_iva:c.aplica_iva!==false})));
+        setPedidoDetalle(det||[]);
+        setProvEstatus([pe]);
+        setProveedores((provRows||[]).map(p=>({id:p.id,nombre:p.nombre})));
+        setSelectedPedido(ped);
+        setRol("proveedor_token");
+        setLoading(false);
+        return;
+      }
+
       const tables=["catalogo","proveedores","tipos_flujo_costo","unidades_medida","inventario_almacen","pedidos","pedido_detalle","pedido_proveedor_estatus","lotes_almacen","recepciones","recepcion_detalle","cuentas_por_pagar","pagos","compras_directas","gastos_operativos","categorias_gastos"];
       const results={};
       for(const t of tables){setLoadMsg(`Cargando ${t}...`);results[t]=await sbGet(t);}
       
-      if(results.catalogo.length===0&&!provToken){setError("Sin datos. Verifica SQL y permisos.");setLoading(false);return;}
+      if(results.catalogo.length===0){setError("Sin datos. Verifica SQL y permisos.");setLoading(false);return;}
 
       const uMap={};(results.unidades_medida||[]).forEach(u=>{uMap[u.id]=u;});
       const pMap={};(results.proveedores||[]).forEach(p=>{pMap[p.id]=p;});
@@ -1359,12 +1391,6 @@ function App(){
       setCatGastos((results.categorias_gastos||[]).filter(c=>c.activa!==false));
       setFlujos((results.tipos_flujo_costo||[]).map(f=>({id:f.id,nombre:f.nombre,quien_captura_precio:f.quien_captura_precio})));
 
-      // Handle provider token access
-      if(provToken){
-        const pe=results.pedido_proveedor_estatus.find(x=>x.token_acceso===provToken);
-        if(pe){setRol("proveedor_token");setSelectedPedido(results.pedidos.find(p=>p.id===pe.pedido_id));} 
-        else{setError("Link expirado o inválido.");}
-      }
       setLoading(false);
     }
     load();
