@@ -9,8 +9,12 @@
   body{font-family:'Raleway',sans-serif;margin:0}
   h1,h2,h3,.ft-title{font-family:'Raleway',sans-serif;font-weight:900}
 </style>
-<script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+<!-- Versiones fijas: jsdelivr sirve cada versión exacta con URL inmutable, así
+     "latest" no puede actualizarse solo y romper producción (ver PR #5).
+     Pendiente Nivel 2: Tailwind usa Play CDN sin versión fija (no apto para
+     producción); vendorizar/precompilar cuando haya entorno con internet. -->
+<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 </head>
