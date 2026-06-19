@@ -1409,21 +1409,29 @@ function App(){
     const sucId=sucursal[0]?.id;
     const serial=genSerial(pedidos);
     const res=await sbPost("pedidos",{fecha:new Date().toISOString().split("T")[0],sucursal_id:sucId,estatus:"creado",total_teorico:Math.round(totalTeo*100)/100,numero_pedido:serial});
-    if(res&&res[0]){
-      const pedId=res[0].id;
-      for(const item of items){await sbPost("pedido_detalle",{pedido_id:pedId,catalogo_id:item.catalogo_id,proveedor_id:item.proveedor_id,cantidad:item.cantidad,costo_referencia:item.costo_referencia});}
-      // Create estatus per proveedor
-      const provIds=[...new Set(items.map(i=>i.proveedor_id))];
-      for(const pid of provIds){await sbPost("pedido_proveedor_estatus",{pedido_id:pedId,proveedor_id:pid,estatus:"pendiente"});}
-      // Reload
-      setPedidos([{...res[0],numero_pedido:serial},...pedidos]);
-      const det=await sbGet("pedido_detalle",`pedido_id=eq.${pedId}`);
-      setPedidoDetalle([...pedidoDetalle,...det]);
-      const pe=await sbGet("pedido_proveedor_estatus",`pedido_id=eq.${pedId}`);
-      setProvEstatus([...provEstatus,...pe]);
-      setSubview(null);
-      alert(`Pedido ${serial} creado`);
+    if(!(res&&res[0])){alert("No se pudo crear el pedido. Revisa tu conexión e intenta de nuevo.");return;}
+    const pedId=res[0].id;
+    // Insertar TODAS las líneas en una sola operación para poder detectar fallos.
+    // Antes se insertaban una por una ignorando errores, lo que dejaba pedidos
+    // "fantasma" (con estatus pero sin productos) cuando el guardado fallaba.
+    const detRows=items.map(item=>({pedido_id:pedId,catalogo_id:item.catalogo_id,proveedor_id:item.proveedor_id,cantidad:item.cantidad,costo_referencia:item.costo_referencia}));
+    const detRes=await sbPost("pedido_detalle",detRows);
+    if(!Array.isArray(detRes)||detRes.length!==detRows.length){
+      // Falló el guardado de los productos: revertir el pedido para no dejarlo vacío.
+      await sbDelete("pedidos",pedId);
+      alert("No se pudieron guardar los productos del pedido (posible permiso o restricción en la base de datos). El pedido NO se creó; vuelve a intentarlo o avisa a soporte.");
+      return;
     }
+    // Crear estatus por proveedor
+    const provIds=[...new Set(items.map(i=>i.proveedor_id))];
+    for(const pid of provIds){await sbPost("pedido_proveedor_estatus",{pedido_id:pedId,proveedor_id:pid,estatus:"pendiente"});}
+    // Reload
+    setPedidos([{...res[0],numero_pedido:serial},...pedidos]);
+    setPedidoDetalle([...pedidoDetalle,...detRes]);
+    const pe=await sbGet("pedido_proveedor_estatus",`pedido_id=eq.${pedId}`);
+    setProvEstatus([...provEstatus,...pe]);
+    setSubview(null);
+    alert(`Pedido ${serial} creado`);
   };
 
   // ACTIONS
