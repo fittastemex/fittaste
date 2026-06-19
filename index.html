@@ -29,7 +29,10 @@ const KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6
 const V="6.1";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
-async function sbGet(t,params=""){try{const r=await fetch(`${SB}/${t}?select=*${params?"&"+params:""}`,{headers:H});const d=await r.json();return Array.isArray(d)?d:[];}catch(e){console.error(t,e);return[];}}
+// Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
+// al pasar pedido_detalle de 1000 filas la app dejaba de cargar los pedidos
+// nuevos (sus líneas quedaban fuera del corte). Trae todas con Range.
+async function sbGet(t,params=""){try{const pageSize=1000;let from=0,all=[];while(true){const r=await fetch(`${SB}/${t}?select=*${params?"&"+params:""}`,{headers:{...H,"Range-Unit":"items",Range:`${from}-${from+pageSize-1}`}});const d=await r.json();if(!Array.isArray(d))return all;all=all.concat(d);if(d.length<pageSize)break;from+=pageSize;}return all;}catch(e){console.error(t,e);return[];}}
 async function sbPost(t,data){try{const r=await fetch(`${SB}/${t}`,{method:"POST",headers:{...H,Prefer:"return=representation"},body:JSON.stringify(data)});if(!r.ok){const err=await r.json();console.error(`POST ${t} error:`,r.status,err);return null;}return await r.json();}catch(e){console.error(t,e);return null;}}
 async function sbPatch(t,id,data){try{const r=await fetch(`${SB}/${t}?id=eq.${id}`,{method:"PATCH",headers:{...H,Prefer:"return=representation"},body:JSON.stringify(data)});return await r.json();}catch(e){console.error(t,e);return null;}}
 async function sbDelete(t,id){try{const r=await fetch(`${SB}/${t}?id=eq.${id}`,{method:"DELETE",headers:H});return r.ok;}catch(e){console.error(t,e);return false;}}
