@@ -1,0 +1,30 @@
+{
+  "_comentario": "Copia este archivo como config.json y llena tus datos. config.json NUNCA se sube a git (contiene contraseñas).",
+
+  "sqlServer": {
+    "server": "localhost\\NATIONALSOFT",
+    "database": "softrestaurant11",
+    "user": "sa",
+    "password": "AQUI_TU_PASSWORD_SQL",
+    "options": { "trustServerCertificate": true, "encrypt": false }
+  },
+
+  "supabase": {
+    "url": "https://jxyrbvgpjsxevbhaxprr.supabase.co/rest/v1",
+    "apiKey": "AQUI_LA_ANON_KEY_DE_SUPABASE"
+  },
+
+  "intervaloMinutos": 2,
+
+  "formaPagoMap": {
+    "efectivo": ["EFECTIVO"],
+    "tarjeta": ["TARJETA", "VISA", "MASTER", "AMEX", "DEBITO", "CREDITO"],
+    "plataforma": ["UBER", "RAPPI", "DIDI"]
+  },
+
+  "canalPlataforma": {
+    "UBER": "ubereats",
+    "RAPPI": "rappi",
+    "DIDI": "didi"
+  }
+}
