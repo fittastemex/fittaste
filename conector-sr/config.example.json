@@ -18,6 +18,7 @@
   },
 
   "intervaloMinutos": 2,
+  "sincronizarMenu": true,
 
   "formaPagoMap": {
     "efectivo": ["EFECTIVO"],

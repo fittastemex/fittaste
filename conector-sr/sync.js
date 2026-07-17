@@ -46,6 +46,14 @@ const SQL_PAGOS = `
   LEFT JOIN formasdepago f ON f.idformadepago = cp.idformadepago
   WHERE cp.folio = @folio`;
 
+// Menú completo de SR (catálogo de productos con precio). Se sincroniza en
+// cada ciclo hacia productos_venta: alta de nuevos y actualización de
+// nombre/precio de existentes. Ajustar columnas tras correr explorar-sr.js
+// si tu versión usa otros nombres (ej. precio1, productosprecios).
+const SQL_MENU = `
+  SELECT p.idproducto, p.descripcion, p.precio
+  FROM productos p`;
+
 // ---------- Helpers Supabase (REST/PostgREST) ----------
 const SB = CONFIG.supabase.url;
 const H = {
@@ -144,19 +152,47 @@ async function sincronizar() {
 
   const pool = await sql.connect({ ...CONFIG.sqlServer });
   const tickets = (await pool.request().input("desde", sql.DateTime, new Date(estado.ultimoCierre)).query(SQL_TICKETS)).recordset;
+
+  // --- Sincronización del MENÚ (corre en cada ciclo, haya o no tickets) ---
+  // Crea productos nuevos con su clave SR y actualiza nombre/precio de los
+  // existentes. No toca preparaciones ni recetas (viven solo en FitTaste).
+  let prods = await sbGet("productos_venta");
+  if (CONFIG.sincronizarMenu !== false) {
+    try {
+      const menu = (await pool.request().query(SQL_MENU)).recordset;
+      let creados = 0, actualizados = 0;
+      for (const m of menu) {
+        const codigo = String(m.idproducto || "").trim();
+        const nombre = (m.descripcion || "").trim();
+        if (!codigo || !nombre) continue;
+        const precio = r2(parseFloat(m.precio) || 0);
+        const prod = prods.find((p) => p.codigo_sr && String(p.codigo_sr).toLowerCase() === codigo.toLowerCase());
+        if (!prod) {
+          const res = await sbPost("productos_venta", { codigo_sr: codigo, nombre, precio_venta: precio });
+          if (res && res[0]) { prods.push(res[0]); creados++; }
+        } else if (!prod.es_preparacion && (prod.nombre !== nombre || (precio > 0 && r2(parseFloat(prod.precio_venta) || 0) !== precio))) {
+          const upd = { nombre, updated_at: new Date().toISOString() };
+          if (precio > 0) upd.precio_venta = precio;
+          await sbPatch("productos_venta", prod.id, upd);
+          Object.assign(prod, upd);
+          actualizados++;
+        }
+      }
+      if (creados || actualizados) console.log(`  Menú sincronizado: ${creados} nuevo(s), ${actualizados} actualizado(s) de ${menu.length} en SR.`);
+    } catch (e) { console.log("  (Menú no sincronizado: " + e.message + " — se calibra el query SQL_MENU con la salida de explorar-sr.js)"); }
+  }
+
   if (tickets.length === 0) { console.log("  Sin tickets nuevos."); await pool.close(); return; }
   console.log(`  ${tickets.length} ticket(s) nuevo(s).`);
 
-  // Datos de FitTaste necesarios para castear productos y explotar recetas
-  const [sucursales, productosVenta, recetas, catalogo] = await Promise.all([
+  // Datos de FitTaste necesarios para explotar recetas
+  const [sucursales, recetas, catalogo] = await Promise.all([
     sbGet("sucursales", "activa=eq.true&limit=1"),
-    sbGet("productos_venta"),
     sbGet("recetas"),
     sbGet("catalogo"),
   ]);
   let invSucursal = await sbGet("inventario_sucursal");
   const sucId = sucursales[0]?.id || null;
-  let prods = productosVenta;
 
   for (const t of tickets) {
     const folio = `TKT-${t.numcheque || t.folio}`;
