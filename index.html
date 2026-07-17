@@ -23,9 +23,19 @@
 <script type="text/babel">
 const {useState,useEffect,useMemo} = React;
 
-// ======================== CONFIG v6.0 ========================
-const SB="https://jxyrbvgpjsxevbhaxprr.supabase.co/rest/v1";
-const KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4eXJidmdwanN4ZXZiaGF4cHJyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3MTgyNTMsImV4cCI6MjA5MDI5NDI1M30.Tvo6vZq3yoWNbSY-mNMQkF-eZw16Qu4z7LJGvhn-LYs";
+// ======================== CONFIG v7.2 ========================
+// Entornos: producción (por defecto) y DEV (proyecto Supabase de pruebas con
+// esquema idéntico). Para probar sin tocar producción abre la app con ?env=dev
+// en la URL; la elección se recuerda en este navegador y ?env=prod la regresa.
+const ENTORNOS={
+  prod:{etiqueta:null,url:"https://jxyrbvgpjsxevbhaxprr.supabase.co/rest/v1",key:"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4eXJidmdwanN4ZXZiaGF4cHJyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3MTgyNTMsImV4cCI6MjA5MDI5NDI1M30.Tvo6vZq3yoWNbSY-mNMQkF-eZw16Qu4z7LJGvhn-LYs"},
+  dev:{etiqueta:"ENTORNO DE PRUEBAS",url:"https://whgfrfdqetjttlfsprtt.supabase.co/rest/v1",key:"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndoZ2ZyZmRxZXRqdHRsZnNwcnR0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQyMzQzMTgsImV4cCI6MjA5OTgxMDMxOH0.TGDgkLM5rZocVopnQJXc6uegOHImAdtgpraPxc2PCE4"}
+};
+const _envParam=new URLSearchParams(window.location.search).get("env");
+if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);}catch(e){}}
+let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
+const SB=ENTORNOS[ENV_ID].url;
+const KEY=ENTORNOS[ENV_ID].key;
 const V="7.2";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
@@ -140,6 +150,7 @@ function LoginScreen({onLogin,provToken}){
         <div className="flex justify-center mb-4"><Logo size={56}/></div>
         <p className="text-sm tracking-widest font-medium" style={{color:"#e2a52a"}}>SER FIT NUNCA SUPO TAN RICO</p>
         <p className="text-gray-500 text-xs mt-3">Compras · Inventario · Ventas SR · Finanzas — v{V}</p>
+        {ENTORNOS[ENV_ID].etiqueta&&<p className="mt-2"><span className="text-xs font-bold px-3 py-1 rounded-full bg-orange-500 text-white">{ENTORNOS[ENV_ID].etiqueta} — los datos aquí NO son reales</span></p>}
       </div>
 
       {!selected?<div>
@@ -2439,7 +2450,7 @@ function App(){
 
   return(<div className="min-h-screen" style={{background:"#FAFAF8"}}>
     <div className="border-b border-gray-200" style={{background:"#2D2D2D"}}><div className="max-w-6xl mx-auto px-4"><div className="flex items-center justify-between py-3">
-      <div className="flex items-center gap-3"><Logo size={32}/><div><h1 className="text-sm font-bold text-white leading-tight">Fit Taste Roma</h1><p className="text-xs text-emerald-400">{rol} — {catalogo.length} productos</p></div></div>
+      <div className="flex items-center gap-3"><Logo size={32}/><div><h1 className="text-sm font-bold text-white leading-tight">Fit Taste Roma{ENTORNOS[ENV_ID].etiqueta&&<span className="ml-2 text-xs font-bold px-2 py-0.5 rounded bg-orange-500 text-white align-middle">{ENTORNOS[ENV_ID].etiqueta}</span>}</h1><p className="text-xs text-emerald-400">{rol} — {catalogo.length} productos</p></div></div>
       <div className="flex items-center gap-1">
         {tabs.map(t=><button key={t.id} onClick={()=>{setView(t.id);setSelectedPedido(null);setSubview(null);}} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${view===t.id?"text-gray-900":"text-gray-400 hover:text-white"}`} style={view===t.id?{background:"#e2a52a"}:{}}>{t.l}</button>)}
         <button onClick={()=>{setRol(null);setView("bandeja");setSelectedPedido(null);}} className="ml-3 px-2 py-1.5 rounded-lg text-xs text-gray-500 hover:text-red-400">Salir</button>
