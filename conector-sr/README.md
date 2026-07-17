@@ -1,6 +1,12 @@
 # Conector SoftRestaurant → FitTaste
 
-Programa pequeño que corre **en la computadora donde está instalado SoftRestaurant** y sube los tickets cobrados a FitTaste cada 2 minutos (configurable). Con esto ya no hace falta importar el reporte a mano: ventas, formas de pago e inventario de sucursal se actualizan casi en tiempo real.
+Programa pequeño que sube los tickets cobrados de SR a FitTaste cada 2 minutos (configurable). Con esto ya no hace falta importar el reporte a mano: ventas, formas de pago e inventario de sucursal se actualizan casi en tiempo real.
+
+**¿Dónde corre?** En cualquier computadora Windows que esté prendida durante el horario de venta y que pueda llegar al SQL Server de SR:
+- **SR local (9.5/10/11):** en la misma PC del POS (`localhost\NATIONALSOFT`).
+- **SR12 con base remota (vía Radmin VPN):** en cualquier PC unida a la VPN. Instala [Radmin VPN](https://www.radmin-vpn.com/es/), únete a la red que te dio soporte de SR (nombre y contraseña de red), y en `config.json` usa la IP del servidor dentro de la VPN con su puerto: `"server": "26.x.x.x,PUERTO"`. **Ojo:** la VPN da acceso a la red; el usuario y contraseña de SQL Server son credenciales aparte (pídelas a soporte de SR).
+
+**Primer día de conexión:** antes de encender el conector, corre `node explorar-sr.js` — se conecta en solo-lectura, lista las tablas y columnas reales de tu versión, y muestra los últimos 3 tickets. Pega esa salida en el chat de soporte para calibrar los queries de `sync.js` a tu versión exacta (los nombres de tabla varían entre SR11 y SR12).
 
 ## Qué hace en cada ciclo
 

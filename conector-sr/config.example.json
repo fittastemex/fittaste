@@ -1,12 +1,15 @@
 {
   "_comentario": "Copia este archivo como config.json y llena tus datos. config.json NUNCA se sube a git (contiene contraseñas).",
 
+  "_sqlServer_nota": "SR local: 'localhost\\NATIONALSOFT'. SR12 con base remota vía Radmin VPN: usa la IP del servidor dentro de la VPN (formato 26.x.x.x) y si te dan puerto, agrégalo con coma: '26.1.2.3,1433'. La VPN da acceso a la red; el usuario/contraseña de SQL son aparte (te los da soporte de SR).",
   "sqlServer": {
-    "server": "localhost\\NATIONALSOFT",
-    "database": "softrestaurant11",
+    "server": "26.X.X.X",
+    "database": "NOMBRE_BASE_SR12",
     "user": "sa",
     "password": "AQUI_TU_PASSWORD_SQL",
-    "options": { "trustServerCertificate": true, "encrypt": false }
+    "options": { "trustServerCertificate": true, "encrypt": false },
+    "connectionTimeout": 30000,
+    "requestTimeout": 30000
   },
 
   "supabase": {
