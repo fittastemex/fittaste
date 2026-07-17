@@ -99,12 +99,13 @@ function detectarCanal(pagos) {
 const r2 = (n) => Math.round(n * 100) / 100;
 const r3 = (n) => Math.round(n * 1000) / 1000;
 
-// ---------- Lógica de costeo (misma que el frontend, v7.1 con sub-recetas) ----------
-function costoInsumo(catalogoId, invSucursal, catalogo) {
-  const inv = invSucursal.find((i) => i.catalogo_id === catalogoId);
+// ---------- Lógica de costeo (misma que el frontend, v7.2: insumos base) ----------
+function costoInsumo(insumoId, invSucursal, catalogo) {
+  const inv = invSucursal.find((i) => i.insumo_id === insumoId);
   if (inv && parseFloat(inv.costo_promedio) > 0) return parseFloat(inv.costo_promedio);
-  const cat = catalogo.find((c) => c.id === catalogoId);
-  return cat ? parseFloat(cat.costo_referencia) || 0 : 0;
+  const pres = catalogo.filter((c) => c.insumo_id === insumoId && parseFloat(c.costo_referencia) > 0);
+  if (pres.length === 0) return 0;
+  return Math.min(...pres.map((c) => parseFloat(c.costo_referencia) / (parseFloat(c.contenido) || 1)));
 }
 function costoReceta(prodId, recetas, invSucursal, catalogo, productosVenta, depth = 0) {
   if (depth > 5) return 0;
@@ -113,7 +114,7 @@ function costoReceta(prodId, recetas, invSucursal, catalogo, productosVenta, dep
     .reduce((s, r) => {
       const q = (parseFloat(r.cantidad) || 0) * (1 + (parseFloat(r.merma_pct) || 0) / 100);
       let cu = 0;
-      if (r.catalogo_id) cu = costoInsumo(r.catalogo_id, invSucursal, catalogo);
+      if (r.insumo_id) cu = costoInsumo(r.insumo_id, invSucursal, catalogo);
       else if (r.preparacion_id) {
         const prep = productosVenta.find((p) => p.id === r.preparacion_id);
         const rend = parseFloat(prep?.rendimiento) || 1;
@@ -127,7 +128,7 @@ function explotarReceta(prodId, cantidadVendida, recetas, productosVenta, consum
   if (depth > 5) return consumo;
   recetas.filter((r) => r.producto_venta_id === prodId).forEach((r) => {
     const q = (parseFloat(r.cantidad) || 0) * (1 + (parseFloat(r.merma_pct) || 0) / 100) * cantidadVendida;
-    if (r.catalogo_id) consumo[r.catalogo_id] = (consumo[r.catalogo_id] || 0) + q;
+    if (r.insumo_id) consumo[r.insumo_id] = (consumo[r.insumo_id] || 0) + q;
     else if (r.preparacion_id) {
       const rend = parseFloat(productosVenta.find((p) => p.id === r.preparacion_id)?.rendimiento) || 1;
       explotarReceta(r.preparacion_id, q / rend, recetas, productosVenta, consumo, depth + 1);
@@ -216,18 +217,18 @@ async function sincronizar() {
     // Explosión de recetas (incluye sub-recetas) → descuento de inventario + kárdex
     const consumo = {};
     lineas.forEach((l) => explotarReceta(l.prod.id, l.cantidad, recetas, prods, consumo));
-    if (sucId) for (const [catId, cant] of Object.entries(consumo)) {
-      let row = invSucursal.find((i) => i.sucursal_id === sucId && i.catalogo_id === catId);
-      const costoU = costoInsumo(catId, invSucursal, catalogo);
+    if (sucId) for (const [insId, cant] of Object.entries(consumo)) {
+      let row = invSucursal.find((i) => i.sucursal_id === sucId && i.insumo_id === insId);
+      const costoU = costoInsumo(insId, invSucursal, catalogo);
       if (!row) {
-        const res = await sbPost("inventario_sucursal", { sucursal_id: sucId, catalogo_id: catId, existencia: 0, costo_promedio: costoU });
+        const res = await sbPost("inventario_sucursal", { sucursal_id: sucId, insumo_id: insId, existencia: 0, costo_promedio: costoU });
         if (res && res[0]) { row = res[0]; invSucursal.push(row); } else continue;
       }
       const nueva = r3((parseFloat(row.existencia) || 0) - cant);
       await sbPatch("inventario_sucursal", row.id, { existencia: nueva, updated_at: new Date().toISOString() });
       invSucursal = invSucursal.map((i) => (i.id === row.id ? { ...i, existencia: nueva } : i));
       await sbPost("movimientos_sucursal", {
-        sucursal_id: sucId, catalogo_id: catId, tipo: "salida_venta",
+        sucursal_id: sucId, insumo_id: insId, tipo: "salida_venta",
         cantidad: r3(cant), costo_unitario: costoU, venta_id: ventaId,
         fecha, nota: `Venta ${folio}`, registrado_por: "conector-sr",
       });

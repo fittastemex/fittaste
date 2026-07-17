@@ -26,7 +26,7 @@ const {useState,useEffect,useMemo} = React;
 // ======================== CONFIG v6.0 ========================
 const SB="https://jxyrbvgpjsxevbhaxprr.supabase.co/rest/v1";
 const KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4eXJidmdwanN4ZXZiaGF4cHJyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3MTgyNTMsImV4cCI6MjA5MDI5NDI1M30.Tvo6vZq3yoWNbSY-mNMQkF-eZw16Qu4z7LJGvhn-LYs";
-const V="7.0";
+const V="7.2";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -43,10 +43,19 @@ function genSerial(pedidos){const hoy=new Date();const ymd=hoy.toISOString().spl
 // Debe coincidir con el "Gran Total" que ve el proveedor (ver ProveedorTokenView).
 function montoConIva(items,catalogo){return items.reduce((s,d)=>{const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};const sub=d.cantidad*(d.costo_real||d.costo_referencia);return s+sub+(cat.aplica_iva?sub*0.16:0);},0);}
 
-// v7.0: costo de un insumo puesto en sucursal. Usa el costo promedio del
-// inventario de sucursal (viene de recepciones reales); si aún no hay
-// historial, cae al costo de referencia del catálogo de compras.
-function costoInsumo(catalogoId,invSucursal,catalogo){const inv=(invSucursal||[]).find(i=>i.catalogo_id===catalogoId);if(inv&&parseFloat(inv.costo_promedio)>0)return parseFloat(inv.costo_promedio);const cat=(catalogo||[]).find(c=>c.id===catalogoId);return cat?parseFloat(cat.costo_referencia)||0:0;}
+// v7.2: costo de un INSUMO por unidad base (ml/g/pz…). Usa el costo promedio
+// del inventario de sucursal (viene de recepciones reales, ya convertido a
+// unidad base); si no hay historial, cae a la presentación de compra más
+// barata del catálogo: costo_referencia / contenido.
+function costoInsumo(insumoId,invSucursal,catalogo){
+  const inv=(invSucursal||[]).find(i=>i.insumo_id===insumoId);
+  if(inv&&parseFloat(inv.costo_promedio)>0)return parseFloat(inv.costo_promedio);
+  const pres=(catalogo||[]).filter(c=>c.insumo_id===insumoId&&parseFloat(c.costo_referencia)>0);
+  if(pres.length===0)return 0;
+  return Math.min(...pres.map(c=>parseFloat(c.costo_referencia)/(parseFloat(c.contenido)||1)));
+}
+// v7.2: presentaciones de compra de un insumo, la más barata por unidad base primero
+function presentacionesDe(insumoId,catalogo){return (catalogo||[]).filter(c=>c.insumo_id===insumoId).sort((a,b)=>(parseFloat(a.costo_referencia)/(parseFloat(a.contenido)||1))-(parseFloat(b.costo_referencia)/(parseFloat(b.contenido)||1)));}
 // v7.1: costo teórico de un producto de venta (platillo SR) explotando su receta.
 // Una línea puede ser un insumo del catálogo o una PREPARACIÓN (sub-receta): en
 // ese caso el costo unitario es el costo de su tanda entre su rendimiento.
@@ -57,7 +66,7 @@ function costoReceta(prodId,recetas,invSucursal,catalogo,productosVenta,depth=0)
   return (recetas||[]).filter(r=>r.producto_venta_id===prodId).reduce((s,r)=>{
     const q=(parseFloat(r.cantidad)||0)*(1+(parseFloat(r.merma_pct)||0)/100);
     let cu=0;
-    if(r.catalogo_id)cu=costoInsumo(r.catalogo_id,invSucursal,catalogo);
+    if(r.insumo_id)cu=costoInsumo(r.insumo_id,invSucursal,catalogo);
     else if(r.preparacion_id){const prep=(productosVenta||[]).find(p=>p.id===r.preparacion_id);const rend=parseFloat(prep?.rendimiento)||1;cu=costoReceta(r.preparacion_id,recetas,invSucursal,catalogo,productosVenta,depth+1)/rend;}
     return s+q*cu;
   },0);
@@ -69,17 +78,17 @@ function explotarReceta(prodId,cantidadVendida,recetas,productosVenta,consumo,de
   if(depth>5)return consumo;
   (recetas||[]).filter(r=>r.producto_venta_id===prodId).forEach(r=>{
     const q=(parseFloat(r.cantidad)||0)*(1+(parseFloat(r.merma_pct)||0)/100)*cantidadVendida;
-    if(r.catalogo_id)consumo[r.catalogo_id]=(consumo[r.catalogo_id]||0)+q;
+    if(r.insumo_id)consumo[r.insumo_id]=(consumo[r.insumo_id]||0)+q;
     else if(r.preparacion_id){const rend=parseFloat((productosVenta||[]).find(p=>p.id===r.preparacion_id)?.rendimiento)||1;explotarReceta(r.preparacion_id,q/rend,recetas,productosVenta,consumo,depth+1);}
   });
   return consumo;
 }
 // v7.0: entrada de insumo al inventario de sucursal con costo promedio ponderado.
 // Recibe y devuelve la lista local (los loops llaman varias veces antes de setState).
-async function entradaSucursalDB(invList,sucId,catalogoId,cantidad,costoU,tipo,extra){
-  let row=invList.find(i=>i.sucursal_id===sucId&&i.catalogo_id===catalogoId);
+async function entradaSucursalDB(invList,sucId,insumoId,cantidad,costoU,tipo,extra){
+  let row=invList.find(i=>i.sucursal_id===sucId&&i.insumo_id===insumoId);
   if(!row){
-    const res=await sbPost("inventario_sucursal",{sucursal_id:sucId,catalogo_id:catalogoId,existencia:0,costo_promedio:costoU||0});
+    const res=await sbPost("inventario_sucursal",{sucursal_id:sucId,insumo_id:insumoId,existencia:0,costo_promedio:costoU||0});
     if(res&&res[0]){row=res[0];invList=[...invList,row];}else return{invList,mov:null};
   }
   const exist=parseFloat(row.existencia)||0;
@@ -88,7 +97,7 @@ async function entradaSucursalDB(invList,sucId,catalogoId,cantidad,costoU,tipo,e
   const nuevoCosto=exist>0&&costoPrev>0?Math.round(((exist*costoPrev+cantidad*(costoU||costoPrev))/(exist+cantidad))*10000)/10000:(costoU||costoPrev);
   await sbPatch("inventario_sucursal",row.id,{existencia:nuevaExist,costo_promedio:nuevoCosto,updated_at:new Date().toISOString()});
   invList=invList.map(i=>i.id===row.id?{...i,existencia:nuevaExist,costo_promedio:nuevoCosto}:i);
-  const mv=await sbPost("movimientos_sucursal",{sucursal_id:sucId,catalogo_id:catalogoId,tipo,cantidad,costo_unitario:costoU||costoPrev,fecha:new Date().toISOString().split("T")[0],...(extra||{})});
+  const mv=await sbPost("movimientos_sucursal",{sucursal_id:sucId,insumo_id:insumoId,tipo,cantidad,costo_unitario:costoU||costoPrev,fecha:new Date().toISOString().split("T")[0],...(extra||{})});
   return{invList,mov:mv&&mv[0]?mv[0]:null};
 }
 
@@ -203,20 +212,38 @@ function BandejaPedidos({pedidos,rol,onSelect,onNew,pedidoDetalle,proveedores,pr
   </div>);
 }
 
-// ======================== CREAR PEDIDO (SUCURSAL) ========================
-function CrearPedido({catalogo,proveedores,onSave,onCancel}){
-  const [pedido,setPedido]=useState({});
+// ======================== CREAR PEDIDO (SUCURSAL) v7.2 ========================
+// Sucursal pide INSUMOS en su unidad base ("5 lt de crema"); el sistema
+// convierte a la presentación de compra elegida ("6 botes Lala 900 ml") y el
+// pedido al proveedor sale en unidades de presentación, como siempre.
+// Si la presentación tiene contenido=1 (granel), se pide la cantidad exacta.
+function CrearPedido({catalogo,proveedores,insumos,invSucursal,onSave,onCancel}){
+  const [pedido,setPedido]=useState({}); // {insumoId:{qty,presId}}
   const [filter,setFilter]=useState("");
   const [saving,setSaving]=useState(false);
-  const filtered=catalogo.filter(p=>p.articulo.toLowerCase().includes(filter.toLowerCase())||p.tipo_producto.toLowerCase().includes(filter.toLowerCase()));
-  const totalTeo=catalogo.reduce((s,p)=>s+(pedido[p.id]||0)*p.costo_referencia,0);
-  const count=Object.values(pedido).filter(v=>v>0).length;
-  const tb={PROTEINAS:"danger",SUPLEMENTO:"purple",EMPAQUE:"info",FRUTA:"warning",LIMPIEZA:"default"};
+
+  // Solo insumos con al menos una presentación de compra
+  const pedibles=insumos.filter(i=>catalogo.some(c=>c.insumo_id===i.id));
+  const filtered=pedibles.filter(i=>i.nombre.toLowerCase().includes(filter.toLowerCase()));
+
+  // Conversión de una línea: cantidad base pedida → unidades de presentación
+  const lineaCalc=(ins)=>{
+    const row=pedido[ins.id];if(!row||!(row.qty>0))return null;
+    const pres=presentacionesDe(ins.id,catalogo);
+    const p=pres.find(x=>x.id===row.presId)||pres[0];
+    if(!p)return null;
+    const cont=parseFloat(p.contenido)||1;
+    const unidades=cont===1?row.qty:Math.ceil(row.qty/cont);
+    return{pres:p,unidades,base:unidades*cont,subtotal:unidades*p.costo_referencia};
+  };
+  const lineas=pedibles.map(i=>({ins:i,calc:lineaCalc(i)})).filter(l=>l.calc);
+  const totalTeo=lineas.reduce((s,l)=>s+l.calc.subtotal,0);
+  const count=lineas.length;
 
   const handleSave=async()=>{
-    const items=catalogo.filter(p=>(pedido[p.id]||0)>0).map(p=>({catalogo_id:p.id,proveedor_id:p.proveedor_id,cantidad:pedido[p.id],costo_referencia:p.costo_referencia}));
-    if(items.length===0||saving)return;
+    if(count===0||saving)return;
     setSaving(true);
+    const items=lineas.map(l=>({catalogo_id:l.calc.pres.id,proveedor_id:l.calc.pres.proveedor_id,cantidad:l.calc.unidades,costo_referencia:l.calc.pres.costo_referencia}));
     await onSave(items,totalTeo);
     setPedido({});
     setSaving(false);
@@ -224,26 +251,33 @@ function CrearPedido({catalogo,proveedores,onSave,onCancel}){
 
   return(<div>
     <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-      <div><h2 className="text-lg font-bold text-gray-900">Nuevo pedido</h2><p className="text-sm text-gray-500">Selecciona artículos y cantidades</p></div>
+      <div><h2 className="text-lg font-bold text-gray-900">Nuevo pedido</h2><p className="text-sm text-gray-500">Pide en lo que necesitas (kg, lt, pz); el sistema convierte a presentaciones de compra</p></div>
       <div className="flex items-center gap-2">
-        <div className="text-right bg-amber-50 border border-amber-200 rounded-xl px-4 py-2"><p className="text-xl font-bold text-amber-700">{fmt(totalTeo)}</p><p className="text-xs text-amber-600">{count} artículos</p></div>
+        <div className="text-right bg-amber-50 border border-amber-200 rounded-xl px-4 py-2"><p className="text-xl font-bold text-amber-700">{fmt(totalTeo)}</p><p className="text-xs text-amber-600">{count} insumos</p></div>
       </div>
     </div>
     <div className="flex gap-2 mb-4">
-      <input className="flex-1 border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-amber-400" placeholder="Buscar..." value={filter} onChange={e=>setFilter(e.target.value)}/>
+      <input className="flex-1 border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-amber-400" placeholder="Buscar insumo..." value={filter} onChange={e=>setFilter(e.target.value)}/>
       <button onClick={onCancel} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 border border-gray-200 rounded-xl">Cancelar</button>
       <Btn onClick={handleSave} disabled={count===0||saving}>{saving?"Creando...":"Enviar pedido ("+count+")"}</Btn>
     </div>
     <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white"><table className="w-full text-sm"><thead className="bg-gray-50"><tr>
-      {["Tipo","Artículo","Proveedor","Cantidad","Unidad","Subtotal"].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${h==="Cantidad"?"text-center":h==="Subtotal"?"text-right":"text-left"}`}>{h}</th>)}
-    </tr></thead><tbody>{filtered.map(p=>{const qq=pedido[p.id]||0;return(<tr key={p.id} className={`border-t border-gray-100 ${qq>0?"bg-amber-50/60":"hover:bg-gray-50"}`}>
-      <td className="px-3 py-2"><Badge v={tb[p.tipo_producto]||"success"}>{p.tipo_producto}</Badge></td>
-      <td className="px-3 py-2 font-medium text-gray-900">{p.articulo}</td>
-      <td className="px-3 py-2 text-gray-400 text-xs">{p.proveedor_nombre}</td>
-      <td className="px-3 py-2 text-center"><input type="number" min="0" step={p.unidad_clave==="kg"?"0.25":"1"} className="w-20 text-center border border-gray-200 rounded-lg px-1 py-1 text-sm focus:ring-2 focus:ring-amber-400" value={pedido[p.id]||""} onChange={e=>setPedido({...pedido,[p.id]:parseFloat(e.target.value)||0})}/></td>
-      <td className="px-3 py-2 text-gray-500">{p.unidad_clave}</td>
-      <td className="px-3 py-2 text-right font-semibold text-gray-700">{qq>0?fmt(qq*p.costo_referencia):"-"}</td>
-    </tr>);})}</tbody></table></div>
+      {["Insumo","Tengo","Pido","Presentación","Se pedirá","Subtotal"].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${h==="Pido"?"text-center":h==="Subtotal"?"text-right":"text-left"}`}>{h}</th>)}
+    </tr></thead><tbody>{filtered.map(ins=>{
+      const row=pedido[ins.id]||{};
+      const pres=presentacionesDe(ins.id,catalogo);
+      const presSel=pres.find(x=>x.id===row.presId)||pres[0];
+      const calc=lineaCalc(ins);
+      const existencia=ins.tipo_control==="inventariable"?(invSucursal.find(v=>v.insumo_id===ins.id)?.existencia??null):null;
+      return(<tr key={ins.id} className={`border-t border-gray-100 ${calc?"bg-amber-50/60":"hover:bg-gray-50"}`}>
+        <td className="px-3 py-2 font-medium text-gray-900">{ins.nombre} {ins.tipo_control==="gasto"&&<Badge v="default">gasto</Badge>}</td>
+        <td className="px-3 py-2 text-xs text-gray-500">{existencia!=null?fmtQ(parseFloat(existencia)||0,ins.unidad_base):"—"}</td>
+        <td className="px-3 py-2 text-center"><div className="flex items-center justify-center gap-1"><input type="number" min="0" step={["kg","lt"].includes(ins.unidad_base)?"0.25":"1"} className="w-20 text-center border border-gray-200 rounded-lg px-1 py-1 text-sm focus:ring-2 focus:ring-amber-400" value={row.qty||""} onChange={e=>setPedido({...pedido,[ins.id]:{...row,qty:parseFloat(e.target.value)||0}})}/><span className="text-xs text-gray-400">{ins.unidad_base}</span></div></td>
+        <td className="px-3 py-2">{pres.length>1?<select className="text-xs border border-gray-200 rounded px-1 py-0.5 max-w-40" value={presSel?.id||""} onChange={e=>setPedido({...pedido,[ins.id]:{...row,presId:e.target.value}})}>{pres.map(p=><option key={p.id} value={p.id}>{p.articulo} ({p.proveedor_nombre})</option>)}</select>:<span className="text-xs text-gray-500">{presSel?.articulo||"—"}<span className="text-gray-400"> · {presSel?.proveedor_nombre}</span></span>}</td>
+        <td className="px-3 py-2 text-xs">{calc?<span className="font-semibold text-gray-800">{calc.unidades} {presSel.unidad_clave}{(parseFloat(presSel.contenido)||1)!==1&&<span className="text-gray-400 font-normal"> = {fmtQ(calc.base,ins.unidad_base)}{calc.base>row.qty?` (+${fmtQ(Math.round((calc.base-row.qty)*100)/100,ins.unidad_base)})`:""}</span>}</span>:<span className="text-gray-300">—</span>}</td>
+        <td className="px-3 py-2 text-right font-semibold text-gray-700">{calc?fmt(calc.subtotal):"-"}</td>
+      </tr>);})}</tbody></table></div>
+    <p className="text-xs text-gray-400 mt-2">Cuando la presentación trae más de lo pedido (botes, cajas), se redondea hacia arriba y se muestra el excedente. Los insumos tipo "gasto" no llevan inventario: su costo se registra como gasto operativo al recibirse.</p>
   </div>);
 }
 
@@ -783,7 +817,7 @@ function DashboardView({pedidos,catalogo,proveedores,pedidoDetalle,inventario,co
 }
 
 // ======================== CATÁLOGO (solo Admin) ========================
-function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,inventario,flujos}){
+function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,inventario,flujos,insumos,setInsumos}){
   const [filter,setFilter]=useState("");
   const [filterProv,setFilterProv]=useState("");
   const [editing,setEditing]=useState(null);
@@ -797,6 +831,26 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
   const [catTab,setCatTab]=useState("productos");
   const [editingProvId,setEditingProvId]=useState(null);
   const [editProvData,setEditProvData]=useState({nombre:"",tipo_flujo_id:""});
+  // v7.2: gestión de insumos base
+  const [editingIns,setEditingIns]=useState(null);
+  const [editInsData,setEditInsData]=useState({});
+
+  const saveIns=async(x)=>{
+    setSaving(true);
+    const upd={nombre:editInsData.nombre.trim().toUpperCase(),unidad_base:editInsData.unidad_base,tipo_control:editInsData.tipo_control,categoria_gasto:editInsData.tipo_control==="gasto"?(editInsData.categoria_gasto||"Insumos generales"):null};
+    await sbPatch("insumos",x.id,upd);
+    setInsumos(insumos.map(i=>i.id===x.id?{...i,...upd}:i));
+    setMsg(`${upd.nombre} actualizado`);
+    setEditingIns(null);setSaving(false);
+    setTimeout(()=>setMsg(null),3000);
+  };
+  const delIns=async(x)=>{
+    const nPres=catalogo.filter(c=>c.insumo_id===x.id).length;
+    if(nPres>0){alert(`"${x.nombre}" tiene ${nPres} presentación(es) en el catálogo — apunta esos productos a otro insumo primero.`);return;}
+    if(!confirm(`¿Desactivar insumo "${x.nombre}"?`))return;
+    await sbPatch("insumos",x.id,{activo:false});
+    setInsumos(insumos.filter(i=>i.id!==x.id));
+  };
 
   // Auto-serial SKU por tipo
   const prefixMap={PROTEINAS:"PRO",SUPLEMENTO:"SUP",EMPAQUE:"EMP",VERDURA:"VER",FRUTA:"FRU",LIMPIEZA:"LIM",ABARROTES:"ABA",COCINA:"COC",OTRO:"OTR"};
@@ -871,17 +925,17 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
   const filtered=catalogo.filter(p=>{const textMatch=p.articulo.toLowerCase().includes(filter.toLowerCase())||p.sku.toLowerCase().includes(filter.toLowerCase())||p.tipo_producto.toLowerCase().includes(filter.toLowerCase())||p.proveedor_nombre.toLowerCase().includes(filter.toLowerCase());const provMatch=!filterProv||p.proveedor_id===filterProv;return textMatch&&provMatch;});
   const tipos=[...new Set(catalogo.map(c=>c.tipo_producto))].sort();
 
-  const startEdit=(p)=>{setEditing(p.id);setEditData({articulo:p.articulo,costo_referencia:p.costo_referencia,proveedor_id:p.proveedor_id,unidad_clave:p.unidad_clave,notas:p.notas||"",aplica_iva:p.aplica_iva!==false,inv_id:p.inv_id||""});};
+  const startEdit=(p)=>{setEditing(p.id);setEditData({articulo:p.articulo,costo_referencia:p.costo_referencia,proveedor_id:p.proveedor_id,unidad_clave:p.unidad_clave,notas:p.notas||"",aplica_iva:p.aplica_iva!==false,inv_id:p.inv_id||"",insumo_id:p.insumo_id||"",contenido:p.contenido||1});};
 
   const saveEdit=async(p)=>{
     setSaving(true);setMsg(null);
     const unid=unidades.find(u=>u.clave===editData.unidad_clave);
-    const updates={articulo:editData.articulo.toUpperCase().trim(),costo_referencia:editData.costo_referencia,proveedor_id:editData.proveedor_id,notas:editData.notas||null,aplica_iva:editData.aplica_iva,inventario_almacen_id:editData.inv_id||null};
+    const updates={articulo:editData.articulo.toUpperCase().trim(),costo_referencia:editData.costo_referencia,proveedor_id:editData.proveedor_id,notas:editData.notas||null,aplica_iva:editData.aplica_iva,inventario_almacen_id:editData.inv_id||null,insumo_id:editData.insumo_id||null,contenido:parseFloat(editData.contenido)||1};
     if(unid)updates.unidad_id=unid.id;
     const res=await sbPatch("catalogo",p.id,updates);
     if(res){
       const prov=proveedores.find(pr=>pr.id===editData.proveedor_id);
-      setCatalogo(catalogo.map(c=>c.id===p.id?{...c,articulo:editData.articulo.toUpperCase().trim(),costo_referencia:parseFloat(editData.costo_referencia),proveedor_id:editData.proveedor_id,proveedor_nombre:prov?.nombre||c.proveedor_nombre,unidad_clave:editData.unidad_clave,notas:editData.notas,aplica_iva:editData.aplica_iva,inv_id:editData.inv_id||null}:c));
+      setCatalogo(catalogo.map(c=>c.id===p.id?{...c,articulo:editData.articulo.toUpperCase().trim(),costo_referencia:parseFloat(editData.costo_referencia),proveedor_id:editData.proveedor_id,proveedor_nombre:prov?.nombre||c.proveedor_nombre,unidad_clave:editData.unidad_clave,notas:editData.notas,aplica_iva:editData.aplica_iva,inv_id:editData.inv_id||null,insumo_id:editData.insumo_id||null,contenido:parseFloat(editData.contenido)||1}:c));
       setMsg(`${editData.articulo.toUpperCase().trim()} actualizado`);
     }else{setMsg("Error al guardar");}
     setEditing(null);setSaving(false);
@@ -893,11 +947,17 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
     setSaving(true);setMsg(null);
     const unid=unidades.find(u=>u.clave===newItem.unidad_clave);
     if(!unid){setMsg(`Error: unidad "${newItem.unidad_clave}" no encontrada. Recarga la página.`);setSaving(false);return;}
-    const data={sku:newItem.sku,articulo:newItem.articulo.toUpperCase(),tipo_producto:newItem.tipo_producto,unidad_id:unid.id,costo_referencia:newItem.costo_referencia||0,proveedor_id:newItem.proveedor_id,notas:newItem.notas||null,activo:true};
+    // v7.2: cada producto nuevo del catálogo nace con su insumo base (contenido=1);
+    // si es una presentación de un insumo existente, se re-apunta después con Editar.
+    const esGasto=newItem.tipo_producto==="LIMPIEZA";
+    const insRes=await sbPost("insumos",{nombre:newItem.articulo.toUpperCase().trim(),unidad_base:newItem.unidad_clave,tipo_control:esGasto?"gasto":"inventariable",categoria_gasto:esGasto?"Limpieza":null});
+    const insumoId=insRes&&insRes[0]?insRes[0].id:null;
+    if(insumoId)setInsumos(prev=>[...prev,insRes[0]]);
+    const data={sku:newItem.sku,articulo:newItem.articulo.toUpperCase(),tipo_producto:newItem.tipo_producto,unidad_id:unid.id,costo_referencia:newItem.costo_referencia||0,proveedor_id:newItem.proveedor_id,notas:newItem.notas||null,activo:true,insumo_id:insumoId,contenido:1};
     const res=await sbPost("catalogo",data);
     if(res&&res[0]){
       const prov=proveedores.find(pr=>pr.id===newItem.proveedor_id);
-      setCatalogo([...catalogo,{id:res[0].id,sku:newItem.sku,articulo:newItem.articulo.toUpperCase(),tipo_producto:newItem.tipo_producto,unidad_clave:newItem.unidad_clave,costo_referencia:parseFloat(newItem.costo_referencia),proveedor_id:newItem.proveedor_id,proveedor_nombre:prov?.nombre||"?",notas:newItem.notas,aplica_iva:true,inv_id:res[0].inventario_almacen_id||null}]);
+      setCatalogo([...catalogo,{id:res[0].id,sku:newItem.sku,articulo:newItem.articulo.toUpperCase(),tipo_producto:newItem.tipo_producto,unidad_clave:newItem.unidad_clave,costo_referencia:parseFloat(newItem.costo_referencia),proveedor_id:newItem.proveedor_id,proveedor_nombre:prov?.nombre||"?",notas:newItem.notas,aplica_iva:true,inv_id:res[0].inventario_almacen_id||null,insumo_id:insumoId,contenido:1}]);
       setMsg(`${newItem.articulo} agregado`);
       setNewItem({sku:genCatSku(newItem.tipo_producto),articulo:"",tipo_producto:newItem.tipo_producto,unidad_clave:"kg",costo_referencia:0,proveedor_id:"",notas:""});
       setAdding(false);
@@ -918,6 +978,7 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
     <div className="flex gap-1 mb-4">
       <button onClick={()=>{setCatTab("productos");setAddingProv(false);}} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${catTab==="productos"?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={catTab==="productos"?{background:"#e2a52a"}:{}}>Productos ({catalogo.length})</button>
       <button onClick={()=>{setCatTab("proveedores");setAdding(false);}} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${catTab==="proveedores"?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={catTab==="proveedores"?{background:"#d6816c"}:{}}>Proveedores ({proveedores.length})</button>
+      <button onClick={()=>{setCatTab("insumos");setAdding(false);setAddingProv(false);}} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${catTab==="insumos"?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={catTab==="insumos"?{background:"#77b7b4"}:{}}>Insumos ({insumos.length})</button>
     </div>
 
     {msg&&<div className={`rounded-xl p-3 mb-4 text-sm font-medium ${msg.includes("Error")||msg.includes("No se puede")?"bg-red-50 text-red-800 border border-red-200":"bg-emerald-50 text-emerald-800 border border-emerald-200"}`}>{msg}</div>}
@@ -948,7 +1009,7 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
     </div>
     <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
       <table className="w-full text-sm"><thead className="bg-gray-50"><tr>
-        {["SKU","Artículo","Tipo","Unidad","Costo ref","IVA","Proveedor","Almacén","Notas",""].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${h==="Costo ref"?"text-right":h==="IVA"?"text-center":"text-left"}`}>{h}</th>)}
+        {["SKU","Artículo","Tipo","Unidad","Costo ref","IVA","Insumo / contenido","Proveedor","Almacén","Notas",""].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${h==="Costo ref"?"text-right":h==="IVA"?"text-center":"text-left"}`}>{h}</th>)}
       </tr></thead><tbody>{filtered.map(p=>{
         const isEditing=editing===p.id;
         return(<tr key={p.id} className={`border-t border-gray-100 ${isEditing?"bg-amber-50":""}`}>
@@ -958,6 +1019,7 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
           <td className="px-3 py-2">{isEditing?<select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.unidad_clave} onChange={e=>setEditData({...editData,unidad_clave:e.target.value})}>{unidades.map(u=><option key={u.clave} value={u.clave}>{u.clave}</option>)}</select>:<span className="text-gray-600">{p.unidad_clave}</span>}</td>
           <td className="px-3 py-2 text-right">{isEditing?<input type="number" step="0.01" className="w-24 text-right border border-amber-300 rounded px-1 py-0.5 text-sm bg-amber-50 focus:ring-2 focus:ring-amber-400" value={editData.costo_referencia} onChange={e=>setEditData({...editData,costo_referencia:parseFloat(e.target.value)||0})}/>:<span className="font-semibold text-gray-800">{fmt(p.costo_referencia)}</span>}</td>
           <td className="px-3 py-2 text-center">{isEditing?<label className="flex items-center justify-center gap-1 cursor-pointer"><input type="checkbox" checked={editData.aplica_iva} onChange={e=>setEditData({...editData,aplica_iva:e.target.checked})} className="w-4 h-4 rounded border-amber-300 text-amber-500 focus:ring-amber-400"/><span className="text-xs">{editData.aplica_iva?"Sí":"No"}</span></label>:p.aplica_iva?<span className="text-xs text-gray-500">16%</span>:<span className="text-xs text-emerald-600 font-semibold">Exento</span>}</td>
+          <td className="px-3 py-2">{isEditing?<div className="flex gap-1 items-center"><select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" style={{maxWidth:"110px"}} value={editData.insumo_id||""} onChange={e=>setEditData({...editData,insumo_id:e.target.value})}><option value="">Sin insumo</option>{insumos.map(x=><option key={x.id} value={x.id}>{x.nombre}</option>)}</select><span className="text-xs text-gray-400">×</span><input type="number" min="0" step="0.01" className="w-16 border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50 text-right" title="Contenido: unidades base por unidad de compra" value={editData.contenido} onChange={e=>setEditData({...editData,contenido:e.target.value})}/></div>:(()=>{const ins=insumos.find(x=>x.id===p.insumo_id);return ins?<span className="text-xs text-gray-600">{ins.nombre} <span className="text-teal-600 font-semibold">×{p.contenido} {ins.unidad_base}</span>{ins.tipo_control==="gasto"&&<Badge v="default">gasto</Badge>}</span>:<span className="text-xs text-red-500 font-medium">sin insumo</span>;})()}</td>
           <td className="px-3 py-2">{isEditing?<select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.proveedor_id} onChange={e=>setEditData({...editData,proveedor_id:e.target.value})}>{proveedores.map(pr=><option key={pr.id} value={pr.id}>{pr.nombre}</option>)}</select>:<span className="text-gray-600 text-xs">{p.proveedor_nombre}</span>}</td>
           <td className="px-3 py-2">{isEditing?<select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.inv_id||""} onChange={e=>setEditData({...editData,inv_id:e.target.value||null})}><option value="">Sin vincular</option>{inventario.map(i=><option key={i.id} value={i.id}>{i.descripcion} ({i.unidad_clave})</option>)}</select>:p.inv_id?<span className="text-xs text-teal-600 font-medium">{inventario.find(i=>i.id===p.inv_id)?.descripcion||"Vinculado"}</span>:<span className="text-xs text-gray-400">—</span>}</td>
           <td className="px-3 py-2">{isEditing?<input className="w-full border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.notas} onChange={e=>setEditData({...editData,notas:e.target.value})}/>:<span className="text-gray-400 text-xs">{p.notas||""}</span>}</td>
@@ -993,6 +1055,30 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
         </tr>);})}</tbody></table>
     </div>
     <p className="text-xs text-gray-400 mt-2 text-right">{proveedores.length} proveedores activos</p>
+    </div>}
+
+    {/* ===== INSUMOS TAB (v7.2) ===== */}
+    {catTab==="insumos"&&<div>
+    <div className="bg-teal-50 border border-teal-200 rounded-xl p-3 mb-4 text-xs text-teal-800">
+      El <b>insumo</b> es el ingrediente genérico (CREMA en ml) que usan recetas e inventario; las <b>presentaciones</b> (Crema Lala 900 ml) son los renglones de la pestaña Productos. Para fusionar marcas: en Productos, edita cada presentación y apúntala al mismo insumo con su contenido (ej. ×900 ml). Los insumos tipo <b>gasto</b> (jabón, fibras) no llevan inventario: su costo se registra como gasto operativo al recibirse.
+    </div>
+    <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+      <table className="w-full text-sm"><thead className="bg-gray-50"><tr>
+        {["Insumo","Unidad base","Control","Categoría gasto","Presentaciones","Costo/unidad",""].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Presentaciones","Costo/unidad"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
+      </tr></thead><tbody>{insumos.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(x=>{
+        const isE=editingIns===x.id;
+        const nPres=catalogo.filter(c=>c.insumo_id===x.id).length;
+        return(<tr key={x.id} className={`border-t border-gray-100 ${isE?"bg-teal-50":"hover:bg-gray-50"}`}>
+          <td className="px-3 py-2 font-medium text-gray-900">{isE?<input className="w-full border border-teal-400 rounded px-1 py-0.5 text-sm bg-teal-50" value={editInsData.nombre} onChange={e=>setEditInsData({...editInsData,nombre:e.target.value})}/>:x.nombre}</td>
+          <td className="px-3 py-2">{isE?<select className="border border-teal-400 rounded px-1 py-0.5 text-xs bg-teal-50" value={editInsData.unidad_base} onChange={e=>setEditInsData({...editInsData,unidad_base:e.target.value})}>{["ml","g","kg","lt","pz","paq","porcion"].map(u=><option key={u} value={u}>{u}</option>)}</select>:<span className="text-gray-600">{x.unidad_base}</span>}</td>
+          <td className="px-3 py-2">{isE?<select className="border border-teal-400 rounded px-1 py-0.5 text-xs bg-teal-50" value={editInsData.tipo_control} onChange={e=>setEditInsData({...editInsData,tipo_control:e.target.value})}><option value="inventariable">Inventariable</option><option value="gasto">Gasto directo</option></select>:<Badge v={x.tipo_control==="gasto"?"default":"almacen"}>{x.tipo_control==="gasto"?"Gasto directo":"Inventariable"}</Badge>}</td>
+          <td className="px-3 py-2">{isE&&editInsData.tipo_control==="gasto"?<input className="w-24 border border-teal-400 rounded px-1 py-0.5 text-xs bg-teal-50" placeholder="Limpieza" value={editInsData.categoria_gasto||""} onChange={e=>setEditInsData({...editInsData,categoria_gasto:e.target.value})}/>:<span className="text-xs text-gray-500">{x.tipo_control==="gasto"?(x.categoria_gasto||"—"):"—"}</span>}</td>
+          <td className="px-3 py-2 text-right"><span className={`text-xs font-medium ${nPres>0?"text-gray-800":"text-red-500"}`}>{nPres}</span></td>
+          <td className="px-3 py-2 text-right text-xs text-gray-600">{(()=>{const pres=catalogo.filter(c=>c.insumo_id===x.id&&parseFloat(c.costo_referencia)>0);return pres.length>0?`${fmt(Math.min(...pres.map(c=>parseFloat(c.costo_referencia)/(parseFloat(c.contenido)||1))))}/${x.unidad_base}`:"—";})()}</td>
+          <td className="px-3 py-2 text-right">{isE?<div className="flex gap-1 justify-end"><button onClick={()=>saveIns(x)} disabled={saving} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded">{saving?"...":"Guardar"}</button><button onClick={()=>setEditingIns(null)} className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded">X</button></div>:<div className="flex gap-1 justify-end"><button onClick={()=>{setEditingIns(x.id);setEditInsData({nombre:x.nombre,unidad_base:x.unidad_base,tipo_control:x.tipo_control,categoria_gasto:x.categoria_gasto||""});}} className="text-xs text-amber-700 hover:bg-amber-100 px-2 py-1 rounded">Editar</button><button onClick={()=>delIns(x)} className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded">✕</button></div>}</td>
+        </tr>);})}</tbody></table>
+    </div>
+    <p className="text-xs text-gray-400 mt-2 text-right">{insumos.length} insumos activos · Si cambias la unidad base de un insumo con historial, recalibra sus recetas</p>
     </div>}
   </div>);
 }
@@ -1360,7 +1446,7 @@ function GastosView({gastosOp,setGastosOp,catGastos,setCatGastos,rol}){
 // FitTaste importa su reporte de "Ventas por producto" (copiado desde Excel/CSV),
 // explota recetas y descuenta el inventario de sucursal. El campo ventas.origen
 // deja listo el terreno para un conector automático (agente SQL Server o API).
-function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,ventas,ventaDetalle,catalogo,invSucursal,onImport,rol}){
+function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,ventas,ventaDetalle,catalogo,insumos,invSucursal,onImport,rol}){
   const [tab,setTab]=useState("importar");
   const [fecha,setFecha]=useState(new Date().toISOString().split("T")[0]);
   const [canal,setCanal]=useState("mostrador");
@@ -1437,7 +1523,7 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
     setSaving(true);
     const [tipoRef,refId]=newLinea.ref.split(":");
     const payload={producto_venta_id:recetaDe,cantidad:newLinea.cantidad,merma_pct:newLinea.merma_pct||0};
-    if(tipoRef==="prep")payload.preparacion_id=refId;else payload.catalogo_id=refId;
+    if(tipoRef==="prep")payload.preparacion_id=refId;else payload.insumo_id=refId;
     const res=await sbPost("recetas",payload);
     if(res&&res[0]){setRecetas([...recetas,res[0]]);setNewLinea({ref:"",cantidad:0,merma_pct:0});}
     else alert("Error al agregar (¿el insumo ya está en la receta?)");
@@ -1463,13 +1549,13 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
       {recetas.filter(r=>r.producto_venta_id===p.id).map(r=>{
         const esPrep=!!r.preparacion_id;
         const prep=esPrep?productosVenta.find(x=>x.id===r.preparacion_id):null;
-        const cat=esPrep?{}:(catalogo.find(c=>c.id===r.catalogo_id)||{});
-        const cU=esPrep?(costoReceta(r.preparacion_id,recetas,invSucursal,catalogo,productosVenta)/(parseFloat(prep?.rendimiento)||1)):costoInsumo(r.catalogo_id,invSucursal,catalogo);
+        const ins=esPrep?null:(insumos.find(x=>x.id===r.insumo_id)||{});
+        const cU=esPrep?(costoReceta(r.preparacion_id,recetas,invSucursal,catalogo,productosVenta)/(parseFloat(prep?.rendimiento)||1)):costoInsumo(r.insumo_id,invSucursal,catalogo);
         const cL=(parseFloat(r.cantidad)||0)*(1+(parseFloat(r.merma_pct)||0)/100)*cU;
         return(<tr key={r.id} className="border-t border-teal-100">
-          <td className="px-2 py-1 font-medium text-gray-800">{esPrep?<span>{prep?.nombre||"?"} <Badge v="purple">prep</Badge></span>:(cat.articulo||"?")}</td>
+          <td className="px-2 py-1 font-medium text-gray-800">{esPrep?<span>{prep?.nombre||"?"} <Badge v="purple">prep</Badge></span>:(ins.nombre||"?")}</td>
           <td className="px-2 py-1 text-right"><input type="number" min="0" step="0.001" className="w-20 text-right border border-gray-200 rounded px-1 py-0.5" defaultValue={r.cantidad} onBlur={e=>{const v=parseFloat(e.target.value)||0;if(v!==parseFloat(r.cantidad))updLinea(r.id,"cantidad",v);}}/></td>
-          <td className="px-2 py-1 text-gray-500">{esPrep?(prep?.unidad||"u"):cat.unidad_clave}</td>
+          <td className="px-2 py-1 text-gray-500">{esPrep?(prep?.unidad||"u"):ins.unidad_base}</td>
           <td className="px-2 py-1 text-right"><input type="number" min="0" step="1" className="w-14 text-right border border-gray-200 rounded px-1 py-0.5" defaultValue={r.merma_pct} onBlur={e=>{const v=parseFloat(e.target.value)||0;if(v!==parseFloat(r.merma_pct))updLinea(r.id,"merma_pct",v);}}/></td>
           <td className="px-2 py-1 text-right text-gray-600">{fmt(cU)}</td>
           <td className="px-2 py-1 text-right font-semibold text-teal-700">{fmt(cL)}</td>
@@ -1482,8 +1568,8 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
           <optgroup label="Preparaciones (sub-recetas)">
             {productosVenta.filter(x=>x.es_preparacion&&x.id!==p.id&&!recetas.some(r=>r.producto_venta_id===p.id&&r.preparacion_id===x.id)).map(x=>{const rx=parseFloat(x.rendimiento)||1;return<option key={x.id} value={"prep:"+x.id}>{x.nombre} ({x.unidad||"u"}) — {fmt(costoReceta(x.id,recetas,invSucursal,catalogo,productosVenta)/rx)}</option>;})}
           </optgroup>
-          <optgroup label="Insumos del catálogo">
-            {catalogo.filter(c=>!recetas.some(r=>r.producto_venta_id===p.id&&r.catalogo_id===c.id)).map(c=><option key={c.id} value={"cat:"+c.id}>{c.articulo} ({c.unidad_clave}) — {fmt(costoInsumo(c.id,invSucursal,catalogo))}</option>)}
+          <optgroup label="Insumos">
+            {insumos.filter(x=>x.tipo_control==="inventariable"&&!recetas.some(r=>r.producto_venta_id===p.id&&r.insumo_id===x.id)).map(x=><option key={x.id} value={"ins:"+x.id}>{x.nombre} ({x.unidad_base}) — {fmt(costoInsumo(x.id,invSucursal,catalogo))}/{x.unidad_base}</option>)}
           </optgroup>
         </select></div>
         <div><label className="text-xs text-gray-500">Cantidad</label><input type="number" min="0" step="0.001" className="w-24 border border-gray-200 rounded-lg px-2 py-1.5 text-xs" value={newLinea.cantidad||""} onChange={e=>setNewLinea({...newLinea,cantidad:parseFloat(e.target.value)||0})}/></div>
@@ -1632,33 +1718,33 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
 }
 
 // ======================== INVENTARIO SUCURSAL + MERMA (v7.0) ========================
-function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,mermas,setMermas,catalogo,sucursales,rol}){
+function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,mermas,setMermas,catalogo,insumos,sucursales,rol}){
   const [tab,setTab]=useState("inventario");
   const sucId=sucursales[0]?.id||null;
   const [adding,setAdding]=useState(false);
-  const [newRow,setNewRow]=useState({catalogo_id:"",existencia:0,costo:0,minimo:0});
+  const [newRow,setNewRow]=useState({insumo_id:"",existencia:0,costo:0,minimo:0});
   const [ajustando,setAjustando]=useState(null);
   const [ajusteVal,setAjusteVal]=useState(0);
   const [ajusteNota,setAjusteNota]=useState("");
-  const [fMerma,setFMerma]=useState({catalogo_id:"",cantidad:0,motivo:"caducidad",nota:""});
+  const [fMerma,setFMerma]=useState({insumo_id:"",cantidad:0,motivo:"caducidad",nota:""});
   const [saving,setSaving]=useState(false);
 
-  const rows=invSucursal.filter(i=>!sucId||i.sucursal_id===sucId).map(i=>({...i,cat:catalogo.find(c=>c.id===i.catalogo_id)||{}})).sort((a,b)=>(a.cat.articulo||"").localeCompare(b.cat.articulo||""));
-  const valor=rows.reduce((s,i)=>s+Math.max(0,parseFloat(i.existencia)||0)*costoInsumo(i.catalogo_id,invSucursal,catalogo),0);
+  const rows=invSucursal.filter(i=>!sucId||i.sucursal_id===sucId).map(i=>({...i,ins:insumos.find(x=>x.id===i.insumo_id)||{}})).sort((a,b)=>(a.ins.nombre||"").localeCompare(b.ins.nombre||""));
+  const valor=rows.reduce((s,i)=>s+Math.max(0,parseFloat(i.existencia)||0)*costoInsumo(i.insumo_id,invSucursal,catalogo),0);
   const hoy=new Date();const mesInicio=new Date(hoy.getFullYear(),hoy.getMonth(),1).toISOString().split("T")[0];
   const mermaMes=mermas.filter(m=>(m.fecha||"")>=mesInicio).reduce((s,m)=>s+parseFloat(m.costo_total||0),0);
-  const disponibles=catalogo.filter(c=>!rows.some(r=>r.catalogo_id===c.id));
+  const disponibles=insumos.filter(x=>x.tipo_control==="inventariable"&&!rows.some(r=>r.insumo_id===x.id));
 
   const addInsumo=async()=>{
     if(!sucId){alert("No hay sucursal registrada");return;}
-    if(!newRow.catalogo_id)return;
+    if(!newRow.insumo_id)return;
     setSaving(true);
-    const costo=newRow.costo>0?newRow.costo:costoInsumo(newRow.catalogo_id,invSucursal,catalogo);
-    const res=await sbPost("inventario_sucursal",{sucursal_id:sucId,catalogo_id:newRow.catalogo_id,existencia:newRow.existencia||0,costo_promedio:costo,minimo_stock:newRow.minimo||0});
+    const costo=newRow.costo>0?newRow.costo:costoInsumo(newRow.insumo_id,invSucursal,catalogo);
+    const res=await sbPost("inventario_sucursal",{sucursal_id:sucId,insumo_id:newRow.insumo_id,existencia:newRow.existencia||0,costo_promedio:costo,minimo_stock:newRow.minimo||0});
     if(res&&res[0]){
       setInvSucursal([...invSucursal,res[0]]);
-      if((newRow.existencia||0)>0){const mv=await sbPost("movimientos_sucursal",{sucursal_id:sucId,catalogo_id:newRow.catalogo_id,tipo:"entrada_ajuste",cantidad:newRow.existencia,costo_unitario:costo,fecha:new Date().toISOString().split("T")[0],nota:"Inventario inicial",registrado_por:rol});if(mv&&mv[0])setMovSucursal(prev=>[...prev,mv[0]]);}
-      setNewRow({catalogo_id:"",existencia:0,costo:0,minimo:0});setAdding(false);
+      if((newRow.existencia||0)>0){const mv=await sbPost("movimientos_sucursal",{sucursal_id:sucId,insumo_id:newRow.insumo_id,tipo:"entrada_ajuste",cantidad:newRow.existencia,costo_unitario:costo,fecha:new Date().toISOString().split("T")[0],nota:"Inventario inicial",registrado_por:rol});if(mv&&mv[0])setMovSucursal(prev=>[...prev,mv[0]]);}
+      setNewRow({insumo_id:"",existencia:0,costo:0,minimo:0});setAdding(false);
     }else alert("Error (¿el insumo ya está en inventario de sucursal?)");
     setSaving(false);
   };
@@ -1668,8 +1754,8 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
     const diff=Math.round((ajusteVal-actual)*1000)/1000;
     if(diff===0){setAjustando(null);return;}
     setSaving(true);
-    const costo=costoInsumo(row.catalogo_id,invSucursal,catalogo);
-    const mv=await sbPost("movimientos_sucursal",{sucursal_id:row.sucursal_id,catalogo_id:row.catalogo_id,tipo:diff>0?"entrada_ajuste":"salida_ajuste",cantidad:Math.abs(diff),costo_unitario:costo,fecha:new Date().toISOString().split("T")[0],nota:ajusteNota||"Ajuste por conteo físico",registrado_por:rol});
+    const costo=costoInsumo(row.insumo_id,invSucursal,catalogo);
+    const mv=await sbPost("movimientos_sucursal",{sucursal_id:row.sucursal_id,insumo_id:row.insumo_id,tipo:diff>0?"entrada_ajuste":"salida_ajuste",cantidad:Math.abs(diff),costo_unitario:costo,fecha:new Date().toISOString().split("T")[0],nota:ajusteNota||"Ajuste por conteo físico",registrado_por:rol});
     if(mv&&mv[0])setMovSucursal(prev=>[...prev,mv[0]]);
     await sbPatch("inventario_sucursal",row.id,{existencia:ajusteVal,updated_at:new Date().toISOString()});
     setInvSucursal(invSucursal.map(i=>i.id===row.id?{...i,existencia:ajusteVal}:i));
@@ -1677,18 +1763,18 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
   };
 
   const registrarMerma=async()=>{
-    if(!fMerma.catalogo_id||fMerma.cantidad<=0||saving)return;
+    if(!fMerma.insumo_id||fMerma.cantidad<=0||saving)return;
     setSaving(true);
-    const row=rows.find(r=>r.catalogo_id===fMerma.catalogo_id);
-    const costo=costoInsumo(fMerma.catalogo_id,invSucursal,catalogo);
+    const row=rows.find(r=>r.insumo_id===fMerma.insumo_id);
+    const costo=costoInsumo(fMerma.insumo_id,invSucursal,catalogo);
     const costoTotal=Math.round(fMerma.cantidad*costo*100)/100;
-    const res=await sbPost("mermas",{sucursal_id:sucId,catalogo_id:fMerma.catalogo_id,cantidad:fMerma.cantidad,motivo:fMerma.motivo,costo_unitario:costo,costo_total:costoTotal,fecha:new Date().toISOString().split("T")[0],nota:fMerma.nota||null,registrado_por:rol});
+    const res=await sbPost("mermas",{sucursal_id:sucId,insumo_id:fMerma.insumo_id,cantidad:fMerma.cantidad,motivo:fMerma.motivo,costo_unitario:costo,costo_total:costoTotal,fecha:new Date().toISOString().split("T")[0],nota:fMerma.nota||null,registrado_por:rol});
     if(res&&res[0]){
       setMermas([res[0],...mermas]);
-      const mv=await sbPost("movimientos_sucursal",{sucursal_id:sucId,catalogo_id:fMerma.catalogo_id,tipo:"salida_merma",cantidad:fMerma.cantidad,costo_unitario:costo,merma_id:res[0].id,fecha:new Date().toISOString().split("T")[0],nota:`Merma: ${fMerma.motivo}`,registrado_por:rol});
+      const mv=await sbPost("movimientos_sucursal",{sucursal_id:sucId,insumo_id:fMerma.insumo_id,tipo:"salida_merma",cantidad:fMerma.cantidad,costo_unitario:costo,merma_id:res[0].id,fecha:new Date().toISOString().split("T")[0],nota:`Merma: ${fMerma.motivo}`,registrado_por:rol});
       if(mv&&mv[0])setMovSucursal(prev=>[...prev,mv[0]]);
       if(row){const nueva=(parseFloat(row.existencia)||0)-fMerma.cantidad;await sbPatch("inventario_sucursal",row.id,{existencia:nueva,updated_at:new Date().toISOString()});setInvSucursal(invSucursal.map(i=>i.id===row.id?{...i,existencia:nueva}:i));}
-      setFMerma({catalogo_id:"",cantidad:0,motivo:"caducidad",nota:""});
+      setFMerma({insumo_id:"",cantidad:0,motivo:"caducidad",nota:""});
       alert(`Merma registrada — ${fmt(costoTotal)} de pérdida`);
     }else alert("Error al registrar merma");
     setSaving(false);
@@ -1710,11 +1796,11 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
 
     {tab==="inventario"&&<div>
       <div className="flex justify-end mb-3">{adding?<div className="bg-white border-2 border-teal-300 rounded-xl p-3 w-full"><h3 className="text-sm font-bold text-teal-800 mb-2">Agregar insumo al inventario de sucursal</h3><div className="flex gap-2 items-end flex-wrap">
-        <div className="flex-1"><label className="text-xs text-gray-500 block mb-1">Insumo</label><select className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm" value={newRow.catalogo_id} onChange={e=>setNewRow({...newRow,catalogo_id:e.target.value,costo:costoInsumo(e.target.value,invSucursal,catalogo)})}><option value="">Seleccionar del catálogo...</option>{disponibles.map(c=><option key={c.id} value={c.id}>{c.articulo} ({c.unidad_clave})</option>)}</select></div>
+        <div className="flex-1"><label className="text-xs text-gray-500 block mb-1">Insumo</label><select className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm" value={newRow.insumo_id} onChange={e=>setNewRow({...newRow,insumo_id:e.target.value,costo:costoInsumo(e.target.value,invSucursal,catalogo)})}><option value="">Seleccionar insumo...</option>{disponibles.map(x=><option key={x.id} value={x.id}>{x.nombre} ({x.unidad_base})</option>)}</select></div>
         <div><label className="text-xs text-gray-500 block mb-1">Existencia inicial</label><input type="number" min="0" step="0.25" className="w-24 border border-gray-200 rounded-lg px-2 py-1.5 text-sm" value={newRow.existencia||""} onChange={e=>setNewRow({...newRow,existencia:parseFloat(e.target.value)||0})}/></div>
         <div><label className="text-xs text-gray-500 block mb-1">Costo unit.</label><input type="number" min="0" step="0.01" className="w-24 border border-gray-200 rounded-lg px-2 py-1.5 text-sm" value={newRow.costo||""} onChange={e=>setNewRow({...newRow,costo:parseFloat(e.target.value)||0})}/></div>
         <div><label className="text-xs text-gray-500 block mb-1">Mínimo</label><input type="number" min="0" step="0.25" className="w-20 border border-gray-200 rounded-lg px-2 py-1.5 text-sm" value={newRow.minimo||""} onChange={e=>setNewRow({...newRow,minimo:parseFloat(e.target.value)||0})}/></div>
-        <Btn onClick={addInsumo} disabled={saving||!newRow.catalogo_id} color="purple">{saving?"...":"Agregar"}</Btn>
+        <Btn onClick={addInsumo} disabled={saving||!newRow.insumo_id} color="purple">{saving?"...":"Agregar"}</Btn>
         <button onClick={()=>setAdding(false)} className="text-xs text-gray-500 px-2 py-1.5">Cancelar</button>
       </div></div>:<Btn onClick={()=>setAdding(true)} color="purple">+ Agregar insumo</Btn>}</div>
       {rows.length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400 mb-1">Sin insumos en inventario de sucursal</p><p className="text-xs text-gray-400">Se llena automáticamente al recibir mercancía de pedidos; también puedes cargar un inventario inicial</p></div>
@@ -1722,16 +1808,16 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
         {["Insumo","Existencia","Costo prom.","Valor","Mínimo","Estado",""].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Existencia","Costo prom.","Valor","Mínimo"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
       </tr></thead><tbody>{rows.map(r=>{
         const ex=parseFloat(r.existencia)||0;
-        const costo=costoInsumo(r.catalogo_id,invSucursal,catalogo);
+        const costo=costoInsumo(r.insumo_id,invSucursal,catalogo);
         const min=parseFloat(r.minimo_stock)||0;
         const low=min>0&&ex<=min;
         const isAj=ajustando===r.id;
         return(<tr key={r.id} className={`border-t border-gray-100 ${ex<0?"bg-red-50":low?"bg-orange-50/50":"hover:bg-gray-50"}`}>
-          <td className="px-3 py-2 font-medium text-gray-900">{r.cat.articulo||"?"} <span className="text-gray-400 text-xs">{r.cat.unidad_clave}</span></td>
-          <td className="px-3 py-2 text-right font-bold">{isAj?<input type="number" step="0.25" className="w-24 text-right border border-teal-400 rounded px-1 py-0.5 text-sm bg-teal-50" value={ajusteVal} onChange={e=>setAjusteVal(parseFloat(e.target.value)||0)} autoFocus/>:<span className={ex<0?"text-red-600":""}>{fmtQ(ex,r.cat.unidad_clave||"")}</span>}</td>
+          <td className="px-3 py-2 font-medium text-gray-900">{r.ins.nombre||"?"} <span className="text-gray-400 text-xs">{r.ins.unidad_base}</span></td>
+          <td className="px-3 py-2 text-right font-bold">{isAj?<input type="number" step="0.25" className="w-24 text-right border border-teal-400 rounded px-1 py-0.5 text-sm bg-teal-50" value={ajusteVal} onChange={e=>setAjusteVal(parseFloat(e.target.value)||0)} autoFocus/>:<span className={ex<0?"text-red-600":""}>{fmtQ(ex,r.ins.unidad_base||"")}</span>}</td>
           <td className="px-3 py-2 text-right text-gray-600">{fmt(costo)}</td>
           <td className="px-3 py-2 text-right font-medium">{fmt(Math.max(0,ex)*costo)}</td>
-          <td className="px-3 py-2 text-right text-gray-400">{min>0?fmtQ(min,r.cat.unidad_clave||""):"—"}</td>
+          <td className="px-3 py-2 text-right text-gray-400">{min>0?fmtQ(min,r.ins.unidad_base||""):"—"}</td>
           <td className="px-3 py-2">{ex<0?<Badge v="danger">Negativo</Badge>:ex===0?<Badge v="danger">Agotado</Badge>:low?<Badge v="warning">Bajo</Badge>:<Badge v="success">OK</Badge>}</td>
           <td className="px-3 py-2 text-right">{isAj?<div className="flex gap-1 justify-end items-center"><input className="w-32 border border-gray-200 rounded px-1 py-0.5 text-xs" placeholder="Motivo del ajuste" value={ajusteNota} onChange={e=>setAjusteNota(e.target.value)}/><button onClick={()=>confirmarAjuste(r)} disabled={saving} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded">{saving?"...":"✓"}</button><button onClick={()=>setAjustando(null)} className="text-xs bg-gray-200 px-2 py-1 rounded">✕</button></div>:<button onClick={()=>{setAjustando(r.id);setAjusteVal(ex);setAjusteNota("");}} className="text-xs text-teal-700 hover:bg-teal-50 px-2 py-1 rounded font-medium">Ajustar</button>}</td>
         </tr>);})}</tbody></table></div>}
@@ -1742,24 +1828,24 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
       <div className="bg-white border-2 border-red-200 rounded-xl p-4">
         <h3 className="text-sm font-bold text-red-800 mb-3">Registrar merma</h3>
         <div className="space-y-3">
-          <div><label className="text-xs text-gray-500 block mb-1">Insumo</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={fMerma.catalogo_id} onChange={e=>setFMerma({...fMerma,catalogo_id:e.target.value})}><option value="">Seleccionar...</option>{rows.map(r=><option key={r.catalogo_id} value={r.catalogo_id}>{r.cat.articulo} — hay {fmtQ(parseFloat(r.existencia)||0,r.cat.unidad_clave||"")}</option>)}</select></div>
+          <div><label className="text-xs text-gray-500 block mb-1">Insumo</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={fMerma.insumo_id} onChange={e=>setFMerma({...fMerma,insumo_id:e.target.value})}><option value="">Seleccionar...</option>{rows.map(r=><option key={r.insumo_id} value={r.insumo_id}>{r.ins.nombre} — hay {fmtQ(parseFloat(r.existencia)||0,r.ins.unidad_base||"")}</option>)}</select></div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className="text-xs text-gray-500 block mb-1">Cantidad</label><input type="number" min="0" step="0.25" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={fMerma.cantidad||""} onChange={e=>setFMerma({...fMerma,cantidad:parseFloat(e.target.value)||0})}/></div>
             <div><label className="text-xs text-gray-500 block mb-1">Motivo</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={fMerma.motivo} onChange={e=>setFMerma({...fMerma,motivo:e.target.value})}><option value="caducidad">Caducidad</option><option value="dano">Daño / mal estado</option><option value="produccion">Error de producción</option><option value="robo">Robo / faltante</option><option value="ajuste_inventario">Ajuste de inventario</option><option value="otro">Otro</option></select></div>
           </div>
           <div><label className="text-xs text-gray-500 block mb-1">Nota</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Opcional" value={fMerma.nota} onChange={e=>setFMerma({...fMerma,nota:e.target.value})}/></div>
-          {fMerma.catalogo_id&&fMerma.cantidad>0&&<div className="bg-red-50 rounded-xl p-3 text-sm text-red-800">Pérdida estimada: <b>{fmt(fMerma.cantidad*costoInsumo(fMerma.catalogo_id,invSucursal,catalogo))}</b></div>}
-          <Btn onClick={registrarMerma} disabled={saving||!fMerma.catalogo_id||fMerma.cantidad<=0} color="red">{saving?"Guardando...":"Registrar merma"}</Btn>
+          {fMerma.insumo_id&&fMerma.cantidad>0&&<div className="bg-red-50 rounded-xl p-3 text-sm text-red-800">Pérdida estimada: <b>{fmt(fMerma.cantidad*costoInsumo(fMerma.insumo_id,invSucursal,catalogo))}</b></div>}
+          <Btn onClick={registrarMerma} disabled={saving||!fMerma.insumo_id||fMerma.cantidad<=0} color="red">{saving?"Guardando...":"Registrar merma"}</Btn>
         </div>
       </div>
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
         <div className="px-4 py-2 bg-gray-50 border-b border-gray-100 flex justify-between items-center"><h3 className="text-sm font-bold text-gray-700">Mermas recientes</h3><span className="text-xs text-red-600 font-bold">{fmt(mermaMes)} este mes</span></div>
         {mermas.length===0?<div className="p-8 text-center text-gray-400 text-sm">Sin mermas registradas</div>
         :<table className="w-full text-xs"><thead><tr>{["Fecha","Insumo","Cant","Motivo","Costo"].map(h=><th key={h} className={`px-2 py-1.5 font-medium text-gray-500 ${["Cant","Costo"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}</tr></thead><tbody>
-        {mermas.slice(0,15).map(m=>{const cat=catalogo.find(c=>c.id===m.catalogo_id)||{};return(<tr key={m.id} className="border-t border-gray-50">
+        {mermas.slice(0,15).map(m=>{const ins=insumos.find(x=>x.id===m.insumo_id)||{};return(<tr key={m.id} className="border-t border-gray-50">
           <td className="px-2 py-1.5 text-gray-500">{new Date((m.fecha||m.created_at)+"T12:00:00").toLocaleDateString("es-MX")}</td>
-          <td className="px-2 py-1.5 font-medium text-gray-800">{cat.articulo||"?"}</td>
-          <td className="px-2 py-1.5 text-right">{fmtQ(parseFloat(m.cantidad)||0,cat.unidad_clave||"")}</td>
+          <td className="px-2 py-1.5 font-medium text-gray-800">{ins.nombre||"?"}</td>
+          <td className="px-2 py-1.5 text-right">{fmtQ(parseFloat(m.cantidad)||0,ins.unidad_base||"")}</td>
           <td className="px-2 py-1.5"><Badge v={motivoBadge(m.motivo)}>{(m.motivo||"").replace(/_/g," ")}</Badge></td>
           <td className="px-2 py-1.5 text-right font-bold text-red-600">{fmt(m.costo_total)}</td>
         </tr>);})}</tbody></table>}
@@ -1769,11 +1855,11 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
     {tab==="movimientos"&&<div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
       {movsSorted.length===0?<div className="p-8 text-center text-gray-400 text-sm">Sin movimientos</div>
       :<table className="w-full text-xs"><thead className="bg-gray-50"><tr>{["Fecha","Tipo","Insumo","Cantidad","Costo unit.","Nota"].map(h=><th key={h} className={`px-3 py-2 font-semibold text-gray-600 uppercase ${["Cantidad","Costo unit."].includes(h)?"text-right":"text-left"}`}>{h}</th>)}</tr></thead><tbody>
-      {movsSorted.map(m=>{const cat=catalogo.find(c=>c.id===m.catalogo_id)||{};const esEntrada=m.tipo.startsWith("entrada");return(<tr key={m.id} className="border-t border-gray-50">
+      {movsSorted.map(m=>{const ins=insumos.find(x=>x.id===m.insumo_id)||{};const esEntrada=m.tipo.startsWith("entrada");return(<tr key={m.id} className="border-t border-gray-50">
         <td className="px-3 py-1.5 text-gray-500">{new Date((m.fecha||m.created_at)+"T12:00:00").toLocaleDateString("es-MX")}</td>
         <td className="px-3 py-1.5"><Badge v={esEntrada?"success":m.tipo==="salida_merma"?"danger":m.tipo==="salida_venta"?"info":"warning"}>{m.tipo.replace(/_/g," ")}</Badge></td>
-        <td className="px-3 py-1.5 font-medium text-gray-800">{cat.articulo||"?"}</td>
-        <td className={`px-3 py-1.5 text-right font-semibold ${esEntrada?"text-emerald-600":"text-red-600"}`}>{esEntrada?"+":"−"}{fmtQ(parseFloat(m.cantidad)||0,cat.unidad_clave||"")}</td>
+        <td className="px-3 py-1.5 font-medium text-gray-800">{ins.nombre||"?"}</td>
+        <td className={`px-3 py-1.5 text-right font-semibold ${esEntrada?"text-emerald-600":"text-red-600"}`}>{esEntrada?"+":"−"}{fmtQ(parseFloat(m.cantidad)||0,ins.unidad_base||"")}</td>
         <td className="px-3 py-1.5 text-right text-gray-600">{fmt(m.costo_unitario)}</td>
         <td className="px-3 py-1.5 text-gray-400">{m.nota||"—"}</td>
       </tr>);})}</tbody></table>}
@@ -1825,13 +1911,16 @@ function EstadosView({ventas,mermas,gastosOp,comprasDirectas,cxp,pagos,inventari
   const entradas=inEfectivo+inTarjeta+inPlataforma+inOtros;
   const pagosMes=pagos.filter(p=>enMes(p.fecha_pago||p.created_at?.split("T")[0]||"")).reduce((s,p)=>s+parseFloat(p.monto_pagado||0),0);
   const cdMes=comprasDirectas.filter(c=>c.metodo_pago!=="credito"&&enMes(c.fecha||c.created_at?.split("T")[0]||"")).reduce((s,c)=>s+parseFloat(c.costo_total||0),0);
-  const salidas=pagosMes+cdMes+gastosTotal;
+  // Los gastos "Auto:" (insumos tipo gasto recibidos) no salen de caja por sí
+  // mismos: su efectivo ya está contado en pagos CxP / compras directas.
+  const gastosFlujo=gMes.filter(g=>!(g.nota||"").startsWith("Auto:")).reduce((s,g)=>s+parseFloat(g.monto||0),0);
+  const salidas=pagosMes+cdMes+gastosFlujo;
   const flujoNeto=entradas-salidas;
 
   // Posición (a hoy, no del mes)
   const cxpPendiente=cxp.filter(c=>c.estatus!=="pagado").reduce((s,c)=>s+(parseFloat(c.monto_total)-parseFloat(c.monto_pagado||0)),0);
   const valorAlmacen=inventario.reduce((s,p)=>s+(parseFloat(p.existencia)||0)*(parseFloat(p.costo_unitario_actual)||0),0);
-  const valorSucursal=invSucursal.reduce((s,i)=>s+Math.max(0,parseFloat(i.existencia)||0)*costoInsumo(i.catalogo_id,invSucursal,catalogo),0);
+  const valorSucursal=invSucursal.reduce((s,i)=>s+Math.max(0,parseFloat(i.existencia)||0)*costoInsumo(i.insumo_id,invSucursal,catalogo),0);
 
   const Row=({label,value,bold,color,pct,indent})=>(<div className={`flex justify-between py-1.5 ${bold?"border-t-2 border-gray-300 font-bold text-gray-900":"border-t border-gray-50"}`}><span className={`${indent?"pl-4 text-gray-600":""} ${bold?"":"text-gray-700"} text-sm`}>{label}</span><span className={`text-sm font-semibold ${color||""}`}>{value}{pct!=null&&<span className="text-xs text-gray-400 ml-2">({pct.toFixed(1)}%)</span>}</span></div>);
 
@@ -1881,7 +1970,7 @@ function EstadosView({ventas,mermas,gastosOp,comprasDirectas,cxp,pagos,inventari
         <p className="text-xs font-semibold text-red-700 mt-3 mb-1">Salidas</p>
         <Row label="Pagos a proveedores (CxP)" value={fmt(-pagosMes)} color="text-red-600" indent/>
         <Row label="Compras directas (contado)" value={fmt(-cdMes)} color="text-red-600" indent/>
-        <Row label="Gastos operativos" value={fmt(-gastosTotal)} color="text-red-600" indent/>
+        <Row label="Gastos operativos (pagados directo)" value={fmt(-gastosFlujo)} color="text-red-600" indent/>
         <Row label="Total salidas" value={fmt(-salidas)} bold color="text-red-700"/>
         <Row label="Flujo neto del mes" value={fmt(flujoNeto)} bold color={flujoNeto>=0?"text-emerald-700":"text-red-600"}/>
         {entradas===0&&vMes.length>0&&<p className="text-xs text-orange-600 mt-2">Tip: captura las formas de pago (efectivo/tarjeta/plataforma) al importar cada corte de SR para que el flujo sea real.</p>}
@@ -1937,6 +2026,7 @@ function App(){
   const [ventaDetalle,setVentaDetalle]=useState([]);
   const [mermas,setMermas]=useState([]);
   const [movSucursal,setMovSucursal]=useState([]);
+  const [insumos,setInsumos]=useState([]);
 
   // Check URL for provider token
   useEffect(()=>{
@@ -1980,7 +2070,7 @@ function App(){
         return;
       }
 
-      const tables=["catalogo","proveedores","tipos_flujo_costo","unidades_medida","inventario_almacen","pedidos","pedido_detalle","pedido_proveedor_estatus","lotes_almacen","recepciones","recepcion_detalle","cuentas_por_pagar","pagos","compras_directas","gastos_operativos","categorias_gastos","sucursales","productos_venta","recetas","inventario_sucursal","ventas","venta_detalle","mermas","movimientos_sucursal"];
+      const tables=["catalogo","proveedores","tipos_flujo_costo","unidades_medida","inventario_almacen","pedidos","pedido_detalle","pedido_proveedor_estatus","lotes_almacen","recepciones","recepcion_detalle","cuentas_por_pagar","pagos","compras_directas","gastos_operativos","categorias_gastos","sucursales","productos_venta","recetas","inventario_sucursal","ventas","venta_detalle","mermas","movimientos_sucursal","insumos"];
       const results={};
       for(const t of tables){setLoadMsg(`Cargando ${t}...`);results[t]=await sbGet(t);}
       
@@ -1990,7 +2080,7 @@ function App(){
       const pMap={};(results.proveedores||[]).forEach(p=>{pMap[p.id]=p;});
       const fMap={};(results.tipos_flujo_costo||[]).forEach(f=>{fMap[f.id]=f;});
 
-      setCatalogo((results.catalogo||[]).filter(c=>c.activo!==false).map(c=>({id:c.id,sku:c.sku,articulo:c.articulo,tipo_producto:c.tipo_producto,unidad_clave:uMap[c.unidad_id]?.clave||"?",costo_referencia:parseFloat(c.costo_referencia)||0,proveedor_id:c.proveedor_id,proveedor_nombre:pMap[c.proveedor_id]?.nombre||"?",notas:c.notas,aplica_iva:c.aplica_iva!==false,inv_id:c.inventario_almacen_id})));
+      setCatalogo((results.catalogo||[]).filter(c=>c.activo!==false).map(c=>({id:c.id,sku:c.sku,articulo:c.articulo,tipo_producto:c.tipo_producto,unidad_clave:uMap[c.unidad_id]?.clave||"?",costo_referencia:parseFloat(c.costo_referencia)||0,proveedor_id:c.proveedor_id,proveedor_nombre:pMap[c.proveedor_id]?.nombre||"?",notas:c.notas,aplica_iva:c.aplica_iva!==false,inv_id:c.inventario_almacen_id,insumo_id:c.insumo_id,contenido:parseFloat(c.contenido)||1})));
       setProveedores((results.proveedores||[]).filter(p=>p.activo!==false).map(p=>{const fl=fMap[p.tipo_flujo_id]||{};return{id:p.id,nombre:p.nombre,tipo_flujo:fl.nombre||"?",quien_captura:fl.quien_captura_precio||"?"};}));
       setInventario((results.inventario_almacen||[]).map(i=>({id:i.id,sku:i.sku,descripcion:i.descripcion,unidad_clave:uMap[i.unidad_id]?.clave||"?",existencia:parseFloat(i.existencia)||0,costo_unitario_actual:parseFloat(i.costo_unitario_actual)||0,lead_time:i.lead_time})));
       setPedidos((results.pedidos||[]).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)));
@@ -2015,6 +2105,7 @@ function App(){
       setVentaDetalle(results.venta_detalle||[]);
       setMermas((results.mermas||[]).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)));
       setMovSucursal(results.movimientos_sucursal||[]);
+      setInsumos((results.insumos||[]).filter(i=>i.activo!==false));
 
       setLoading(false);
     }
@@ -2212,16 +2303,16 @@ function App(){
     const consumo={};
     rowsFinal.forEach(r=>explotarReceta(r.prodId,r.cantidad,recetas,prods,consumo));
     let invList=invSucursal;const movsNew=[];const negativos=[];
-    if(sucId)for(const[catId,cant]of Object.entries(consumo)){
-      let row=invList.find(i=>i.sucursal_id===sucId&&i.catalogo_id===catId);
-      const costoU=costoInsumo(catId,invList,catalogo);
-      if(!row){const res=await sbPost("inventario_sucursal",{sucursal_id:sucId,catalogo_id:catId,existencia:0,costo_promedio:costoU});if(res&&res[0]){row=res[0];invList=[...invList,row];}else continue;}
+    if(sucId)for(const[insId,cant]of Object.entries(consumo)){
+      let row=invList.find(i=>i.sucursal_id===sucId&&i.insumo_id===insId);
+      const costoU=costoInsumo(insId,invList,catalogo);
+      if(!row){const res=await sbPost("inventario_sucursal",{sucursal_id:sucId,insumo_id:insId,existencia:0,costo_promedio:costoU});if(res&&res[0]){row=res[0];invList=[...invList,row];}else continue;}
       const nueva=Math.round(((parseFloat(row.existencia)||0)-cant)*1000)/1000;
       await sbPatch("inventario_sucursal",row.id,{existencia:nueva,updated_at:new Date().toISOString()});
       invList=invList.map(i=>i.id===row.id?{...i,existencia:nueva}:i);
-      const mv=await sbPost("movimientos_sucursal",{sucursal_id:sucId,catalogo_id:catId,tipo:"salida_venta",cantidad:Math.round(cant*1000)/1000,costo_unitario:costoU,venta_id:ventaId,fecha,nota:`Venta ${folio}`,registrado_por:rol});
+      const mv=await sbPost("movimientos_sucursal",{sucursal_id:sucId,insumo_id:insId,tipo:"salida_venta",cantidad:Math.round(cant*1000)/1000,costo_unitario:costoU,venta_id:ventaId,fecha,nota:`Venta ${folio}`,registrado_por:rol});
       if(mv&&mv[0])movsNew.push(mv[0]);
-      if(nueva<0){const cat=catalogo.find(c=>c.id===catId);negativos.push(`${cat?.articulo||"?"}: ${fmtQ(nueva,cat?.unidad_clave||"")}`);}
+      if(nueva<0){const ins=insumos.find(x=>x.id===insId);negativos.push(`${ins?.nombre||"?"}: ${fmtQ(nueva,ins?.unidad_base||"")}`);}
     }
     setProductosVenta(prods);
     setVentas([vRes[0],...ventas]);
@@ -2258,22 +2349,34 @@ function App(){
       const detRes=await sbGet("recepcion_detalle",`recepcion_id=eq.${recId}`);
       setRecepcionDetalle([...recepcionDetalle,...(detRes||[])]);
 
-      // v7.0: lo recibido entra al inventario de la sucursal con su costo real
-      // (conexión compras → inventario en punto de venta).
+      // v7.2: lo recibido entra al inventario de sucursal CONVERTIDO a unidad
+      // base (6 botes × 900 ml = 5,400 ml) con costo por unidad base. Los
+      // insumos tipo "gasto" (jabón, fibras…) no llevan inventario: su costo
+      // se registra como gasto operativo con su categoría.
       const pedRec=pedidos.find(p=>p.id===pedId);
       const sucIdRec=pedRec?.sucursal_id||sucursales[0]?.id||null;
       if(sucIdRec){
-        let invList=invSucursal;const movsNew=[];
+        let invList=invSucursal;const movsNew=[];const gastosNew=[];
         for(const item of items){
           if((item.cantidad_recibida||0)<=0)continue;
           const det=pedidoDetalle.find(d=>d.id===item.pedido_detalle_id);
           if(!det)continue;
-          const costoU=parseFloat(det.costo_real||det.costo_referencia)||0;
-          const r=await entradaSucursalDB(invList,sucIdRec,det.catalogo_id,item.cantidad_recibida,costoU,"entrada_recepcion",{recepcion_id:recId,nota:`Recepción ${pedRec?.numero_pedido||""}`,registrado_por:"sucursal"});
+          const cat=catalogo.find(c=>c.id===det.catalogo_id);
+          if(!cat?.insumo_id)continue;
+          const ins=insumos.find(x=>x.id===cat.insumo_id);
+          const contenido=parseFloat(cat.contenido)||1;
+          const costoPres=parseFloat(det.costo_real||det.costo_referencia)||0;
+          if(ins?.tipo_control==="gasto"){
+            const monto=Math.round(item.cantidad_recibida*costoPres*100)/100;
+            if(monto>0){const g=await sbPost("gastos_operativos",{categoria:ins.categoria_gasto||"Insumos generales",descripcion:`${cat.articulo} × ${item.cantidad_recibida} (recepción ${pedRec?.numero_pedido||""})`,monto,metodo_pago:"transferencia",fecha:new Date().toISOString().split("T")[0],registrado_por:"sistema",nota:"Auto: insumo tipo gasto"});if(g&&g[0])gastosNew.push(g[0]);}
+            continue;
+          }
+          const r=await entradaSucursalDB(invList,sucIdRec,cat.insumo_id,item.cantidad_recibida*contenido,costoPres/contenido,"entrada_recepcion",{recepcion_id:recId,nota:`Recepción ${pedRec?.numero_pedido||""}: ${item.cantidad_recibida} × ${cat.articulo}`,registrado_por:"sucursal"});
           invList=r.invList;if(r.mov)movsNew.push(r.mov);
         }
         setInvSucursal(invList);
         if(movsNew.length)setMovSucursal(prev=>[...prev,...movsNew]);
+        if(gastosNew.length)setGastosOp(prev=>[...gastosNew,...prev]);
       }
 
       // Check if ALL providers for this pedido now have reception → auto-close only if pedido is "comprado"
@@ -2344,7 +2447,7 @@ function App(){
     </div></div></div>
     <div className="max-w-6xl mx-auto px-4 py-6">
       {view==="bandeja"&&!selectedPedido&&subview!=="crear"&&<BandejaPedidos pedidos={pedidos} rol={rol} onSelect={p=>{setSelectedPedido(p);}} onNew={()=>setSubview("crear")} pedidoDetalle={pedidoDetalle} proveedores={proveedores} provEstatus={provEstatus} onDelete={handleDeletePedido} recepciones={recepciones}/>}
-      {view==="bandeja"&&subview==="crear"&&<CrearPedido catalogo={catalogo} proveedores={proveedores} onSave={handleCreatePedido} onCancel={()=>setSubview(null)}/>}
+      {view==="bandeja"&&subview==="crear"&&<CrearPedido catalogo={catalogo} proveedores={proveedores} insumos={insumos} invSucursal={invSucursal} onSave={handleCreatePedido} onCancel={()=>setSubview(null)}/>}
       {view==="bandeja"&&selectedPedido&&["admin","compras"].includes(rol)&&<DetallePedido pedido={selectedPedido} detalle={currentDetalle} catalogo={catalogo} proveedores={proveedores} provEstatus={currentProvEst} onBack={()=>setSelectedPedido(null)} onAction={handleAction} onReasignar={handleReasignar} onUpdatePrecio={handleUpdatePrecio} onUpdateCantidad={handleUpdateCantidad} onAddItem={handleAddItem} rol={rol} recepciones={recepciones}/>}
       {view==="bandeja"&&selectedPedido&&rol==="sucursal"&&<DetallePedido pedido={selectedPedido} detalle={currentDetalle} catalogo={catalogo} proveedores={proveedores} provEstatus={currentProvEst} onBack={()=>setSelectedPedido(null)} onAction={()=>{}} onReasignar={()=>{}} onUpdatePrecio={()=>{}} onUpdateCantidad={()=>{}} onAddItem={()=>{}} rol={rol} recepciones={recepciones}/>}
       {view==="bandeja"&&selectedPedido&&rol==="proveedor"&&(()=>{
@@ -2411,12 +2514,24 @@ function App(){
         alert("Pedido surtido con PEPS — lotes e inventario actualizados");
       }}/>}
       {view==="dashboard"&&<DashboardView pedidos={pedidos} catalogo={catalogo} proveedores={proveedores} pedidoDetalle={pedidoDetalle} inventario={inventario} comprasDirectas={comprasDirectas} gastosOp={gastosOp}/>}
-      {view==="catalogo"&&rol==="admin"&&<CatalogoView catalogo={catalogo} setCatalogo={setCatalogo} proveedores={proveedores} setProveedores={setProveedores} unidades={unidades} inventario={inventario} flujos={flujos}/>}
+      {view==="catalogo"&&rol==="admin"&&<CatalogoView catalogo={catalogo} setCatalogo={setCatalogo} proveedores={proveedores} setProveedores={setProveedores} unidades={unidades} inventario={inventario} flujos={flujos} insumos={insumos} setInsumos={setInsumos}/>}
       {view==="recepcion"&&rol==="sucursal"&&<RecepcionView pedidos={pedidos} pedidoDetalle={pedidoDetalle} proveedores={proveedores} provEstatus={provEstatus} catalogo={catalogo} recepciones={recepciones} recepcionDetalle={recepcionDetalle} onRecibir={handleRecibir}/>}
       {view==="finanzas"&&["admin","compras","finanzas"].includes(rol)&&<FinanzasView cxp={cxp} setCxp={setCxp} pagos={pagos} setPagos={setPagos} pedidos={pedidos} proveedores={proveedores} pedidoDetalle={pedidoDetalle} catalogo={catalogo}/>}
-      {view==="compras_directas"&&["sucursal","admin","compras","finanzas"].includes(rol)&&<ComprasDirectasView comprasDirectas={comprasDirectas} setComprasDirectas={setComprasDirectas} catalogo={catalogo} proveedores={proveedores} cxp={cxp} setCxp={setCxp} onEntrada={async(catId,cant,costoU)=>{const sucId=sucursales[0]?.id;if(!sucId)return;const r=await entradaSucursalDB(invSucursal,sucId,catId,cant,costoU,"entrada_compra_directa",{nota:"Compra directa",registrado_por:rol});setInvSucursal(r.invList);if(r.mov)setMovSucursal(prev=>[...prev,r.mov]);}}/>}
-      {view==="ventas"&&["admin","compras","sucursal","finanzas"].includes(rol)&&<VentasSRView productosVenta={productosVenta} setProductosVenta={setProductosVenta} recetas={recetas} setRecetas={setRecetas} ventas={ventas} ventaDetalle={ventaDetalle} catalogo={catalogo} invSucursal={invSucursal} onImport={handleImportVentas} rol={rol}/>}
-      {view==="inv_sucursal"&&["admin","compras","sucursal"].includes(rol)&&<SucursalInvView invSucursal={invSucursal} setInvSucursal={setInvSucursal} movSucursal={movSucursal} setMovSucursal={setMovSucursal} mermas={mermas} setMermas={setMermas} catalogo={catalogo} sucursales={sucursales} rol={rol}/>}
+      {view==="compras_directas"&&["sucursal","admin","compras","finanzas"].includes(rol)&&<ComprasDirectasView comprasDirectas={comprasDirectas} setComprasDirectas={setComprasDirectas} catalogo={catalogo} proveedores={proveedores} cxp={cxp} setCxp={setCxp} onEntrada={async(catId,cant,costoU)=>{
+        const sucId=sucursales[0]?.id;if(!sucId)return;
+        const cat=catalogo.find(c=>c.id===catId);if(!cat?.insumo_id)return;
+        const ins=insumos.find(x=>x.id===cat.insumo_id);
+        const contenido=parseFloat(cat.contenido)||1;
+        if(ins?.tipo_control==="gasto"){
+          const monto=Math.round(cant*costoU*100)/100;
+          if(monto>0){const g=await sbPost("gastos_operativos",{categoria:ins.categoria_gasto||"Insumos generales",descripcion:`${cat.articulo} × ${cant} (compra directa)`,monto,metodo_pago:"transferencia",fecha:new Date().toISOString().split("T")[0],registrado_por:"sistema",nota:"Auto: insumo tipo gasto"});if(g&&g[0])setGastosOp(prev=>[g[0],...prev]);}
+          return;
+        }
+        const r=await entradaSucursalDB(invSucursal,sucId,cat.insumo_id,cant*contenido,costoU/contenido,"entrada_compra_directa",{nota:`Compra directa: ${cant} × ${cat.articulo}`,registrado_por:rol});
+        setInvSucursal(r.invList);if(r.mov)setMovSucursal(prev=>[...prev,r.mov]);
+      }}/>}
+      {view==="ventas"&&["admin","compras","sucursal","finanzas"].includes(rol)&&<VentasSRView productosVenta={productosVenta} setProductosVenta={setProductosVenta} recetas={recetas} setRecetas={setRecetas} ventas={ventas} ventaDetalle={ventaDetalle} catalogo={catalogo} insumos={insumos} invSucursal={invSucursal} onImport={handleImportVentas} rol={rol}/>}
+      {view==="inv_sucursal"&&["admin","compras","sucursal"].includes(rol)&&<SucursalInvView invSucursal={invSucursal} setInvSucursal={setInvSucursal} movSucursal={movSucursal} setMovSucursal={setMovSucursal} mermas={mermas} setMermas={setMermas} catalogo={catalogo} insumos={insumos} sucursales={sucursales} rol={rol}/>}
       {view==="estados"&&["admin","compras","finanzas"].includes(rol)&&<EstadosView ventas={ventas} mermas={mermas} gastosOp={gastosOp} comprasDirectas={comprasDirectas} cxp={cxp} pagos={pagos} inventario={inventario} invSucursal={invSucursal} movSucursal={movSucursal} catalogo={catalogo}/>}
       {view==="gastos"&&["sucursal","admin","compras","finanzas"].includes(rol)&&<GastosView gastosOp={gastosOp} setGastosOp={setGastosOp} catGastos={catGastos} setCatGastos={setCatGastos} rol={rol}/>}
     </div>
