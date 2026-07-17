@@ -93,7 +93,7 @@ Fecha: hoy. Canal: mostrador. Formas de pago: efectivo **710**, tarjeta **800**.
 ## Parte 6 — Merma y ajuste
 
 **6.1** En **Inv. Sucursal → Registrar merma**: CREMA, **200 ml**, motivo caducidad.
-☑️ *Debes ver:* pérdida estimada ≈ **$12.90**, la existencia baja 200 ml, y la merma en la lista con su costo.
+☑️ *Debes ver:* pérdida estimada **$12.89**, la existencia baja 200 ml, y la merma en la lista con su costo.
 
 **6.2** En **Inventario → Ajustar** (cualquier insumo): cambia la existencia simulando un conteo físico y pon un motivo.
 ☑️ *Debes ver:* el movimiento "entrada/salida ajuste" en el kárdex.
