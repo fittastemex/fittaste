@@ -47,9 +47,33 @@ function montoConIva(items,catalogo){return items.reduce((s,d)=>{const cat=catal
 // inventario de sucursal (viene de recepciones reales); si aún no hay
 // historial, cae al costo de referencia del catálogo de compras.
 function costoInsumo(catalogoId,invSucursal,catalogo){const inv=(invSucursal||[]).find(i=>i.catalogo_id===catalogoId);if(inv&&parseFloat(inv.costo_promedio)>0)return parseFloat(inv.costo_promedio);const cat=(catalogo||[]).find(c=>c.id===catalogoId);return cat?parseFloat(cat.costo_referencia)||0:0;}
-// v7.0: costo teórico de un producto de venta (platillo SR) explotando su receta.
+// v7.1: costo teórico de un producto de venta (platillo SR) explotando su receta.
+// Una línea puede ser un insumo del catálogo o una PREPARACIÓN (sub-receta): en
+// ese caso el costo unitario es el costo de su tanda entre su rendimiento.
 // merma_pct es el % extra de consumo por rendimiento (ej. limpieza de verdura).
-function costoReceta(prodId,recetas,invSucursal,catalogo){return (recetas||[]).filter(r=>r.producto_venta_id===prodId).reduce((s,r)=>s+(parseFloat(r.cantidad)||0)*(1+(parseFloat(r.merma_pct)||0)/100)*costoInsumo(r.catalogo_id,invSucursal,catalogo),0);}
+// depth protege contra ciclos (una prep que se usa a sí misma).
+function costoReceta(prodId,recetas,invSucursal,catalogo,productosVenta,depth=0){
+  if(depth>5)return 0;
+  return (recetas||[]).filter(r=>r.producto_venta_id===prodId).reduce((s,r)=>{
+    const q=(parseFloat(r.cantidad)||0)*(1+(parseFloat(r.merma_pct)||0)/100);
+    let cu=0;
+    if(r.catalogo_id)cu=costoInsumo(r.catalogo_id,invSucursal,catalogo);
+    else if(r.preparacion_id){const prep=(productosVenta||[]).find(p=>p.id===r.preparacion_id);const rend=parseFloat(prep?.rendimiento)||1;cu=costoReceta(r.preparacion_id,recetas,invSucursal,catalogo,productosVenta,depth+1)/rend;}
+    return s+q*cu;
+  },0);
+}
+// v7.1: explota una receta (incluyendo sub-recetas) hasta insumos del catálogo.
+// Acumula en `consumo` {catalogo_id: cantidad}; solo los insumos del catálogo
+// descuentan inventario (las preparaciones son virtuales: no llevan stock).
+function explotarReceta(prodId,cantidadVendida,recetas,productosVenta,consumo,depth=0){
+  if(depth>5)return consumo;
+  (recetas||[]).filter(r=>r.producto_venta_id===prodId).forEach(r=>{
+    const q=(parseFloat(r.cantidad)||0)*(1+(parseFloat(r.merma_pct)||0)/100)*cantidadVendida;
+    if(r.catalogo_id)consumo[r.catalogo_id]=(consumo[r.catalogo_id]||0)+q;
+    else if(r.preparacion_id){const rend=parseFloat((productosVenta||[]).find(p=>p.id===r.preparacion_id)?.rendimiento)||1;explotarReceta(r.preparacion_id,q/rend,recetas,productosVenta,consumo,depth+1);}
+  });
+  return consumo;
+}
 // v7.0: entrada de insumo al inventario de sucursal con costo promedio ponderado.
 // Recibe y devuelve la lista local (los loops llaman varias veces antes de setState).
 async function entradaSucursalDB(invList,sucId,catalogoId,cantidad,costoU,tipo,extra){
@@ -1348,7 +1372,11 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
   const [addingProd,setAddingProd]=useState(false);
   const [newProd,setNewProd]=useState({codigo_sr:"",nombre:"",categoria:"",precio_venta:0});
   const [recetaDe,setRecetaDe]=useState(null);
-  const [newLinea,setNewLinea]=useState({catalogo_id:"",cantidad:0,merma_pct:0});
+  const [newLinea,setNewLinea]=useState({ref:"",cantidad:0,merma_pct:0});
+  // v7.1: preparaciones (sub-recetas)
+  const [verTipo,setVerTipo]=useState("platillos");
+  const [addingPrep,setAddingPrep]=useState(false);
+  const [newPrep,setNewPrep]=useState({nombre:"",unidad:"kg",rendimiento:0});
   const [saving,setSaving]=useState(false);
   const [selVenta,setSelVenta]=useState(null);
 
@@ -1375,7 +1403,8 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
       const precio=iPre>=0&&num(c[iPre])>0?num(c[iPre]):(cantidad>0?importe/cantidad:0);
       if(!nombre&&!codigo)return null;
       if(cantidad<=0&&importe<=0)return null;
-      const prod=productosVenta.find(p=>codigo&&p.codigo_sr&&String(p.codigo_sr).toLowerCase()===codigo.toLowerCase())||productosVenta.find(p=>p.nombre.toLowerCase()===(nombre||"").toLowerCase());
+      const vendibles=productosVenta.filter(p=>!p.es_preparacion);
+      const prod=vendibles.find(p=>codigo&&p.codigo_sr&&String(p.codigo_sr).toLowerCase()===codigo.toLowerCase())||vendibles.find(p=>p.nombre.toLowerCase()===(nombre||"").toLowerCase());
       return{codigo,nombre:nombre||codigo,cantidad,importe,precio,prodId:prod?.id||null};
     }).filter(Boolean);
     return{rows};
@@ -1395,16 +1424,78 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
   };
 
   // --- Productos y recetas ---
-  const saveProd=async(p)=>{setSaving(true);const upd={codigo_sr:prodData.codigo_sr||null,nombre:prodData.nombre.trim(),categoria:prodData.categoria||null,precio_venta:parseFloat(prodData.precio_venta)||0,updated_at:new Date().toISOString()};const res=await sbPatch("productos_venta",p.id,upd);if(res)setProductosVenta(productosVenta.map(x=>x.id===p.id?{...x,...upd}:x));setEditingProd(null);setSaving(false);};
+  const saveProd=async(p)=>{setSaving(true);const upd=p.es_preparacion?{nombre:prodData.nombre.trim().toUpperCase(),unidad:prodData.unidad||"kg",rendimiento:parseFloat(prodData.rendimiento)||1,updated_at:new Date().toISOString()}:{codigo_sr:prodData.codigo_sr||null,nombre:prodData.nombre.trim(),categoria:prodData.categoria||null,precio_venta:parseFloat(prodData.precio_venta)||0,updated_at:new Date().toISOString()};const res=await sbPatch("productos_venta",p.id,upd);if(res)setProductosVenta(productosVenta.map(x=>x.id===p.id?{...x,...upd}:x));setEditingProd(null);setSaving(false);};
   const addProd=async()=>{if(!newProd.nombre.trim())return;setSaving(true);const res=await sbPost("productos_venta",{codigo_sr:newProd.codigo_sr.trim()||null,nombre:newProd.nombre.trim(),categoria:newProd.categoria.trim()||null,precio_venta:parseFloat(newProd.precio_venta)||0});if(res&&res[0]){setProductosVenta([...productosVenta,res[0]]);setNewProd({codigo_sr:"",nombre:"",categoria:"",precio_venta:0});setAddingProd(false);}else alert("Error al guardar (¿código SR duplicado?)");setSaving(false);};
-  const delProd=async(p)=>{if(!confirm(`¿Desactivar "${p.nombre}"? Sus ventas históricas se conservan.`))return;await sbPatch("productos_venta",p.id,{activo:false});setProductosVenta(productosVenta.filter(x=>x.id!==p.id));};
-  const addLinea=async()=>{if(!recetaDe||!newLinea.catalogo_id||newLinea.cantidad<=0)return;setSaving(true);const res=await sbPost("recetas",{producto_venta_id:recetaDe,catalogo_id:newLinea.catalogo_id,cantidad:newLinea.cantidad,merma_pct:newLinea.merma_pct||0});if(res&&res[0]){setRecetas([...recetas,res[0]]);setNewLinea({catalogo_id:"",cantidad:0,merma_pct:0});}else alert("Error al agregar (¿el insumo ya está en la receta?)");setSaving(false);};
+  const delProd=async(p)=>{
+    if(p.es_preparacion&&recetas.some(r=>r.preparacion_id===p.id)){alert(`"${p.nombre}" se usa en otras recetas — quítala de esas recetas primero.`);return;}
+    if(!confirm(`¿Desactivar "${p.nombre}"?${p.es_preparacion?"":" Sus ventas históricas se conservan."}`))return;
+    await sbPatch("productos_venta",p.id,{activo:false});setProductosVenta(productosVenta.filter(x=>x.id!==p.id));
+  };
+  const addPrep=async()=>{if(!newPrep.nombre.trim()||newPrep.rendimiento<=0)return;setSaving(true);const res=await sbPost("productos_venta",{nombre:newPrep.nombre.trim().toUpperCase(),es_preparacion:true,unidad:newPrep.unidad,rendimiento:newPrep.rendimiento,precio_venta:0});if(res&&res[0]){setProductosVenta([...productosVenta,res[0]]);setNewPrep({nombre:"",unidad:"kg",rendimiento:0});setAddingPrep(false);setRecetaDe(res[0].id);}else alert("Error al guardar la preparación");setSaving(false);};
+  const addLinea=async()=>{
+    if(!recetaDe||!newLinea.ref||newLinea.cantidad<=0)return;
+    setSaving(true);
+    const [tipoRef,refId]=newLinea.ref.split(":");
+    const payload={producto_venta_id:recetaDe,cantidad:newLinea.cantidad,merma_pct:newLinea.merma_pct||0};
+    if(tipoRef==="prep")payload.preparacion_id=refId;else payload.catalogo_id=refId;
+    const res=await sbPost("recetas",payload);
+    if(res&&res[0]){setRecetas([...recetas,res[0]]);setNewLinea({ref:"",cantidad:0,merma_pct:0});}
+    else alert("Error al agregar (¿el insumo ya está en la receta?)");
+    setSaving(false);
+  };
   const delLinea=async(id)=>{await sbDelete("recetas",id);setRecetas(recetas.filter(r=>r.id!==id));};
   const updLinea=async(id,campo,valor)=>{await sbPatch("recetas",id,{[campo]:valor});setRecetas(recetas.map(r=>r.id===id?{...r,[campo]:valor}:r));};
 
   const ventasSorted=ventas.slice().sort((a,b)=>new Date(b.fecha)-new Date(a.fecha)||new Date(b.created_at)-new Date(a.created_at));
   const canalBadge=(c)=>({mostrador:"info",ubereats:"success",rappi:"warning",didi:"purple"})[c]||"default";
   const tabsV=[{id:"importar",l:"Importar de SR"},{id:"historial",l:`Historial (${ventas.length})`},{id:"productos",l:`Productos y recetas (${productosVenta.length})`}];
+
+  // v7.1: editor de receta compartido entre platillos y preparaciones.
+  // Una línea puede ser insumo del catálogo (cat:) o preparación (prep:).
+  const recetaEditorRow=(p,cR,colSpan)=>{
+    const esPrepDueno=!!p.es_preparacion;
+    const rend=parseFloat(p.rendimiento)||1;
+    const precio=parseFloat(p.precio_venta)||0;
+    const margen=precio>0?(precio/1.16-cR)/(precio/1.16)*100:0;
+    return(<tr><td colSpan={colSpan} className="bg-teal-50/60 px-4 py-3 border-t border-teal-100">
+      <p className="text-xs font-bold text-teal-800 mb-2">Receta de {p.nombre}{esPrepDueno?` — ingredientes de UNA TANDA (rinde ${rend} ${p.unidad||"u"})`:" — consumo por unidad vendida"}</p>
+      <table className="w-full text-xs mb-2"><thead><tr>{["Ingrediente","Cantidad","Unidad","Merma extra %","Costo unit.","Costo línea",""].map(h=><th key={h} className={`px-2 py-1 font-medium text-gray-500 ${["Cantidad","Merma extra %","Costo unit.","Costo línea"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}</tr></thead><tbody>
+      {recetas.filter(r=>r.producto_venta_id===p.id).map(r=>{
+        const esPrep=!!r.preparacion_id;
+        const prep=esPrep?productosVenta.find(x=>x.id===r.preparacion_id):null;
+        const cat=esPrep?{}:(catalogo.find(c=>c.id===r.catalogo_id)||{});
+        const cU=esPrep?(costoReceta(r.preparacion_id,recetas,invSucursal,catalogo,productosVenta)/(parseFloat(prep?.rendimiento)||1)):costoInsumo(r.catalogo_id,invSucursal,catalogo);
+        const cL=(parseFloat(r.cantidad)||0)*(1+(parseFloat(r.merma_pct)||0)/100)*cU;
+        return(<tr key={r.id} className="border-t border-teal-100">
+          <td className="px-2 py-1 font-medium text-gray-800">{esPrep?<span>{prep?.nombre||"?"} <Badge v="purple">prep</Badge></span>:(cat.articulo||"?")}</td>
+          <td className="px-2 py-1 text-right"><input type="number" min="0" step="0.001" className="w-20 text-right border border-gray-200 rounded px-1 py-0.5" defaultValue={r.cantidad} onBlur={e=>{const v=parseFloat(e.target.value)||0;if(v!==parseFloat(r.cantidad))updLinea(r.id,"cantidad",v);}}/></td>
+          <td className="px-2 py-1 text-gray-500">{esPrep?(prep?.unidad||"u"):cat.unidad_clave}</td>
+          <td className="px-2 py-1 text-right"><input type="number" min="0" step="1" className="w-14 text-right border border-gray-200 rounded px-1 py-0.5" defaultValue={r.merma_pct} onBlur={e=>{const v=parseFloat(e.target.value)||0;if(v!==parseFloat(r.merma_pct))updLinea(r.id,"merma_pct",v);}}/></td>
+          <td className="px-2 py-1 text-right text-gray-600">{fmt(cU)}</td>
+          <td className="px-2 py-1 text-right font-semibold text-teal-700">{fmt(cL)}</td>
+          <td className="px-2 py-1 text-right"><button onClick={()=>delLinea(r.id)} className="text-red-400 hover:text-red-600 px-1">✕</button></td>
+        </tr>);})}
+      </tbody></table>
+      <div className="flex gap-2 items-end flex-wrap">
+        <div className="flex-1"><label className="text-xs text-gray-500">Agregar ingrediente</label><select className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs" value={newLinea.ref} onChange={e=>setNewLinea({...newLinea,ref:e.target.value})}>
+          <option value="">Seleccionar...</option>
+          <optgroup label="Preparaciones (sub-recetas)">
+            {productosVenta.filter(x=>x.es_preparacion&&x.id!==p.id&&!recetas.some(r=>r.producto_venta_id===p.id&&r.preparacion_id===x.id)).map(x=>{const rx=parseFloat(x.rendimiento)||1;return<option key={x.id} value={"prep:"+x.id}>{x.nombre} ({x.unidad||"u"}) — {fmt(costoReceta(x.id,recetas,invSucursal,catalogo,productosVenta)/rx)}</option>;})}
+          </optgroup>
+          <optgroup label="Insumos del catálogo">
+            {catalogo.filter(c=>!recetas.some(r=>r.producto_venta_id===p.id&&r.catalogo_id===c.id)).map(c=><option key={c.id} value={"cat:"+c.id}>{c.articulo} ({c.unidad_clave}) — {fmt(costoInsumo(c.id,invSucursal,catalogo))}</option>)}
+          </optgroup>
+        </select></div>
+        <div><label className="text-xs text-gray-500">Cantidad</label><input type="number" min="0" step="0.001" className="w-24 border border-gray-200 rounded-lg px-2 py-1.5 text-xs" value={newLinea.cantidad||""} onChange={e=>setNewLinea({...newLinea,cantidad:parseFloat(e.target.value)||0})}/></div>
+        <div><label className="text-xs text-gray-500">Merma %</label><input type="number" min="0" step="1" className="w-16 border border-gray-200 rounded-lg px-2 py-1.5 text-xs" value={newLinea.merma_pct||""} onChange={e=>setNewLinea({...newLinea,merma_pct:parseFloat(e.target.value)||0})}/></div>
+        <Btn onClick={addLinea} disabled={saving||!newLinea.ref||newLinea.cantidad<=0} color="purple">{saving?"...":"Agregar"}</Btn>
+      </div>
+      <div className="flex justify-between mt-2 text-sm">
+        <span className="text-teal-800 font-medium">{esPrepDueno?<span>Costo de la tanda: <b>{fmt(cR)}</b> → costo por {p.unidad||"u"}: <b>{fmt(cR/rend)}</b></span>:<span>Costo total receta: <b>{fmt(cR)}</b></span>}</span>
+        {!esPrepDueno&&precio>0&&<span className="text-gray-600">Precio {fmt(precio)} (con IVA) → margen bruto <b className={margen<50?"text-red-600":"text-emerald-600"}>{margen.toFixed(1)}%</b></span>}
+      </div>
+    </td></tr>);
+  };
 
   return(<div>
     <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
@@ -1435,7 +1526,7 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
             {sinReceta>0&&<Badge v="danger">{sinReceta} sin receta (no descuentan inventario)</Badge>}
           </div>
           <div className="bg-white border border-gray-200 rounded-xl overflow-hidden max-h-64 overflow-y-auto"><table className="w-full text-xs"><thead className="bg-gray-50 sticky top-0"><tr>{["Código SR","Producto","Cant","Importe","Estado","Receta","Costo teórico"].map(h=><th key={h} className={`px-2 py-1.5 font-semibold text-gray-600 uppercase ${["Cant","Importe","Costo teórico"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}</tr></thead><tbody>
-            {parsed.rows.map((r,i)=>{const nRec=r.prodId?recetas.filter(x=>x.producto_venta_id===r.prodId).length:0;const cT=r.prodId?costoReceta(r.prodId,recetas,invSucursal,catalogo)*r.cantidad:0;return(<tr key={i} className="border-t border-gray-50">
+            {parsed.rows.map((r,i)=>{const nRec=r.prodId?recetas.filter(x=>x.producto_venta_id===r.prodId).length:0;const cT=r.prodId?costoReceta(r.prodId,recetas,invSucursal,catalogo,productosVenta)*r.cantidad:0;return(<tr key={i} className="border-t border-gray-50">
               <td className="px-2 py-1 font-mono text-gray-500">{r.codigo||"—"}</td>
               <td className="px-2 py-1 font-medium text-gray-800">{r.nombre}</td>
               <td className="px-2 py-1 text-right">{r.cantidad}</td>
@@ -1478,24 +1569,52 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
 
     {/* PRODUCTOS Y RECETAS */}
     {tab==="productos"&&<div>
-      <div className="flex justify-end mb-3">{addingProd?<div className="bg-white border-2 rounded-xl p-3 w-full" style={{borderColor:"#bfcd3b"}}><h3 className="text-sm font-bold text-gray-700 mb-2">Nuevo producto de venta</h3><div className="flex gap-2 items-end flex-wrap">
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <div className="flex gap-1">
+          <button onClick={()=>setVerTipo("platillos")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${verTipo==="platillos"?"bg-gray-800 text-white":"bg-white border border-gray-200 text-gray-500 hover:text-gray-700"}`}>Platillos ({productosVenta.filter(p=>!p.es_preparacion).length})</button>
+          <button onClick={()=>setVerTipo("preparaciones")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${verTipo==="preparaciones"?"bg-gray-800 text-white":"bg-white border border-gray-200 text-gray-500 hover:text-gray-700"}`}>Preparaciones ({productosVenta.filter(p=>p.es_preparacion).length})</button>
+        </div>
+        {verTipo==="platillos"&&!addingProd&&<Btn onClick={()=>setAddingProd(true)} color="green">+ Nuevo producto</Btn>}
+        {verTipo==="preparaciones"&&!addingPrep&&<Btn onClick={()=>setAddingPrep(true)} color="purple">+ Nueva preparación</Btn>}
+      </div>
+      {verTipo==="preparaciones"&&addingPrep&&<div className="bg-white border-2 border-teal-300 rounded-xl p-3 mb-3"><h3 className="text-sm font-bold text-teal-800 mb-2">Nueva preparación (sub-receta)</h3><div className="flex gap-2 items-end flex-wrap">
+        <div className="flex-1"><label className="text-xs text-gray-500 block mb-1">Nombre</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="SALSA DE LA CASA" value={newPrep.nombre} onChange={e=>setNewPrep({...newPrep,nombre:e.target.value})}/></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Se mide en</label><select className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newPrep.unidad} onChange={e=>setNewPrep({...newPrep,unidad:e.target.value})}><option value="kg">kg</option><option value="lt">lt</option><option value="pz">pz</option><option value="porcion">porción</option></select></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Rinde por tanda</label><input type="number" min="0" step="0.1" className="w-28 border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="ej. 2.5" value={newPrep.rendimiento||""} onChange={e=>setNewPrep({...newPrep,rendimiento:parseFloat(e.target.value)||0})}/></div>
+        <Btn onClick={addPrep} disabled={saving||!newPrep.nombre.trim()||newPrep.rendimiento<=0} color="purple">{saving?"...":"Crear y armar receta"}</Btn>
+        <button onClick={()=>setAddingPrep(false)} className="text-xs text-gray-500 px-2 py-1.5">Cancelar</button>
+      </div><p className="text-xs text-gray-400 mt-2">La receta que le captures es de UNA TANDA completa; el rendimiento dice cuánto produce esa tanda (ej. 2.5 kg de salsa). El costo por unidad se calcula solo y los platillos la usan como un ingrediente más.</p></div>}
+      {verTipo==="platillos"&&addingProd&&<div className="bg-white border-2 rounded-xl p-3 mb-3" style={{borderColor:"#bfcd3b"}}><h3 className="text-sm font-bold text-gray-700 mb-2">Nuevo producto de venta</h3><div className="flex gap-2 items-end flex-wrap">
         <div><label className="text-xs text-gray-500 block mb-1">Código SR</label><input className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm w-28" placeholder="BOWL01" value={newProd.codigo_sr} onChange={e=>setNewProd({...newProd,codigo_sr:e.target.value})}/></div>
         <div className="flex-1"><label className="text-xs text-gray-500 block mb-1">Nombre</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Como aparece en SoftRestaurant" value={newProd.nombre} onChange={e=>setNewProd({...newProd,nombre:e.target.value})}/></div>
         <div><label className="text-xs text-gray-500 block mb-1">Categoría</label><input className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm w-28" placeholder="BOWLS" value={newProd.categoria} onChange={e=>setNewProd({...newProd,categoria:e.target.value})}/></div>
         <div><label className="text-xs text-gray-500 block mb-1">Precio venta</label><input type="number" min="0" step="0.01" className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm w-24" value={newProd.precio_venta||""} onChange={e=>setNewProd({...newProd,precio_venta:parseFloat(e.target.value)||0})}/></div>
         <Btn onClick={addProd} disabled={saving||!newProd.nombre.trim()} color="green">{saving?"...":"Guardar"}</Btn>
         <button onClick={()=>setAddingProd(false)} className="text-xs text-gray-500 px-2 py-1.5">Cancelar</button>
-      </div></div>:<Btn onClick={()=>setAddingProd(true)} color="green">+ Nuevo producto</Btn>}</div>
-      {productosVenta.length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400 mb-2">Sin productos de venta</p><p className="text-xs text-gray-400">Se crean automáticamente al importar tu primer reporte de SR, o agrégalos manualmente</p></div>
+      </div></div>}
+      {(()=>{const lista=productosVenta.filter(p=>verTipo==="preparaciones"?p.es_preparacion:!p.es_preparacion);
+      return lista.length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400 mb-2">{verTipo==="preparaciones"?"Sin preparaciones":"Sin productos de venta"}</p><p className="text-xs text-gray-400">{verTipo==="preparaciones"?"Una preparación (salsa, arroz cocido, aderezo…) tiene su propia receta y los platillos la usan como un ingrediente más":"Se crean automáticamente al importar tu primer reporte de SR, o agrégalos manualmente"}</p></div>
       :<div className="bg-white border border-gray-200 rounded-xl overflow-hidden"><table className="w-full text-sm"><thead className="bg-gray-50"><tr>
-        {["Código SR","Producto","Categoría","Precio","Costo receta","Margen","Receta",""].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Precio","Costo receta","Margen"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
-      </tr></thead><tbody>{productosVenta.map(p=>{
+        {(verTipo==="preparaciones"?["Preparación","Se mide en","Rinde/tanda","Costo tanda","Costo unidad","Receta",""]:["Código SR","Producto","Categoría","Precio","Costo receta","Margen","Receta",""]).map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Precio","Costo receta","Margen","Rinde/tanda","Costo tanda","Costo unidad"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
+      </tr></thead><tbody>{lista.map(p=>{
         const isE=editingProd===p.id;
-        const cR=costoReceta(p.id,recetas,invSucursal,catalogo);
+        const cR=costoReceta(p.id,recetas,invSucursal,catalogo,productosVenta);
         const nRec=recetas.filter(r=>r.producto_venta_id===p.id).length;
         const precio=parseFloat(isE?prodData.precio_venta:p.precio_venta)||0;
         const margen=precio>0?(precio/1.16-cR)/(precio/1.16)*100:0;
         const openReceta=recetaDe===p.id;
+        const rend=parseFloat(isE?prodData.rendimiento:p.rendimiento)||1;
+        if(p.es_preparacion){return(<React.Fragment key={p.id}><tr className={`border-t border-gray-100 ${isE||openReceta?"bg-teal-50/60":"hover:bg-gray-50"}`}>
+          <td className="px-3 py-2 font-medium text-gray-900">{isE?<input className="w-full border border-teal-400 rounded px-1 py-0.5 text-sm" value={prodData.nombre} onChange={e=>setProdData({...prodData,nombre:e.target.value})}/>:<span>{p.nombre} <Badge v="purple">prep</Badge></span>}</td>
+          <td className="px-3 py-2 text-xs text-gray-500">{isE?<select className="border border-teal-400 rounded px-1 py-0.5 text-xs" value={prodData.unidad} onChange={e=>setProdData({...prodData,unidad:e.target.value})}><option value="kg">kg</option><option value="lt">lt</option><option value="pz">pz</option><option value="porcion">porción</option></select>:(p.unidad||"u")}</td>
+          <td className="px-3 py-2 text-right">{isE?<input type="number" min="0" step="0.1" className="w-20 text-right border border-teal-400 rounded px-1 py-0.5 text-sm" value={prodData.rendimiento} onChange={e=>setProdData({...prodData,rendimiento:e.target.value})}/>:`${p.rendimiento||1} ${p.unidad||"u"}`}</td>
+          <td className="px-3 py-2 text-right text-gray-600">{nRec>0?fmt(cR):<span className="text-gray-300">—</span>}</td>
+          <td className="px-3 py-2 text-right font-semibold text-teal-700">{nRec>0?`${fmt(cR/rend)}/${p.unidad||"u"}`:"—"}</td>
+          <td className="px-3 py-2"><button onClick={()=>{setRecetaDe(openReceta?null:p.id);setNewLinea({ref:"",cantidad:0,merma_pct:0});}} className={`text-xs px-2 py-1 rounded font-medium ${nRec>0?"text-teal-700 hover:bg-teal-50":"text-red-500 hover:bg-red-50"}`}>{nRec>0?`${nRec} ingredientes ${openReceta?"▲":"▼"}`:"+ Crear receta"}</button></td>
+          <td className="px-3 py-2 text-right">{isE?<div className="flex gap-1 justify-end"><button onClick={()=>saveProd(p)} disabled={saving} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded">{saving?"...":"Guardar"}</button><button onClick={()=>setEditingProd(null)} className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded">X</button></div>:<div className="flex gap-1 justify-end"><button onClick={()=>{setEditingProd(p.id);setProdData({nombre:p.nombre,unidad:p.unidad||"kg",rendimiento:p.rendimiento||1});}} className="text-xs text-amber-700 hover:bg-amber-100 px-2 py-1 rounded">Editar</button><button onClick={()=>delProd(p)} className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded">✕</button></div>}</td>
+        </tr>
+        {openReceta&&recetaEditorRow(p,cR,7)}
+        </React.Fragment>);}
         return(<React.Fragment key={p.id}><tr className={`border-t border-gray-100 ${isE||openReceta?"bg-lime-50/60":"hover:bg-gray-50"}`}>
           <td className="px-3 py-2 font-mono text-xs text-gray-500">{isE?<input className="w-20 border border-lime-400 rounded px-1 py-0.5 text-xs" value={prodData.codigo_sr||""} onChange={e=>setProdData({...prodData,codigo_sr:e.target.value})}/>:(p.codigo_sr||"—")}</td>
           <td className="px-3 py-2 font-medium text-gray-900">{isE?<input className="w-full border border-lime-400 rounded px-1 py-0.5 text-sm" value={prodData.nombre} onChange={e=>setProdData({...prodData,nombre:e.target.value})}/>:p.nombre}</td>
@@ -1503,31 +1622,11 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
           <td className="px-3 py-2 text-right">{isE?<input type="number" step="0.01" className="w-20 text-right border border-lime-400 rounded px-1 py-0.5 text-sm" value={prodData.precio_venta} onChange={e=>setProdData({...prodData,precio_venta:e.target.value})}/>:<span className="font-semibold">{fmt(p.precio_venta)}</span>}</td>
           <td className="px-3 py-2 text-right text-gray-600">{nRec>0?fmt(cR):<span className="text-gray-300">—</span>}</td>
           <td className="px-3 py-2 text-right">{nRec>0&&precio>0?<Badge v={margen<50?"danger":margen<65?"warning":"success"}>{margen.toFixed(0)}%</Badge>:"—"}</td>
-          <td className="px-3 py-2"><button onClick={()=>{setRecetaDe(openReceta?null:p.id);setNewLinea({catalogo_id:"",cantidad:0,merma_pct:0});}} className={`text-xs px-2 py-1 rounded font-medium ${nRec>0?"text-teal-700 hover:bg-teal-50":"text-red-500 hover:bg-red-50"}`}>{nRec>0?`${nRec} insumos ${openReceta?"▲":"▼"}`:"+ Crear receta"}</button></td>
+          <td className="px-3 py-2"><button onClick={()=>{setRecetaDe(openReceta?null:p.id);setNewLinea({ref:"",cantidad:0,merma_pct:0});}} className={`text-xs px-2 py-1 rounded font-medium ${nRec>0?"text-teal-700 hover:bg-teal-50":"text-red-500 hover:bg-red-50"}`}>{nRec>0?`${nRec} insumos ${openReceta?"▲":"▼"}`:"+ Crear receta"}</button></td>
           <td className="px-3 py-2 text-right">{isE?<div className="flex gap-1 justify-end"><button onClick={()=>saveProd(p)} disabled={saving} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded">{saving?"...":"Guardar"}</button><button onClick={()=>setEditingProd(null)} className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded">X</button></div>:<div className="flex gap-1 justify-end"><button onClick={()=>{setEditingProd(p.id);setProdData({codigo_sr:p.codigo_sr||"",nombre:p.nombre,categoria:p.categoria||"",precio_venta:p.precio_venta});}} className="text-xs text-amber-700 hover:bg-amber-100 px-2 py-1 rounded">Editar</button><button onClick={()=>delProd(p)} className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded">✕</button></div>}</td>
         </tr>
-        {openReceta&&<tr><td colSpan="8" className="bg-teal-50/60 px-4 py-3 border-t border-teal-100">
-          <p className="text-xs font-bold text-teal-800 mb-2">Receta de {p.nombre} — consumo de insumos por unidad vendida</p>
-          <table className="w-full text-xs mb-2"><thead><tr>{["Insumo (catálogo compras)","Cantidad","Unidad","Merma extra %","Costo unit.","Costo línea",""].map(h=><th key={h} className={`px-2 py-1 font-medium text-gray-500 ${["Cantidad","Merma extra %","Costo unit.","Costo línea"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}</tr></thead><tbody>
-          {recetas.filter(r=>r.producto_venta_id===p.id).map(r=>{const cat=catalogo.find(c=>c.id===r.catalogo_id)||{};const cU=costoInsumo(r.catalogo_id,invSucursal,catalogo);const cL=(parseFloat(r.cantidad)||0)*(1+(parseFloat(r.merma_pct)||0)/100)*cU;return(<tr key={r.id} className="border-t border-teal-100">
-            <td className="px-2 py-1 font-medium text-gray-800">{cat.articulo||"?"}</td>
-            <td className="px-2 py-1 text-right"><input type="number" min="0" step="0.001" className="w-20 text-right border border-gray-200 rounded px-1 py-0.5" defaultValue={r.cantidad} onBlur={e=>{const v=parseFloat(e.target.value)||0;if(v!==parseFloat(r.cantidad))updLinea(r.id,"cantidad",v);}}/></td>
-            <td className="px-2 py-1 text-gray-500">{cat.unidad_clave}</td>
-            <td className="px-2 py-1 text-right"><input type="number" min="0" step="1" className="w-14 text-right border border-gray-200 rounded px-1 py-0.5" defaultValue={r.merma_pct} onBlur={e=>{const v=parseFloat(e.target.value)||0;if(v!==parseFloat(r.merma_pct))updLinea(r.id,"merma_pct",v);}}/></td>
-            <td className="px-2 py-1 text-right text-gray-600">{fmt(cU)}</td>
-            <td className="px-2 py-1 text-right font-semibold text-teal-700">{fmt(cL)}</td>
-            <td className="px-2 py-1 text-right"><button onClick={()=>delLinea(r.id)} className="text-red-400 hover:text-red-600 px-1">✕</button></td>
-          </tr>);})}
-          </tbody></table>
-          <div className="flex gap-2 items-end flex-wrap">
-            <div className="flex-1"><label className="text-xs text-gray-500">Agregar insumo</label><select className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs" value={newLinea.catalogo_id} onChange={e=>setNewLinea({...newLinea,catalogo_id:e.target.value})}><option value="">Seleccionar del catálogo...</option>{catalogo.filter(c=>!recetas.some(r=>r.producto_venta_id===p.id&&r.catalogo_id===c.id)).map(c=><option key={c.id} value={c.id}>{c.articulo} ({c.unidad_clave}) — {fmt(costoInsumo(c.id,invSucursal,catalogo))}</option>)}</select></div>
-            <div><label className="text-xs text-gray-500">Cantidad</label><input type="number" min="0" step="0.001" className="w-24 border border-gray-200 rounded-lg px-2 py-1.5 text-xs" value={newLinea.cantidad||""} onChange={e=>setNewLinea({...newLinea,cantidad:parseFloat(e.target.value)||0})}/></div>
-            <div><label className="text-xs text-gray-500">Merma %</label><input type="number" min="0" step="1" className="w-16 border border-gray-200 rounded-lg px-2 py-1.5 text-xs" value={newLinea.merma_pct||""} onChange={e=>setNewLinea({...newLinea,merma_pct:parseFloat(e.target.value)||0})}/></div>
-            <Btn onClick={addLinea} disabled={saving||!newLinea.catalogo_id||newLinea.cantidad<=0} color="purple">{saving?"...":"Agregar"}</Btn>
-          </div>
-          <div className="flex justify-between mt-2 text-sm"><span className="text-teal-800 font-medium">Costo total receta: <b>{fmt(cR)}</b></span>{precio>0&&<span className="text-gray-600">Precio {fmt(precio)} (con IVA) → margen bruto <b className={margen<50?"text-red-600":"text-emerald-600"}>{margen.toFixed(1)}%</b></span>}</div>
-        </td></tr>}
-        </React.Fragment>);})}</tbody></table></div>}
+        {openReceta&&recetaEditorRow(p,cR,8)}
+        </React.Fragment>);})}</tbody></table></div>;})()}
     </div>}
   </div>);
 }
@@ -2094,7 +2193,7 @@ function App(){
       const prod=prods.find(p=>p.id===r.prodId)||{};
       const sub=prod.aplica_iva!==false?r.importe/1.16:r.importe;
       subtotal+=sub;iva+=r.importe-sub;
-      const cT=Math.round(costoReceta(r.prodId,recetas,invSucursal,catalogo)*r.cantidad*100)/100;
+      const cT=Math.round(costoReceta(r.prodId,recetas,invSucursal,catalogo,prods)*r.cantidad*100)/100;
       costoTotal+=cT;
       return{producto_venta_id:r.prodId,cantidad:r.cantidad,precio_unitario:Math.round((r.precio||0)*100)/100,importe:Math.round(r.importe*100)/100,costo_teorico:cT};
     });
@@ -2109,9 +2208,9 @@ function App(){
       alert("Falló el guardado del detalle; la venta NO se importó. Intenta de nuevo.");
       setProductosVenta(prods);return false;
     }
-    // Consumo de insumos por receta
+    // Consumo de insumos por receta (v7.1: explota también sub-recetas/preparaciones)
     const consumo={};
-    rowsFinal.forEach(r=>{recetas.filter(x=>x.producto_venta_id===r.prodId).forEach(x=>{const c=(parseFloat(x.cantidad)||0)*(1+(parseFloat(x.merma_pct)||0)/100)*r.cantidad;consumo[x.catalogo_id]=(consumo[x.catalogo_id]||0)+c;});});
+    rowsFinal.forEach(r=>explotarReceta(r.prodId,r.cantidad,recetas,prods,consumo));
     let invList=invSucursal;const movsNew=[];const negativos=[];
     if(sucId)for(const[catId,cant]of Object.entries(consumo)){
       let row=invList.find(i=>i.sucursal_id===sucId&&i.catalogo_id===catId);

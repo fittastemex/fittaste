@@ -99,17 +99,41 @@ function detectarCanal(pagos) {
 const r2 = (n) => Math.round(n * 100) / 100;
 const r3 = (n) => Math.round(n * 1000) / 1000;
 
-// ---------- Lógica de costeo (misma que el frontend) ----------
+// ---------- Lógica de costeo (misma que el frontend, v7.1 con sub-recetas) ----------
 function costoInsumo(catalogoId, invSucursal, catalogo) {
   const inv = invSucursal.find((i) => i.catalogo_id === catalogoId);
   if (inv && parseFloat(inv.costo_promedio) > 0) return parseFloat(inv.costo_promedio);
   const cat = catalogo.find((c) => c.id === catalogoId);
   return cat ? parseFloat(cat.costo_referencia) || 0 : 0;
 }
-function costoReceta(prodId, recetas, invSucursal, catalogo) {
+function costoReceta(prodId, recetas, invSucursal, catalogo, productosVenta, depth = 0) {
+  if (depth > 5) return 0;
   return recetas
     .filter((r) => r.producto_venta_id === prodId)
-    .reduce((s, r) => s + (parseFloat(r.cantidad) || 0) * (1 + (parseFloat(r.merma_pct) || 0) / 100) * costoInsumo(r.catalogo_id, invSucursal, catalogo), 0);
+    .reduce((s, r) => {
+      const q = (parseFloat(r.cantidad) || 0) * (1 + (parseFloat(r.merma_pct) || 0) / 100);
+      let cu = 0;
+      if (r.catalogo_id) cu = costoInsumo(r.catalogo_id, invSucursal, catalogo);
+      else if (r.preparacion_id) {
+        const prep = productosVenta.find((p) => p.id === r.preparacion_id);
+        const rend = parseFloat(prep?.rendimiento) || 1;
+        cu = costoReceta(r.preparacion_id, recetas, invSucursal, catalogo, productosVenta, depth + 1) / rend;
+      }
+      return s + q * cu;
+    }, 0);
+}
+// Explota una receta (incluyendo preparaciones/sub-recetas) a insumos del catálogo
+function explotarReceta(prodId, cantidadVendida, recetas, productosVenta, consumo, depth = 0) {
+  if (depth > 5) return consumo;
+  recetas.filter((r) => r.producto_venta_id === prodId).forEach((r) => {
+    const q = (parseFloat(r.cantidad) || 0) * (1 + (parseFloat(r.merma_pct) || 0) / 100) * cantidadVendida;
+    if (r.catalogo_id) consumo[r.catalogo_id] = (consumo[r.catalogo_id] || 0) + q;
+    else if (r.preparacion_id) {
+      const rend = parseFloat(productosVenta.find((p) => p.id === r.preparacion_id)?.rendimiento) || 1;
+      explotarReceta(r.preparacion_id, q / rend, recetas, productosVenta, consumo, depth + 1);
+    }
+  });
+  return consumo;
 }
 
 // ---------- Un ciclo de sincronización ----------
@@ -148,8 +172,9 @@ async function sincronizar() {
     for (const d of det) {
       const codigo = String(d.idproducto || "").trim();
       const nombre = (d.descripcion || codigo).trim();
-      let prod = prods.find((p) => p.codigo_sr && String(p.codigo_sr).toLowerCase() === codigo.toLowerCase())
-        || prods.find((p) => p.nombre.toLowerCase() === nombre.toLowerCase());
+      const vendibles = prods.filter((p) => !p.es_preparacion);
+      let prod = vendibles.find((p) => p.codigo_sr && String(p.codigo_sr).toLowerCase() === codigo.toLowerCase())
+        || vendibles.find((p) => p.nombre.toLowerCase() === nombre.toLowerCase());
       if (!prod) {
         const res = await sbPost("productos_venta", { codigo_sr: codigo || null, nombre, precio_venta: r2(parseFloat(d.precio) || 0) });
         if (res && res[0]) { prod = res[0]; prods.push(prod); } else continue;
@@ -163,7 +188,7 @@ async function sincronizar() {
     const detRows = lineas.map((l) => {
       const sub = l.prod.aplica_iva !== false ? l.importe / 1.16 : l.importe;
       subtotal += sub; iva += l.importe - sub;
-      const cT = r2(costoReceta(l.prod.id, recetas, invSucursal, catalogo) * l.cantidad);
+      const cT = r2(costoReceta(l.prod.id, recetas, invSucursal, catalogo, prods) * l.cantidad);
       costoTotal += cT;
       return { producto_venta_id: l.prod.id, cantidad: l.cantidad, precio_unitario: r2(l.precio), importe: r2(l.importe), costo_teorico: cT };
     });
@@ -188,14 +213,9 @@ async function sincronizar() {
       continue;
     }
 
-    // Explosión de recetas → descuento de inventario de sucursal + kárdex
+    // Explosión de recetas (incluye sub-recetas) → descuento de inventario + kárdex
     const consumo = {};
-    lineas.forEach((l) => {
-      recetas.filter((x) => x.producto_venta_id === l.prod.id).forEach((x) => {
-        const c = (parseFloat(x.cantidad) || 0) * (1 + (parseFloat(x.merma_pct) || 0) / 100) * l.cantidad;
-        consumo[x.catalogo_id] = (consumo[x.catalogo_id] || 0) + c;
-      });
-    });
+    lineas.forEach((l) => explotarReceta(l.prod.id, l.cantidad, recetas, prods, consumo));
     if (sucId) for (const [catId, cant] of Object.entries(consumo)) {
       let row = invSucursal.find((i) => i.sucursal_id === sucId && i.catalogo_id === catId);
       const costoU = costoInsumo(catId, invSucursal, catalogo);
