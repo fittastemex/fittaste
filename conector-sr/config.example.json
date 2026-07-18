@@ -1,9 +1,10 @@
 {
   "_comentario": "Copia este archivo como config.json y llena tus datos. config.json NUNCA se sube a git (contiene contraseñas).",
 
-  "_sqlServer_nota": "SR local: 'localhost\\NATIONALSOFT'. SR12 con base remota vía Radmin VPN: usa la IP del servidor dentro de la VPN (formato 26.x.x.x) y si te dan puerto, agrégalo con coma: '26.1.2.3,1433'. La VPN da acceso a la red; el usuario/contraseña de SQL son aparte (te los da soporte de SR).",
+  "_sqlServer_nota": "SR local: server 'localhost\\NATIONALSOFT' (sin port). SR12 con base remota vía Radmin VPN: server = IP dentro de la VPN (26.x.x.x) y port como campo SEPARADO (no 'ip,puerto' — la librería mssql no acepta la coma). La VPN da acceso a la red; el usuario/contraseña de SQL son aparte (te los da soporte de SR).",
   "sqlServer": {
     "server": "26.X.X.X",
+    "port": 1433,
     "database": "NOMBRE_BASE_SR12",
     "user": "sa",
     "password": "AQUI_TU_PASSWORD_SQL",
