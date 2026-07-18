@@ -36,12 +36,15 @@ const SQL_TICKETS = `
   FROM cheques c
   WHERE c.pagado = 1 AND c.cancelado = 0 AND c.cierre > @desde
   ORDER BY c.cierre ASC`;
+// IMPORTANTE: los folios del turno abierto pueden repetirse contra folios
+// históricos; por eso cada ticket lleva su tabla de origen y su detalle y
+// pagos se leen SOLO de esa tabla (nunca en unión, o se mezclan tickets).
 const SQL_TICKETS_UNION = `
-  SELECT x.folio, x.numcheque, x.fecha, x.cierre, x.total, x.subtotal FROM (
-    SELECT c.folio, c.numcheque, c.fecha, c.cierre, c.total, c.subtotal
+  SELECT x.folio, x.numcheque, x.fecha, x.cierre, x.total, x.subtotal, x.tabla FROM (
+    SELECT c.folio, c.numcheque, c.fecha, c.cierre, c.total, c.subtotal, 'hist' AS tabla
     FROM cheques c WHERE c.pagado = 1 AND c.cancelado = 0 AND c.cierre > @desde
     UNION ALL
-    SELECT t.folio, t.numcheque, t.fecha, t.cierre, t.total, t.subtotal
+    SELECT t.folio, t.numcheque, t.fecha, t.cierre, t.total, t.subtotal, 'temp' AS tabla
     FROM tempcheques t WHERE t.pagado = 1 AND t.cancelado = 0 AND t.cierre > @desde
   ) x ORDER BY x.cierre ASC`;
 
@@ -53,13 +56,7 @@ const SQL_DETALLE = `
   FROM cheqdet d
   LEFT JOIN productos p ON p.idproducto = d.idproducto
   WHERE d.foliodet = @folio AND d.cantidad > 0`;
-const SQL_DETALLE_UNION = `
-  SELECT d.idproducto, p.descripcion, d.cantidad, d.precio,
-         (d.cantidad * d.precio) AS importe
-  FROM cheqdet d
-  LEFT JOIN productos p ON p.idproducto = d.idproducto
-  WHERE d.foliodet = @folio AND d.cantidad > 0
-  UNION ALL
+const SQL_DETALLE_TEMP = `
   SELECT d.idproducto, p.descripcion, d.cantidad, d.precio,
          (d.cantidad * d.precio) AS importe
   FROM tempcheqdet d
@@ -72,12 +69,7 @@ const SQL_PAGOS = `
   FROM chequespagos cp
   LEFT JOIN formasdepago f ON f.idformadepago = cp.idformadepago
   WHERE cp.folio = @folio`;
-const SQL_PAGOS_UNION = `
-  SELECT f.descripcion, cp.importe
-  FROM chequespagos cp
-  LEFT JOIN formasdepago f ON f.idformadepago = cp.idformadepago
-  WHERE cp.folio = @folio
-  UNION ALL
+const SQL_PAGOS_TEMP = `
   SELECT f.descripcion, cp.importe
   FROM tempchequespagos cp
   LEFT JOIN formasdepago f ON f.idformadepago = cp.idformadepago
@@ -258,8 +250,9 @@ async function sincronizar() {
     const ya = await sbGet("ventas", `folio=eq.${encodeURIComponent(folio)}&limit=1`);
     if (ya.length > 0) { estado.ultimoCierre = new Date(t.cierre).toISOString(); continue; }
 
-    const det = (await pool.request().input("folio", t.folio).query(hayTemp ? SQL_DETALLE_UNION : SQL_DETALLE)).recordset;
-    const pagosSR = (await pool.request().input("folio", t.folio).query(hayTemp ? SQL_PAGOS_UNION : SQL_PAGOS)).recordset;
+    const esTemp = hayTemp && t.tabla === "temp";
+    const det = (await pool.request().input("folio", t.folio).query(esTemp ? SQL_DETALLE_TEMP : SQL_DETALLE)).recordset;
+    const pagosSR = (await pool.request().input("folio", t.folio).query(esTemp ? SQL_PAGOS_TEMP : SQL_PAGOS)).recordset;
     if (det.length === 0) { estado.ultimoCierre = new Date(t.cierre).toISOString(); continue; }
 
     // Casar/crear productos de venta por código SR
