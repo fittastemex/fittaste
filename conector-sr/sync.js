@@ -79,18 +79,35 @@ const SQL_PAGOS_TEMP = `
   LEFT JOIN formasdepago f ON f.idformadepago = cp.idformadepago
   WHERE cp.folio = @folio`;
 
-// Menú completo de SR. En SR12 la tabla productos NO trae precio: vive en
-// productosprecios (por lista/área); tomamos el máximo por producto. Si esa
-// tabla no existe en tu instalación, se usa el respaldo sin precio (el
-// precio se irá actualizando solo con lo vendido en tickets... en 0 hasta
-// entonces) — el conector cae al respaldo automáticamente.
-const SQL_MENU = `
-  SELECT p.idproducto, p.descripcion,
-         (SELECT MAX(pp.precio) FROM productosprecios pp WHERE pp.idproducto = p.idproducto) AS precio
-  FROM productos p`;
+// Menú completo de SR. La tabla productos NO trae precio: según la
+// instalación vive en listadepreciosdetalle (SR12 de FitTaste) o en
+// productosprecios (otras versiones). Detectamos tabla y columna al vuelo
+// consultando el esquema, y tomamos el precio máximo por producto entre
+// las listas. Si no hay dónde leer precios, respaldo sin precio.
 const SQL_MENU_SIN_PRECIO = `
   SELECT p.idproducto, p.descripcion, NULL AS precio
   FROM productos p`;
+let SQL_MENU = null; // se arma una sola vez en el primer ciclo
+async function armarQueryMenu(pool) {
+  for (const tabla of ["listadepreciosdetalle", "productosprecios"]) {
+    try {
+      const cols = (await pool.request().query(
+        `SELECT name FROM sys.columns WHERE object_id = OBJECT_ID('${tabla}')`
+      )).recordset.map((c) => String(c.name).toLowerCase());
+      if (!cols.includes("idproducto")) continue;
+      const colPrecio = cols.find((c) => c === "precio")
+        || cols.find((c) => c.includes("precio") && !c.startsWith("id"));
+      if (!colPrecio) continue;
+      console.log(`  Precios del menú: ${tabla}.${colPrecio}`);
+      return `
+        SELECT p.idproducto, p.descripcion,
+               (SELECT MAX(d.[${colPrecio.replace(/[\[\]]/g, "")}]) FROM ${tabla} d WHERE d.idproducto = p.idproducto) AS precio
+        FROM productos p`;
+    } catch { /* siguiente candidata */ }
+  }
+  console.log("  (No se encontró tabla de precios: el menú se sincroniza sin precio.)");
+  return SQL_MENU_SIN_PRECIO;
+}
 
 // ---------- Helpers Supabase (REST/PostgREST) ----------
 // Limpieza defensiva: al copiar/pegar la config es fácil que se cuelen
@@ -214,6 +231,7 @@ async function sincronizar() {
   let prods = await sbGet("productos_venta");
   if (CONFIG.sincronizarMenu !== false) {
     try {
+      if (!SQL_MENU) SQL_MENU = await armarQueryMenu(pool);
       let menu;
       try { menu = (await pool.request().query(SQL_MENU)).recordset; }
       catch (e) { menu = (await pool.request().query(SQL_MENU_SIN_PRECIO)).recordset; }
