@@ -24,12 +24,26 @@ const CONFIG = JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "
 const STATE_FILE = path.join(__dirname, "estado-sync.json");
 
 // ---------- Consultas al SQL Server de SoftRestaurant ----------
-// Tickets cobrados y no cancelados, cerrados después de la última sincronización.
+// SoftRestaurant guarda los tickets del TURNO EN CURSO en tablas temporales
+// (tempcheques/tempcheqdet/tempchequespagos) y los mueve a las históricas
+// (cheques/cheqdet/chequespagos) al hacer el corte de turno. Para tener la
+// venta casi en tiempo real hay que leer AMBAS; si las temp no existen en tu
+// versión, el conector cae solo a las históricas (venta visible tras corte).
+let hayTemp = true;
+
 const SQL_TICKETS = `
   SELECT c.folio, c.numcheque, c.fecha, c.cierre, c.total, c.subtotal
   FROM cheques c
   WHERE c.pagado = 1 AND c.cancelado = 0 AND c.cierre > @desde
   ORDER BY c.cierre ASC`;
+const SQL_TICKETS_UNION = `
+  SELECT x.folio, x.numcheque, x.fecha, x.cierre, x.total, x.subtotal FROM (
+    SELECT c.folio, c.numcheque, c.fecha, c.cierre, c.total, c.subtotal
+    FROM cheques c WHERE c.pagado = 1 AND c.cancelado = 0 AND c.cierre > @desde
+    UNION ALL
+    SELECT t.folio, t.numcheque, t.fecha, t.cierre, t.total, t.subtotal
+    FROM tempcheques t WHERE t.pagado = 1 AND t.cancelado = 0 AND t.cierre > @desde
+  ) x ORDER BY x.cierre ASC`;
 
 // Detalle de productos de un ticket. (Calibrado a SR12: cheqdet no tiene
 // columna 'cancelado'; el precio de cheqdet ya incluye impuestos.)
@@ -39,11 +53,33 @@ const SQL_DETALLE = `
   FROM cheqdet d
   LEFT JOIN productos p ON p.idproducto = d.idproducto
   WHERE d.foliodet = @folio AND d.cantidad > 0`;
+const SQL_DETALLE_UNION = `
+  SELECT d.idproducto, p.descripcion, d.cantidad, d.precio,
+         (d.cantidad * d.precio) AS importe
+  FROM cheqdet d
+  LEFT JOIN productos p ON p.idproducto = d.idproducto
+  WHERE d.foliodet = @folio AND d.cantidad > 0
+  UNION ALL
+  SELECT d.idproducto, p.descripcion, d.cantidad, d.precio,
+         (d.cantidad * d.precio) AS importe
+  FROM tempcheqdet d
+  LEFT JOIN productos p ON p.idproducto = d.idproducto
+  WHERE d.foliodet = @folio AND d.cantidad > 0`;
 
 // Formas de pago de un ticket.
 const SQL_PAGOS = `
   SELECT f.descripcion, cp.importe
   FROM chequespagos cp
+  LEFT JOIN formasdepago f ON f.idformadepago = cp.idformadepago
+  WHERE cp.folio = @folio`;
+const SQL_PAGOS_UNION = `
+  SELECT f.descripcion, cp.importe
+  FROM chequespagos cp
+  LEFT JOIN formasdepago f ON f.idformadepago = cp.idformadepago
+  WHERE cp.folio = @folio
+  UNION ALL
+  SELECT f.descripcion, cp.importe
+  FROM tempchequespagos cp
   LEFT JOIN formasdepago f ON f.idformadepago = cp.idformadepago
   WHERE cp.folio = @folio`;
 
@@ -162,7 +198,16 @@ async function sincronizar() {
   console.log(`[${new Date().toLocaleString("es-MX")}] Buscando tickets desde ${estado.ultimoCierre}...`);
 
   const pool = await sql.connect({ ...CONFIG.sqlServer });
-  const tickets = (await pool.request().input("desde", sql.DateTime, new Date(estado.ultimoCierre)).query(SQL_TICKETS)).recordset;
+  let tickets;
+  if (hayTemp) {
+    try {
+      tickets = (await pool.request().input("desde", sql.DateTime, new Date(estado.ultimoCierre)).query(SQL_TICKETS_UNION)).recordset;
+    } catch (e) {
+      hayTemp = false;
+      console.log("  (Sin tablas temp del turno en esta versión de SR: la venta del día entrará tras cada corte de turno.)");
+    }
+  }
+  if (!hayTemp) tickets = (await pool.request().input("desde", sql.DateTime, new Date(estado.ultimoCierre)).query(SQL_TICKETS)).recordset;
 
   // --- Sincronización del MENÚ (corre en cada ciclo, haya o no tickets) ---
   // Crea productos nuevos con su clave SR y actualiza nombre/precio de los
@@ -213,8 +258,8 @@ async function sincronizar() {
     const ya = await sbGet("ventas", `folio=eq.${encodeURIComponent(folio)}&limit=1`);
     if (ya.length > 0) { estado.ultimoCierre = new Date(t.cierre).toISOString(); continue; }
 
-    const det = (await pool.request().input("folio", t.folio).query(SQL_DETALLE)).recordset;
-    const pagosSR = (await pool.request().input("folio", t.folio).query(SQL_PAGOS)).recordset;
+    const det = (await pool.request().input("folio", t.folio).query(hayTemp ? SQL_DETALLE_UNION : SQL_DETALLE)).recordset;
+    const pagosSR = (await pool.request().input("folio", t.folio).query(hayTemp ? SQL_PAGOS_UNION : SQL_PAGOS)).recordset;
     if (det.length === 0) { estado.ultimoCierre = new Date(t.cierre).toISOString(); continue; }
 
     // Casar/crear productos de venta por código SR
