@@ -1594,10 +1594,19 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
     </td></tr>);
   };
 
+  // v7.3: alarma de productos que YA vendieron y no tienen receta (su consumo
+  // no está descontando inventario). Típico: alta nueva en SR sin capturar receta.
+  const vendidosSinReceta=productosVenta.filter(p=>!p.es_preparacion&&!recetas.some(r=>r.producto_venta_id===p.id)&&ventaDetalle.some(d=>d.producto_venta_id===p.id));
+
   return(<div>
     <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
       <div><h2 className="text-lg font-bold text-gray-900">Ventas — SoftRestaurant</h2><p className="text-sm text-gray-500">SR es el punto de venta; aquí se importan sus ventas para costeo e inventario</p></div>
     </div>
+    {vendidosSinReceta.length>0&&<div className="bg-red-50 border-2 border-red-300 rounded-xl p-3 mb-4">
+      <p className="text-sm font-bold text-red-800">⚠ {vendidosSinReceta.length} producto{vendidosSinReceta.length>1?"s":""} con ventas SIN receta — su consumo no está descontando inventario</p>
+      <p className="text-xs text-red-700 mt-1">{vendidosSinReceta.slice(0,10).map(p=>p.nombre).join(" · ")}{vendidosSinReceta.length>10?` · y ${vendidosSinReceta.length-10} más…`:""}</p>
+      <button onClick={()=>{setTab("productos");setVerTipo("platillos");}} className="text-xs font-semibold text-red-800 underline mt-1">Ir a capturar recetas →</button>
+    </div>}
     <div className="flex gap-1 mb-4">{tabsV.map(t=><button key={t.id} onClick={()=>setTab(t.id)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${tab===t.id?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={tab===t.id?{background:"#bfcd3b",color:"#2D2D2D"}:{}}>{t.l}</button>)}</div>
 
     {/* IMPORTAR */}
