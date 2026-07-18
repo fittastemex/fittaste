@@ -89,7 +89,11 @@ const SQL_MENU_SIN_PRECIO = `
   FROM productos p`;
 let SQL_MENU = null; // se arma una sola vez en el primer ciclo
 async function armarQueryMenu(pool) {
-  for (const tabla of ["listadepreciosdetalle", "productosprecios"]) {
+  // Candidatas en orden: productosdetalle (SR12 de FitTaste), luego listas de
+  // precios (otras instalaciones). Una tabla solo califica si además de las
+  // columnas correctas tiene precios de verdad (> 0): listadepreciosdetalle
+  // puede existir vacía y ganarle el lugar a la buena.
+  for (const tabla of ["productosdetalle", "listadepreciosdetalle", "productosprecios"]) {
     try {
       const cols = (await pool.request().query(
         `SELECT name FROM sys.columns WHERE object_id = OBJECT_ID('${tabla}')`
@@ -98,14 +102,17 @@ async function armarQueryMenu(pool) {
       const colPrecio = cols.find((c) => c === "precio")
         || cols.find((c) => c.includes("precio") && !c.startsWith("id"));
       if (!colPrecio) continue;
-      console.log(`  Precios del menú: ${tabla}.${colPrecio}`);
+      const col = colPrecio.replace(/[\[\]]/g, "");
+      const chk = (await pool.request().query(`SELECT MAX([${col}]) AS m FROM ${tabla}`)).recordset[0];
+      if (!chk || !(parseFloat(chk.m) > 0)) continue;
+      console.log(`  Precios del menú: ${tabla}.${col}`);
       return `
         SELECT p.idproducto, p.descripcion,
-               (SELECT MAX(d.[${colPrecio.replace(/[\[\]]/g, "")}]) FROM ${tabla} d WHERE d.idproducto = p.idproducto) AS precio
+               (SELECT MAX(d.[${col}]) FROM ${tabla} d WHERE d.idproducto = p.idproducto) AS precio
         FROM productos p`;
     } catch { /* siguiente candidata */ }
   }
-  console.log("  (No se encontró tabla de precios: el menú se sincroniza sin precio.)");
+  console.log("  (No se encontró tabla de precios con datos: el menú se sincroniza sin precio.)");
   return SQL_MENU_SIN_PRECIO;
 }
 
