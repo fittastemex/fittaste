@@ -23,6 +23,13 @@ const sql = require("mssql");
 const CONFIG = JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "utf8"));
 const STATE_FILE = path.join(__dirname, "estado-sync.json");
 
+// Candado de instancia única: dos conectores a la vez suben datos dobles (o
+// con versiones distintas del código). Si el puerto ya está tomado, hay otro
+// conector vivo en esta PC y este se retira.
+require("net").createServer()
+  .once("error", () => { console.error("✗ Ya hay OTRO Conector FitTaste corriendo en esta computadora. Cierra esta ventana y usa el que ya está abierto."); process.exit(1); })
+  .listen(47653, "127.0.0.1");
+
 // ---------- Consultas al SQL Server de SoftRestaurant ----------
 // SoftRestaurant guarda los tickets del TURNO EN CURSO en tablas temporales
 // (tempcheques/tempcheqdet/tempchequespagos) y los mueve a las históricas
@@ -36,17 +43,14 @@ const SQL_TICKETS = `
   FROM cheques c
   WHERE c.pagado = 1 AND c.cancelado = 0 AND c.cierre > @desde
   ORDER BY c.cierre ASC`;
-// IMPORTANTE: los folios del turno abierto pueden repetirse contra folios
-// históricos; por eso cada ticket lleva su tabla de origen y su detalle y
-// pagos se leen SOLO de esa tabla (nunca en unión, o se mezclan tickets).
-const SQL_TICKETS_UNION = `
-  SELECT x.folio, x.numcheque, x.fecha, x.cierre, x.total, x.subtotal, x.tabla FROM (
-    SELECT c.folio, c.numcheque, c.fecha, c.cierre, c.total, c.subtotal, 'hist' AS tabla
-    FROM cheques c WHERE c.pagado = 1 AND c.cancelado = 0 AND c.cierre > @desde
-    UNION ALL
-    SELECT t.folio, t.numcheque, t.fecha, t.cierre, t.total, t.subtotal, 'temp' AS tabla
-    FROM tempcheques t WHERE t.pagado = 1 AND t.cancelado = 0 AND t.cierre > @desde
-  ) x ORDER BY x.cierre ASC`;
+// TURNO ABIERTO (tempcheques): los folios son POR TURNO (1,2,3…) y se
+// reciclan, y el 'cierre' puede venir nulo aunque el ticket ya esté pagado.
+// Por eso el turno abierto se lee COMPLETO en cada ciclo (es chico) y la
+// deduplicación por numcheque global evita dobles; el detalle y los pagos
+// de un ticket se leen SOLO de la tabla donde vive.
+const SQL_TICKETS_TEMP = `
+  SELECT t.folio, t.numcheque, t.fecha, t.cierre, t.total, t.subtotal
+  FROM tempcheques t WHERE t.pagado = 1 AND t.cancelado = 0`;
 
 // Detalle de productos de un ticket. (Calibrado a SR12: cheqdet no tiene
 // columna 'cancelado'; el precio de cheqdet ya incluye impuestos.)
@@ -190,16 +194,19 @@ async function sincronizar() {
   console.log(`[${new Date().toLocaleString("es-MX")}] Buscando tickets desde ${estado.ultimoCierre}...`);
 
   const pool = await sql.connect({ ...CONFIG.sqlServer });
-  let tickets;
+  // Históricos: solo lo nuevo desde la última vez (por fecha de cierre)
+  const tickets = (await pool.request().input("desde", sql.DateTime, new Date(estado.ultimoCierre)).query(SQL_TICKETS)).recordset.map((t) => ({ ...t, tabla: "hist" }));
+  // Turno abierto: completo en cada ciclo (la dedup evita dobles)
   if (hayTemp) {
     try {
-      tickets = (await pool.request().input("desde", sql.DateTime, new Date(estado.ultimoCierre)).query(SQL_TICKETS_UNION)).recordset;
+      const temp = (await pool.request().query(SQL_TICKETS_TEMP)).recordset.map((t) => ({ ...t, tabla: "temp" }));
+      tickets.push(...temp);
     } catch (e) {
       hayTemp = false;
       console.log("  (Sin tablas temp del turno en esta versión de SR: la venta del día entrará tras cada corte de turno.)");
     }
   }
-  if (!hayTemp) tickets = (await pool.request().input("desde", sql.DateTime, new Date(estado.ultimoCierre)).query(SQL_TICKETS)).recordset;
+  tickets.sort((a, b) => new Date(a.cierre || a.fecha) - new Date(b.cierre || b.fecha));
 
   // --- Sincronización del MENÚ (corre en cada ciclo, haya o no tickets) ---
   // Crea productos nuevos con su clave SR y actualiza nombre/precio de los
@@ -233,7 +240,10 @@ async function sincronizar() {
   }
 
   if (tickets.length === 0) { console.log("  Sin tickets nuevos."); await pool.close(); return; }
-  console.log(`  ${tickets.length} ticket(s) nuevo(s).`);
+  // El estado solo avanza con tickets del HISTÓRICO (los del turno abierto se
+  // re-revisan cada ciclo hasta que el corte los mueva; la dedup evita dobles).
+  let subidos = 0;
+  const avanzar = (t) => { if (t.tabla !== "temp" && t.cierre) { estado.ultimoCierre = new Date(t.cierre).toISOString(); guardarEstado(estado); } };
 
   // Datos de FitTaste necesarios para explotar recetas
   const [sucursales, recetas, catalogo] = await Promise.all([
@@ -248,12 +258,12 @@ async function sincronizar() {
     const folio = `TKT-${t.numcheque || t.folio}`;
     // Idempotencia: si el ticket ya se subió, saltarlo
     const ya = await sbGet("ventas", `folio=eq.${encodeURIComponent(folio)}&limit=1`);
-    if (ya.length > 0) { estado.ultimoCierre = new Date(t.cierre).toISOString(); continue; }
+    if (ya.length > 0) { avanzar(t); continue; }
 
     const esTemp = hayTemp && t.tabla === "temp";
     const det = (await pool.request().input("folio", t.folio).query(esTemp ? SQL_DETALLE_TEMP : SQL_DETALLE)).recordset;
     const pagosSR = (await pool.request().input("folio", t.folio).query(esTemp ? SQL_PAGOS_TEMP : SQL_PAGOS)).recordset;
-    if (det.length === 0) { estado.ultimoCierre = new Date(t.cierre).toISOString(); continue; }
+    if (det.length === 0) { avanzar(t); continue; }
 
     // Casar/crear productos de venta por código SR
     const lineas = [];
@@ -269,7 +279,7 @@ async function sincronizar() {
       }
       lineas.push({ prod, cantidad: parseFloat(d.cantidad) || 0, precio: parseFloat(d.precio) || 0, importe: parseFloat(d.importe) || 0 });
     }
-    if (lineas.length === 0) { estado.ultimoCierre = new Date(t.cierre).toISOString(); continue; }
+    if (lineas.length === 0) { avanzar(t); continue; }
 
     // Totales: SR maneja precios con IVA incluido
     let subtotal = 0, iva = 0, costoTotal = 0;
@@ -322,10 +332,12 @@ async function sincronizar() {
     }
 
     console.log(`  ✓ ${folio}: $${r2(parseFloat(t.total) || 0)} (${detRows.length} productos)`);
-    estado.ultimoCierre = new Date(t.cierre).toISOString();
-    guardarEstado(estado);
+    subidos++;
+    avanzar(t);
   }
 
+  if (subidos > 0) console.log(`  ${subidos} ticket(s) nuevo(s) subido(s).`);
+  else console.log("  Sin tickets nuevos.");
   guardarEstado(estado);
   await pool.close();
 }
