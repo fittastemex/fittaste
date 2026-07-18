@@ -31,13 +31,14 @@ const SQL_TICKETS = `
   WHERE c.pagado = 1 AND c.cancelado = 0 AND c.cierre > @desde
   ORDER BY c.cierre ASC`;
 
-// Detalle de productos de un ticket.
+// Detalle de productos de un ticket. (Calibrado a SR12: cheqdet no tiene
+// columna 'cancelado'; el precio de cheqdet ya incluye impuestos.)
 const SQL_DETALLE = `
   SELECT d.idproducto, p.descripcion, d.cantidad, d.precio,
          (d.cantidad * d.precio) AS importe
   FROM cheqdet d
   LEFT JOIN productos p ON p.idproducto = d.idproducto
-  WHERE d.foliodet = @folio AND ISNULL(d.cancelado, 0) = 0`;
+  WHERE d.foliodet = @folio AND d.cantidad > 0`;
 
 // Formas de pago de un ticket.
 const SQL_PAGOS = `
@@ -46,12 +47,17 @@ const SQL_PAGOS = `
   LEFT JOIN formasdepago f ON f.idformadepago = cp.idformadepago
   WHERE cp.folio = @folio`;
 
-// Menú completo de SR (catálogo de productos con precio). Se sincroniza en
-// cada ciclo hacia productos_venta: alta de nuevos y actualización de
-// nombre/precio de existentes. Ajustar columnas tras correr explorar-sr.js
-// si tu versión usa otros nombres (ej. precio1, productosprecios).
+// Menú completo de SR. En SR12 la tabla productos NO trae precio: vive en
+// productosprecios (por lista/área); tomamos el máximo por producto. Si esa
+// tabla no existe en tu instalación, se usa el respaldo sin precio (el
+// precio se irá actualizando solo con lo vendido en tickets... en 0 hasta
+// entonces) — el conector cae al respaldo automáticamente.
 const SQL_MENU = `
-  SELECT p.idproducto, p.descripcion, p.precio
+  SELECT p.idproducto, p.descripcion,
+         (SELECT MAX(pp.precio) FROM productosprecios pp WHERE pp.idproducto = p.idproducto) AS precio
+  FROM productos p`;
+const SQL_MENU_SIN_PRECIO = `
+  SELECT p.idproducto, p.descripcion, NULL AS precio
   FROM productos p`;
 
 // ---------- Helpers Supabase (REST/PostgREST) ----------
@@ -159,7 +165,9 @@ async function sincronizar() {
   let prods = await sbGet("productos_venta");
   if (CONFIG.sincronizarMenu !== false) {
     try {
-      const menu = (await pool.request().query(SQL_MENU)).recordset;
+      let menu;
+      try { menu = (await pool.request().query(SQL_MENU)).recordset; }
+      catch (e) { menu = (await pool.request().query(SQL_MENU_SIN_PRECIO)).recordset; }
       let creados = 0, actualizados = 0;
       for (const m of menu) {
         const codigo = String(m.idproducto || "").trim();
