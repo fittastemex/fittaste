@@ -61,10 +61,15 @@ const SQL_MENU_SIN_PRECIO = `
   FROM productos p`;
 
 // ---------- Helpers Supabase (REST/PostgREST) ----------
-const SB = CONFIG.supabase.url;
+// Limpieza defensiva: al copiar/pegar la config es fácil que se cuelen
+// caracteres invisibles (viñetas, comillas tipográficas). URL y clave solo
+// llevan ASCII; cualquier otro carácter rompe los headers de fetch.
+const limpiar = (s) => String(s || "").replace(/[^\x20-\x7E]/g, "").trim();
+const SB = limpiar(CONFIG.supabase.url).replace(/\/+$/, "");
+const KEY = limpiar(CONFIG.supabase.apiKey);
 const H = {
-  apikey: CONFIG.supabase.apiKey,
-  Authorization: `Bearer ${CONFIG.supabase.apiKey}`,
+  apikey: KEY,
+  Authorization: `Bearer ${KEY}`,
   "Content-Type": "application/json",
 };
 async function sbGet(t, params = "") {
