@@ -116,8 +116,18 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   await page.getByRole("button",{name:"Ingresar"}).click();
   await page.getByText("Fit Taste Roma").waitFor({timeout:20000});
   check("P: la app carga y entra como admin",true);
+  // v7.4: navegación por menú agrupado (grupo desplegable → opción)
+  const menu=async(grupo,item)=>{
+    await page.getByRole("button",{name:new RegExp(grupo)}).first().click();
+    const it=page.getByRole("button",{name:item,exact:true});
+    try{await it.waitFor({timeout:1500});await it.click();}catch(e){/* grupo de 1 opción: es botón directo y el clic ya navegó */}
+    await page.waitForTimeout(250);
+  };
+  await page.getByRole("heading",{name:"Dashboard de ventas"}).waitFor();
+  check("P: admin aterriza en el Dashboard de ventas (menú v7.4)",true);
 
   console.log("\n== Parte 2: Pedido con conversión ==");
+  await menu("Compras","Pedidos");
   await page.getByRole("button",{name:"+ Nuevo pedido"}).first().click();
   await page.getByPlaceholder("Buscar insumo...").waitFor();
   const fila=(t)=>page.locator("tbody tr",{hasText:t});
@@ -154,7 +164,7 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   await page.getByText("Crea pedidos").click();
   await page.locator("input[type=password]").fill("roma2026");
   await page.getByRole("button",{name:"Ingresar"}).click();
-  await page.getByRole("button",{name:"Recepción",exact:true}).click();
+  await menu("Compras","Recepción");
   await page.getByRole("button",{name:"Recibir mercancía"}).click();
   await page.getByRole("button",{name:/Recepción completa/}).click();
   await page.waitForTimeout(800);
@@ -170,7 +180,7 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   check("3.3 CxP con IVA: $2,340.88",approx(cxpMonto,2340.88,0.05),cxpMonto);
 
   console.log("\n== Parte 4: Preparación y receta ==");
-  await page.getByRole("button",{name:"Ventas SR"}).click();
+  await menu("Ventas","Ventas SR · recetas");
   await page.getByRole("button",{name:/Productos y recetas/}).click();
   await page.getByRole("button",{name:/Preparaciones \(/}).click();
   await page.getByRole("button",{name:"+ Nueva preparación"}).click();
@@ -235,7 +245,7 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   check("5.3 kárdex: 3 salidas por venta",DB.movimientos_sucursal.filter(m=>m.tipo==="salida_venta").length===3);
 
   console.log("\n== Parte 6: Merma ==");
-  await page.getByRole("button",{name:"Inv. Sucursal"}).click();
+  await menu("Almacén","Inventario sucursal · merma");
   await page.getByRole("button",{name:"Registrar merma"}).first().click();
   const mermaCard=page.locator("div",{hasText:/^Registrar merma/}).last();
   await mermaCard.locator("select").first().selectOption("ins-crema");
@@ -246,13 +256,28 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   check("6.1 merma registrada: 200 ml = $12.89",merma&&approx(parseFloat(merma.costo_total),12.89,0.005),merma?.costo_total);
   check("6.1 existencia crema tras merma: 4,775 ml",approx(DB.inventario_sucursal.find(i=>i.insumo_id==="ins-crema")?.existencia,4775,0.01));
 
+  console.log("\n== Parte 6b: Dashboard de ventas (v7.4) ==");
+  await menu("Ventas","Dashboard de ventas");
+  await page.getByRole("heading",{name:"Dashboard de ventas"}).waitFor();
+  const dashTxt=await page.locator("body").innerText();
+  check("6b.1 KPI venta total del día: $1,510",dashTxt.includes("1,510.00"),null);
+  check("6b.2 KPI IVA cobrado: $208.28",dashTxt.includes("208.28"),null);
+  const numDash=(re)=>{const m=dashTxt.match(re);return m?parseFloat(m[1].replace(/,/g,"")):null;};
+  const costoMPDash=numDash(/Costo materia prima[^$]*\$([\d,.]+)/);
+  const utilDash=numDash(/Utilidad bruta[^$]*\$([\d,.]+)/);
+  check("6b.3 KPI costo MP teórico ≈ $290.62",approx(costoMPDash,290.62,0.05),costoMPDash);
+  check("6b.4 utilidad bruta ≈ $1,219.38 (venta − costo MP)",approx(utilDash,1219.38,0.05),utilDash);
+  check("6b.5 mix y formas de pago visibles",dashTxt.includes("Mix de venta")&&dashTxt.includes("Formas de pago"),null);
+  check("6b.6 top productos: BOWL DE PRUEBA listado",dashTxt.includes("Top 10 productos")&&dashTxt.includes("BOWL DE PRUEBA"),null);
+  if(process.env.E2E_SHOT)await page.screenshot({path:process.env.E2E_SHOT,fullPage:true});
+
   console.log("\n== Parte 7: Estados financieros ==");
   await page.getByRole("button",{name:"Salir"}).click();
   await page.getByText("Selecciona tu rol").waitFor();
   await page.getByText("Cuentas por pagar").click();
   await page.locator("input[type=password]").fill("finanzas2026");
   await page.getByRole("button",{name:"Ingresar"}).click();
-  await page.getByRole("button",{name:"Estados"}).click();
+  await menu("Finanzas","Estados financieros");
   await page.getByText("Estado de resultados").waitFor();
   const body=await page.locator("body").innerText();
   check("7.1 ventas netas $1,301.72 en estado de resultados",body.includes("1,301.72"),null);

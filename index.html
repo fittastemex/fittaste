@@ -1737,6 +1737,151 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
   </div>);
 }
 
+// ======================== DASHBOARD DE VENTAS (v7.4) ========================
+// Paleta validada (validate_palette: PASS en superficie blanca). El ámbar de
+// marca queda bajo 3:1 de contraste, por eso TODA barra ámbar lleva etiqueta
+// visible con su valor (regla de relieve). Los colores siguen a la entidad:
+// mostrador/efectivo=teal, plataforma=ámbar, tarjeta=azul, otros=gris.
+const DV={teal:"#0e918b",ambar:"#e2a52a",terracota:"#bb4430",azul:"#2a78d6",gris:"#898781",apagado:"#c9c8c1",grid:"#e1e0d9"};
+function VentasDashboardView({ventas,ventaDetalle,productosVenta,gastosOp}){
+  const [periodo,setPeriodo]=useState("hoy");
+  const num=(x)=>parseFloat(x)||0;
+  const dLocal=(x)=>`${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,"0")}-${String(x.getDate()).padStart(2,"0")}`;
+  const hoyD=new Date();const hoy=dLocal(hoyD);
+  const addDias=(f,n)=>{const x=new Date(f+"T12:00:00");x.setDate(x.getDate()+n);return dLocal(x);};
+  const finDeMes=(ym)=>{const[a,m]=ym.split("-").map(Number);return dLocal(new Date(a,m,0));};
+  const mesActual=hoy.slice(0,7);
+  const mesRel=(n)=>{const x=new Date(hoyD.getFullYear(),hoyD.getMonth()+n,15);return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,"0")}`;};
+  const PERIODOS=[{id:"hoy",l:"Hoy"},{id:"ayer",l:"Ayer"},{id:"7d",l:"Últimos 7 días"},{id:"mes",l:"Mes actual"},{id:"mes_pasado",l:"Mes pasado"}];
+  const rango=(p)=>{
+    if(p==="hoy")return[hoy,hoy];
+    if(p==="ayer"){const a=addDias(hoy,-1);return[a,a];}
+    if(p==="7d")return[addDias(hoy,-6),hoy];
+    if(p==="mes")return[mesActual+"-01",hoy];
+    const m=mesRel(-1);return[m+"-01",finDeMes(m)];
+  };
+  const rangoPrev=(p)=>{
+    if(p==="hoy"){const a=addDias(hoy,-1);return[a,a];}
+    if(p==="ayer"){const a=addDias(hoy,-2);return[a,a];}
+    if(p==="7d")return[addDias(hoy,-13),addDias(hoy,-7)];
+    if(p==="mes"){const m=mesRel(-1);return[m+"-01",finDeMes(m)];}
+    const m=mesRel(-2);return[m+"-01",finDeMes(m)];
+  };
+  const [desde,hasta]=rango(periodo);
+  const [dPrev,hPrev]=rangoPrev(periodo);
+  const vSel=ventas.filter(v=>v.fecha>=desde&&v.fecha<=hasta);
+  const vPrev=ventas.filter(v=>v.fecha>=dPrev&&v.fecha<=hPrev);
+  const sum=(arr,f)=>arr.reduce((s,v)=>s+f(v),0);
+  const venta=sum(vSel,v=>num(v.total)),ventaPrev=sum(vPrev,v=>num(v.total));
+  const iva=sum(vSel,v=>num(v.iva)),subtotal=sum(vSel,v=>num(v.subtotal));
+  const costoMP=sum(vSel,v=>num(v.costo_teorico));
+  const utilidad=venta-costoMP;
+  const fp={efectivo:sum(vSel,v=>num(v.total_efectivo)),tarjeta:sum(vSel,v=>num(v.total_tarjeta)),plataforma:sum(vSel,v=>num(v.total_plataforma)),otros:sum(vSel,v=>num(v.total_otros))};
+  const mixFisica=sum(vSel.filter(v=>(v.canal||"mostrador")==="mostrador"),v=>num(v.total));
+  const mixPlat=venta-mixFisica;
+  const tkFisica=vSel.filter(v=>(v.canal||"mostrador")==="mostrador").length;
+  const gastosSel=gastosOp.filter(g=>g.fecha>=desde&&g.fecha<=hasta);
+  const gastos=sum(gastosSel,g=>num(g.monto));
+  const delta=ventaPrev>0?((venta-ventaPrev)/ventaPrev)*100:null;
+  const lblPrev={hoy:"vs ayer",ayer:"vs antier","7d":"vs 7 días previos",mes:"vs mes pasado",mes_pasado:"vs mes antepasado"}[periodo];
+  // Cobertura de recetas: qué % del importe vendido tiene costo de MP capturado
+  const idsSel=new Set(vSel.map(v=>v.id));
+  const detSel=ventaDetalle.filter(d=>idsSel.has(d.venta_id));
+  const impTotal=sum(detSel,d=>num(d.importe));
+  const impConCosto=sum(detSel.filter(d=>num(d.costo_teorico)>0),d=>num(d.importe));
+  const cobertura=impTotal>0?Math.min(100,(impConCosto/impTotal)*100):0;
+  // Serie diaria: el periodo seleccionado; para Hoy/Ayer se muestran los últimos 7 días con el día elegido resaltado (énfasis)
+  const unDia=desde===hasta;
+  const serieIni=unDia?addDias(hasta,-6):desde,serieFin=unDia?(periodo==="hoy"?hoy:addDias(hoy,-1)):hasta;
+  const dias=[];for(let f=serieIni;f<=serieFin&&dias.length<62;f=addDias(f,1))dias.push(f);
+  const porDia=dias.map(f=>({f,total:sum(ventas.filter(v=>v.fecha===f),v=>num(v.total))}));
+  const maxDia=Math.max(1,...porDia.map(d=>d.total));
+  const etiquetaDia=(f)=>{const x=new Date(f+"T12:00:00");return `${["dom","lun","mar","mié","jue","vie","sáb"][x.getDay()]} ${x.getDate()}`;};
+  // Top productos del periodo
+  const porProd={};detSel.forEach(d=>{const k=d.producto_venta_id;if(!porProd[k])porProd[k]={imp:0,cant:0};porProd[k].imp+=num(d.importe);porProd[k].cant+=num(d.cantidad);});
+  const top=Object.entries(porProd).map(([k,v])=>({...v,nombre:productosVenta.find(p=>p.id===k)?.nombre||"(producto)"})).sort((a,b)=>b.imp-a.imp).slice(0,10);
+  const maxTop=Math.max(1,...top.map(t=>t.imp));
+  const pct=(x,t)=>t>0?`${Math.round((x/t)*100)}%`:"0%";
+  const Kpi=({titulo,valor,sub,color})=><div className="bg-white border border-gray-200 rounded-xl p-4"><p className="text-xs text-gray-500">{titulo}</p><p className="text-2xl font-bold mt-1" style={color?{color}:{color:"#0b0b0b"}}>{valor}</p>{sub&&<p className="text-xs text-gray-400 mt-1">{sub}</p>}</div>;
+  const rangoTxt=desde===hasta?etiquetaDia(desde):`${etiquetaDia(desde)} — ${etiquetaDia(hasta)}`;
+  return(<div>
+    <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <div><h2 className="text-lg font-bold text-gray-800">Dashboard de ventas</h2><p className="text-xs text-gray-400">{rangoTxt} · {vSel.length} tickets</p></div>
+      <div className="flex gap-1 flex-wrap">{PERIODOS.map(p=><button key={p.id} onClick={()=>setPeriodo(p.id)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${periodo===p.id?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={periodo===p.id?{background:"#2D2D2D"}:{}}>{p.l}</button>)}</div>
+    </div>
+    {vSel.length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400">Sin ventas en este periodo</p><p className="text-xs text-gray-400 mt-1">El conector sube tickets de SoftRestaurant cada 2 minutos.</p></div>:<React.Fragment>
+    {/* KPIs de venta */}
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+      <div className="bg-white border border-gray-200 rounded-xl p-4"><p className="text-xs text-gray-500">Venta total (con IVA)</p><p className="text-3xl font-bold mt-1 text-gray-900">{fmt(venta)}</p>{delta!=null&&<p className={`text-xs mt-1 font-semibold ${delta>=0?"":"text-red-700"}`} style={delta>=0?{color:"#006300"}:{}}>{delta>=0?"▲":"▼"} {Math.abs(delta).toFixed(1)}% {lblPrev} ({fmt(ventaPrev)})</p>}</div>
+      <Kpi titulo="Tickets" valor={vSel.length.toLocaleString("es-MX")} sub={`ticket promedio ${fmt(vSel.length?venta/vSel.length:0)}`}/>
+      <Kpi titulo="Venta sin IVA" valor={fmt(subtotal)} sub="base gravable"/>
+      <Kpi titulo="IVA cobrado" valor={fmt(iva)} sub="incluido en la venta total"/>
+    </div>
+    {/* KPIs de rentabilidad */}
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <Kpi titulo="Costo materia prima (teórico)" valor={fmt(costoMP)} sub={`recetas cubren ${cobertura.toFixed(0)}% de la venta`} color={DV.terracota}/>
+      <Kpi titulo="Utilidad bruta" valor={fmt(utilidad)} sub={`margen ${pct(utilidad,venta)} — sin considerar gastos`} color="#006300"/>
+      <Kpi titulo={periodo==="hoy"?"Gastos del día":"Gastos del periodo"} valor={fmt(gastos)} sub={`${gastosSel.length} registro(s) de gasto`}/>
+      <Kpi titulo="Utilidad después de gastos" valor={fmt(utilidad-gastos)} sub="utilidad bruta − gastos"/>
+    </div>
+    {cobertura<90&&<div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2 mb-4 text-xs text-amber-800">⚠ El costo de materia prima solo cubre el {cobertura.toFixed(0)}% de la venta: faltan recetas por capturar (Ventas → Ventas SR → Productos y recetas). La utilidad bruta real es menor a la mostrada.</div>}
+    {/* Venta por día */}
+    <div className="bg-white border border-gray-200 rounded-xl p-4 mb-4">
+      <div className="flex items-baseline justify-between"><h3 className="text-sm font-bold text-gray-700">Venta por día</h3><p className="text-xs text-gray-400">{unDia?"últimos 7 días (día seleccionado resaltado)":"periodo seleccionado"}</p></div>
+      <div className="flex items-end gap-1 mt-3" style={{height:"9.5rem"}}>
+        {porDia.map(d=>{const sel=!unDia||d.f===desde;const h=Math.max(d.total>0?3:1,(d.total/maxDia)*100);
+          return<div key={d.f} className="flex-1 flex flex-col items-center justify-end h-full min-w-0 group" title={`${etiquetaDia(d.f)}: ${fmt(d.total)}`}>
+            {porDia.length<=14&&d.total>0&&<span className={`text-[10px] mb-0.5 ${sel?"text-gray-600":"text-gray-300"} group-hover:font-bold truncate max-w-full`}>{`$${Math.round(d.total/100)/10}k`}</span>}
+            <div className="w-full group-hover:opacity-80" style={{height:`${h}%`,background:sel?DV.teal:DV.apagado,borderRadius:"4px 4px 0 0",maxWidth:34,margin:"0 auto"}}/>
+          </div>;})}
+      </div>
+      <div className="flex gap-1 mt-1 border-t pt-1" style={{borderColor:DV.grid}}>{porDia.map((d,i)=>{const paso=Math.ceil(porDia.length/14);return<div key={d.f} className="flex-1 text-center text-[10px] text-gray-400 truncate min-w-0">{i%paso===0?etiquetaDia(d.f):""}</div>;})}</div>
+    </div>
+    <div className="grid md:grid-cols-2 gap-4 mb-4">
+      {/* Mix física vs plataforma */}
+      <div className="bg-white border border-gray-200 rounded-xl p-4">
+        <h3 className="text-sm font-bold text-gray-700">Mix de venta: local vs plataforma</h3>
+        <div className="flex w-full h-8 mt-3 rounded overflow-hidden" style={{gap:2,background:"#fff"}}>
+          {mixFisica>0&&<div style={{width:`${(mixFisica/venta)*100}%`,background:DV.teal,borderRadius:4}} title={`Local (mostrador): ${fmt(mixFisica)}`}/>}
+          {mixPlat>0&&<div style={{width:`${(mixPlat/venta)*100}%`,background:DV.ambar,borderRadius:4}} title={`Plataforma: ${fmt(mixPlat)}`}/>}
+        </div>
+        <div className="flex justify-between mt-2 text-xs flex-wrap gap-2">
+          <span className="text-gray-600"><span className="inline-block w-2.5 h-2.5 rounded-sm mr-1 align-middle" style={{background:DV.teal}}/>Local: <b>{fmt(mixFisica)}</b> ({pct(mixFisica,venta)}) · {tkFisica} tickets</span>
+          <span className="text-gray-600"><span className="inline-block w-2.5 h-2.5 rounded-sm mr-1 align-middle" style={{background:DV.ambar}}/>Plataforma: <b>{fmt(mixPlat)}</b> ({pct(mixPlat,venta)}) · {vSel.length-tkFisica} tickets</span>
+        </div>
+      </div>
+      {/* Formas de pago */}
+      <div className="bg-white border border-gray-200 rounded-xl p-4">
+        <h3 className="text-sm font-bold text-gray-700">Formas de pago</h3>
+        <div className="mt-3 space-y-2">
+          {[["Efectivo",fp.efectivo,DV.teal],["Tarjeta",fp.tarjeta,DV.azul],["Plataforma",fp.plataforma,DV.ambar],["Otros",fp.otros,DV.gris]].filter(r=>r[1]>0.005).map(([l,v,c])=>
+            <div key={l} className="flex items-center gap-2" title={`${l}: ${fmt(v)}`}>
+              <span className="text-xs text-gray-500 w-20 shrink-0">{l}</span>
+              <div className="flex-1 h-4 rounded" style={{background:"#f4f4f2"}}><div className="h-4 rounded" style={{width:`${Math.max(1,(v/Math.max(...Object.values(fp),1))*100)}%`,background:c}}/></div>
+              <span className="text-xs text-gray-700 font-semibold w-24 text-right shrink-0">{fmt(v)}</span>
+              <span className="text-[10px] text-gray-400 w-9 text-right shrink-0">{pct(v,venta)}</span>
+            </div>)}
+        </div>
+      </div>
+    </div>
+    {/* Top productos */}
+    <div className="bg-white border border-gray-200 rounded-xl p-4 mb-4">
+      <h3 className="text-sm font-bold text-gray-700">Top 10 productos del periodo (por venta)</h3>
+      {top.length===0?<p className="text-xs text-gray-400 mt-2">Sin detalle de productos en el periodo.</p>:<div className="mt-3 space-y-1.5">
+        {top.map((t,i)=><div key={i} className="flex items-center gap-2" title={`${t.nombre}: ${fmt(t.imp)} · ${t.cant.toLocaleString("es-MX")} uds`}>
+          <span className="text-xs text-gray-400 w-4 shrink-0 text-right">{i+1}</span>
+          <span className="text-xs text-gray-700 w-56 truncate shrink-0" title={t.nombre}>{t.nombre}</span>
+          <div className="flex-1 h-4 rounded" style={{background:"#f4f4f2"}}><div className="h-4 rounded" style={{width:`${Math.max(1,(t.imp/maxTop)*100)}%`,background:DV.teal}}/></div>
+          <span className="text-xs font-semibold text-gray-700 w-24 text-right shrink-0">{fmt(t.imp)}</span>
+          <span className="text-[10px] text-gray-400 w-14 text-right shrink-0">{t.cant.toLocaleString("es-MX",{maximumFractionDigits:1})} uds</span>
+        </div>)}
+      </div>}
+    </div>
+    <p className="text-[11px] text-gray-400 mb-2">Fuente: tickets de SoftRestaurant vía conector (cada 2 min). El costo de materia prima es teórico: sale de las recetas capturadas por producto. Los gastos vienen del módulo Finanzas → Gastos.</p>
+    </React.Fragment>}
+  </div>);
+}
+
 // ======================== INVENTARIO SUCURSAL + MERMA (v7.0) ========================
 function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,mermas,setMermas,catalogo,insumos,sucursales,rol}){
   const [tab,setTab]=useState("inventario");
@@ -2015,6 +2160,7 @@ function App(){
   const [rol,setRol]=useState(null);
   const [view,setView]=useState("bandeja");
   const [subview,setSubview]=useState(null);
+  const [menuAbierto,setMenuAbierto]=useState(null);
   const [loading,setLoading]=useState(true);
   const [loadMsg,setLoadMsg]=useState("Iniciando...");
   const [error,setError]=useState(null);
@@ -2443,15 +2589,36 @@ function App(){
     return<ProveedorTokenView detalle={det} catalogo={catalogo} pedido={selectedPedido} provNombre={provNombre} onConfirm={handleProvConfirm} readOnly={isReadOnly}/>;
   }
 
-  if(!rol)return<LoginScreen onLogin={r=>{setRol(r);setView(r==="finanzas"?"finanzas":r==="almacen"?"almacen":"bandeja");}}/>;
+  if(!rol)return<LoginScreen onLogin={r=>{setRol(r);setView(["admin","compras","finanzas"].includes(r)?"ventas_dash":r==="almacen"?"almacen":"bandeja");}}/>;
 
-  const tabs=[];
-  if(["admin","compras"].includes(rol)){tabs.push({id:"bandeja",l:"Pedidos"},{id:"almacen",l:"Almacén"},{id:"ventas",l:"Ventas SR"},{id:"inv_sucursal",l:"Inv. Sucursal"},{id:"finanzas",l:"Finanzas"},{id:"gastos",l:"Gastos"},{id:"estados",l:"Estados"},{id:"dashboard",l:"Dashboard"});if(rol==="admin")tabs.push({id:"catalogo",l:"Catálogo"});}
-  else if(rol==="sucursal")tabs.push({id:"bandeja",l:"Mis pedidos"},{id:"recepcion",l:"Recepción"},{id:"ventas",l:"Ventas SR"},{id:"inv_sucursal",l:"Inv. Sucursal"},{id:"compras_directas",l:"Compras directas"},{id:"gastos",l:"Gastos"});
-  else if(rol==="proveedor")tabs.push({id:"bandeja",l:"Mis pedidos"});
-  else if(rol==="almacen")tabs.push({id:"almacen",l:"Inventario"},{id:"bandeja",l:"Pedidos"});
-  else if(rol==="finanzas")tabs.push({id:"finanzas",l:"Finanzas"},{id:"ventas",l:"Ventas SR"},{id:"estados",l:"Estados"},{id:"gastos",l:"Gastos"},{id:"compras_directas",l:"Compras directas"},{id:"dashboard",l:"Dashboard"});
-  else tabs.push({id:"dashboard",l:"Dashboard"});
+  // ---- Menú agrupado por áreas (v7.4). Los ids de vista no cambian; solo se
+  // reorganizan en grupos desplegables. La visibilidad por rol es la misma que
+  // tenían las tabs planas, más el nuevo Dashboard de ventas.
+  const MENU=[
+    {id:"g_ventas",l:"Ventas",icon:"📈",items:[
+      {id:"ventas_dash",l:"Dashboard de ventas",roles:["admin","compras","finanzas","sucursal"]},
+      {id:"ventas",l:"Ventas SR · recetas",roles:["admin","compras","finanzas","sucursal"]},
+    ]},
+    {id:"g_compras",l:"Compras",icon:"🛒",items:[
+      {id:"bandeja",l:rol==="sucursal"||rol==="proveedor"?"Mis pedidos":"Pedidos",roles:["admin","compras","sucursal","proveedor","almacen"]},
+      {id:"recepcion",l:"Recepción",roles:["sucursal"]},
+      {id:"compras_directas",l:"Compras directas",roles:["sucursal","admin","compras","finanzas"]},
+      {id:"dashboard",l:"Dashboard de compras",roles:["admin","compras","finanzas"]},
+    ]},
+    {id:"g_almacen",l:"Almacén",icon:"📦",items:[
+      {id:"almacen",l:"Inventario almacén",roles:["admin","compras","almacen"]},
+      {id:"inv_sucursal",l:"Inventario sucursal · merma",roles:["admin","compras","sucursal"]},
+    ]},
+    {id:"g_finanzas",l:"Finanzas",icon:"💰",items:[
+      {id:"finanzas",l:"Cuentas por pagar",roles:["admin","compras","finanzas"]},
+      {id:"gastos",l:"Gastos",roles:["sucursal","admin","compras","finanzas"]},
+      {id:"estados",l:"Estados financieros",roles:["admin","compras","finanzas"]},
+    ]},
+    {id:"g_catalogos",l:"Catálogos",icon:"🗂",items:[
+      {id:"catalogo",l:"Catálogo e insumos",roles:["admin"]},
+    ]},
+  ].map(g=>({...g,items:g.items.filter(i=>i.roles.includes(rol))})).filter(g=>g.items.length>0);
+  const irA=(id)=>{setView(id);setSelectedPedido(null);setSubview(null);setMenuAbierto(null);};
 
   const currentDetalle=selectedPedido?pedidoDetalle.filter(d=>d.pedido_id===selectedPedido.id):[];
   const currentProvEst=selectedPedido?provEstatus.filter(x=>x.pedido_id===selectedPedido.id):[];
@@ -2460,9 +2627,17 @@ function App(){
   return(<div className="min-h-screen" style={{background:"#FAFAF8"}}>
     <div className="border-b border-gray-200" style={{background:"#2D2D2D"}}><div className="max-w-6xl mx-auto px-4"><div className="flex items-center justify-between py-3">
       <div className="flex items-center gap-3"><Logo size={32}/><div><h1 className="text-sm font-bold text-white leading-tight">Fit Taste Roma{ENTORNOS[ENV_ID].etiqueta&&<span className="ml-2 text-xs font-bold px-2 py-0.5 rounded bg-orange-500 text-white align-middle">{ENTORNOS[ENV_ID].etiqueta}</span>}</h1><p className="text-xs text-emerald-400">{rol} — {catalogo.length} productos</p></div></div>
-      <div className="flex items-center gap-1">
-        {tabs.map(t=><button key={t.id} onClick={()=>{setView(t.id);setSelectedPedido(null);setSubview(null);}} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${view===t.id?"text-gray-900":"text-gray-400 hover:text-white"}`} style={view===t.id?{background:"#e2a52a"}:{}}>{t.l}</button>)}
-        <button onClick={()=>{setRol(null);setView("bandeja");setSelectedPedido(null);}} className="ml-3 px-2 py-1.5 rounded-lg text-xs text-gray-500 hover:text-red-400">Salir</button>
+      <div className="flex items-center gap-1 flex-wrap">
+        {menuAbierto&&<div className="fixed inset-0 z-40" onClick={()=>setMenuAbierto(null)}/>}
+        {MENU.map(g=>{const activo=g.items.some(i=>i.id===view);
+          if(g.items.length===1){const i=g.items[0];return<button key={g.id} onClick={()=>irA(i.id)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${view===i.id?"text-gray-900":"text-gray-400 hover:text-white"}`} style={view===i.id?{background:"#e2a52a"}:{}}>{g.icon} {g.l}</button>;}
+          return<div key={g.id} className="relative">
+            <button onClick={()=>setMenuAbierto(menuAbierto===g.id?null:g.id)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${activo?"text-gray-900":"text-gray-400 hover:text-white"}`} style={activo?{background:"#e2a52a"}:{}}>{g.icon} {g.l} <span className="text-[10px] align-middle">{menuAbierto===g.id?"▲":"▼"}</span></button>
+            {menuAbierto===g.id&&<div className="absolute right-0 mt-1 w-56 rounded-xl shadow-xl border border-gray-700 py-1 z-50" style={{background:"#3a3a3a"}}>
+              {g.items.map(i=><button key={i.id} onClick={()=>irA(i.id)} className={`block w-full text-left px-4 py-2 text-sm transition-all ${view===i.id?"font-bold":"text-gray-300 hover:bg-black hover:bg-opacity-20"}`} style={view===i.id?{color:"#e2a52a"}:{}}>{i.l}</button>)}
+            </div>}
+          </div>;})}
+        <button onClick={()=>{setRol(null);setView("bandeja");setSelectedPedido(null);setMenuAbierto(null);}} className="ml-3 px-2 py-1.5 rounded-lg text-xs text-gray-500 hover:text-red-400">Salir</button>
       </div>
     </div></div></div>
     <div className="max-w-6xl mx-auto px-4 py-6">
@@ -2534,6 +2709,7 @@ function App(){
         alert("Pedido surtido con PEPS — lotes e inventario actualizados");
       }}/>}
       {view==="dashboard"&&<DashboardView pedidos={pedidos} catalogo={catalogo} proveedores={proveedores} pedidoDetalle={pedidoDetalle} inventario={inventario} comprasDirectas={comprasDirectas} gastosOp={gastosOp}/>}
+      {view==="ventas_dash"&&["admin","compras","finanzas","sucursal"].includes(rol)&&<VentasDashboardView ventas={ventas} ventaDetalle={ventaDetalle} productosVenta={productosVenta} gastosOp={gastosOp}/>}
       {view==="catalogo"&&rol==="admin"&&<CatalogoView catalogo={catalogo} setCatalogo={setCatalogo} proveedores={proveedores} setProveedores={setProveedores} unidades={unidades} inventario={inventario} flujos={flujos} insumos={insumos} setInsumos={setInsumos}/>}
       {view==="recepcion"&&rol==="sucursal"&&<RecepcionView pedidos={pedidos} pedidoDetalle={pedidoDetalle} proveedores={proveedores} provEstatus={provEstatus} catalogo={catalogo} recepciones={recepciones} recepcionDetalle={recepcionDetalle} onRecibir={handleRecibir}/>}
       {view==="finanzas"&&["admin","compras","finanzas"].includes(rol)&&<FinanzasView cxp={cxp} setCxp={setCxp} pagos={pagos} setPagos={setPagos} pedidos={pedidos} proveedores={proveedores} pedidoDetalle={pedidoDetalle} catalogo={catalogo}/>}
