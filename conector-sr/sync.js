@@ -85,14 +85,25 @@ const SQL_PAGOS_TEMP = `
 // consultando el esquema, y tomamos el precio máximo por producto entre
 // las listas. Si no hay dónde leer precios, respaldo sin precio.
 const SQL_MENU_SIN_PRECIO = `
-  SELECT p.idproducto, p.descripcion, NULL AS precio
+  SELECT p.idproducto, p.descripcion, NULL AS precio, NULL AS grupo
   FROM productos p`;
 let SQL_MENU = null; // se arma una sola vez en el primer ciclo
 async function armarQueryMenu(pool) {
-  // Candidatas en orden: productosdetalle (SR12 de FitTaste), luego listas de
-  // precios (otras instalaciones). Una tabla solo califica si además de las
-  // columnas correctas tiene precios de verdad (> 0): listadepreciosdetalle
-  // puede existir vacía y ganarle el lugar a la buena.
+  // Grupo del menú (para separar platillos de adicionales en FitTaste):
+  // productos.idgrupo → grupos.descripcion. Si la instalación no tiene la
+  // tabla grupos, se sincroniza sin grupo.
+  let selGrupo = "NULL";
+  try {
+    const gcols = (await pool.request().query(
+      `SELECT name FROM sys.columns WHERE object_id = OBJECT_ID('grupos')`
+    )).recordset.map((c) => String(c.name).toLowerCase());
+    if (gcols.includes("idgrupo") && gcols.includes("descripcion"))
+      selGrupo = "(SELECT MAX(g.descripcion) FROM grupos g WHERE g.idgrupo = p.idgrupo)";
+  } catch { /* sin grupos */ }
+  // Precios — candidatas en orden: productosdetalle (SR12 de FitTaste), luego
+  // listas de precios (otras instalaciones). Una tabla solo califica si además
+  // de las columnas correctas tiene precios de verdad (> 0):
+  // listadepreciosdetalle puede existir vacía y ganarle el lugar a la buena.
   for (const tabla of ["productosdetalle", "listadepreciosdetalle", "productosprecios"]) {
     try {
       const cols = (await pool.request().query(
@@ -105,14 +116,18 @@ async function armarQueryMenu(pool) {
       const col = colPrecio.replace(/[\[\]]/g, "");
       const chk = (await pool.request().query(`SELECT MAX([${col}]) AS m FROM ${tabla}`)).recordset[0];
       if (!chk || !(parseFloat(chk.m) > 0)) continue;
-      console.log(`  Precios del menú: ${tabla}.${col}`);
+      console.log(`  Precios del menú: ${tabla}.${col}${selGrupo !== "NULL" ? " · grupos: sí" : ""}`);
       return `
         SELECT p.idproducto, p.descripcion,
-               (SELECT MAX(d.[${col}]) FROM ${tabla} d WHERE d.idproducto = p.idproducto) AS precio
+               (SELECT MAX(d.[${col}]) FROM ${tabla} d WHERE d.idproducto = p.idproducto) AS precio,
+               ${selGrupo} AS grupo
         FROM productos p`;
     } catch { /* siguiente candidata */ }
   }
   console.log("  (No se encontró tabla de precios con datos: el menú se sincroniza sin precio.)");
+  if (selGrupo !== "NULL") return `
+    SELECT p.idproducto, p.descripcion, NULL AS precio, ${selGrupo} AS grupo
+    FROM productos p`;
   return SQL_MENU_SIN_PRECIO;
 }
 
@@ -248,13 +263,15 @@ async function sincronizar() {
         const nombre = (m.descripcion || "").trim();
         if (!codigo || !nombre) continue;
         const precio = r2(parseFloat(m.precio) || 0);
+        const grupo = String(m.grupo || "").trim() || null;
         const prod = prods.find((p) => p.codigo_sr && String(p.codigo_sr).toLowerCase() === codigo.toLowerCase());
         if (!prod) {
-          const res = await sbPost("productos_venta", { codigo_sr: codigo, nombre, precio_venta: precio });
+          const res = await sbPost("productos_venta", { codigo_sr: codigo, nombre, precio_venta: precio, grupo_sr: grupo });
           if (res && res[0]) { prods.push(res[0]); creados++; }
-        } else if (!prod.es_preparacion && (prod.nombre !== nombre || (precio > 0 && r2(parseFloat(prod.precio_venta) || 0) !== precio))) {
+        } else if (!prod.es_preparacion && (prod.nombre !== nombre || (precio > 0 && r2(parseFloat(prod.precio_venta) || 0) !== precio) || (grupo && prod.grupo_sr !== grupo))) {
           const upd = { nombre, updated_at: new Date().toISOString() };
           if (precio > 0) upd.precio_venta = precio;
+          if (grupo) upd.grupo_sr = grupo;
           await sbPatch("productos_venta", prod.id, upd);
           Object.assign(prod, upd);
           actualizados++;

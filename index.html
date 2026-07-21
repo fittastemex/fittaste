@@ -1596,7 +1596,14 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
 
   // v7.3: alarma de productos que YA vendieron y no tienen receta (su consumo
   // no está descontando inventario). Típico: alta nueva en SR sin capturar receta.
-  const vendidosSinReceta=productosVenta.filter(p=>!p.es_preparacion&&!recetas.some(r=>r.producto_venta_id===p.id)&&ventaDetalle.some(d=>d.producto_venta_id===p.id));
+  // v7.5: los marcados "sin_insumos" (instrucciones de cocina: SIN CEBOLLA,
+  // PREPARADOS…) se excluyen — no consumen nada y no deben sonar la alarma.
+  const vendidosSinReceta=productosVenta.filter(p=>!p.es_preparacion&&!p.sin_insumos&&!recetas.some(r=>r.producto_venta_id===p.id)&&ventaDetalle.some(d=>d.producto_venta_id===p.id));
+  const toggleSinInsumos=async(p)=>{
+    const v=!p.sin_insumos;
+    await sbPatch("productos_venta",p.id,{sin_insumos:v,updated_at:new Date().toISOString()});
+    setProductosVenta(productosVenta.map(x=>x.id===p.id?{...x,sin_insumos:v}:x));
+  };
 
   return(<div>
     <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
@@ -1701,7 +1708,7 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
       {(()=>{const lista=productosVenta.filter(p=>verTipo==="preparaciones"?p.es_preparacion:!p.es_preparacion);
       return lista.length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400 mb-2">{verTipo==="preparaciones"?"Sin preparaciones":"Sin productos de venta"}</p><p className="text-xs text-gray-400">{verTipo==="preparaciones"?"Una preparación (salsa, arroz cocido, aderezo…) tiene su propia receta y los platillos la usan como un ingrediente más":"Se crean automáticamente al importar tu primer reporte de SR, o agrégalos manualmente"}</p></div>
       :<div className="bg-white border border-gray-200 rounded-xl overflow-hidden"><table className="w-full text-sm"><thead className="bg-gray-50"><tr>
-        {(verTipo==="preparaciones"?["Preparación","Se mide en","Rinde/tanda","Costo tanda","Costo unidad","Receta",""]:["Código SR","Producto","Categoría","Precio","Costo receta","Margen","Receta",""]).map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Precio","Costo receta","Margen","Rinde/tanda","Costo tanda","Costo unidad"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
+        {(verTipo==="preparaciones"?["Preparación","Se mide en","Rinde/tanda","Costo tanda","Costo unidad","Receta",""]:["Código SR","Producto","Grupo","Precio","Costo receta","Margen","Receta",""]).map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Precio","Costo receta","Margen","Rinde/tanda","Costo tanda","Costo unidad"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
       </tr></thead><tbody>{lista.map(p=>{
         const isE=editingProd===p.id;
         const cR=costoReceta(p.id,recetas,invSucursal,catalogo,productosVenta);
@@ -1724,11 +1731,16 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
         return(<React.Fragment key={p.id}><tr className={`border-t border-gray-100 ${isE||openReceta?"bg-lime-50/60":"hover:bg-gray-50"}`}>
           <td className="px-3 py-2 font-mono text-xs text-gray-500">{isE?<input className="w-20 border border-lime-400 rounded px-1 py-0.5 text-xs" value={prodData.codigo_sr||""} onChange={e=>setProdData({...prodData,codigo_sr:e.target.value})}/>:(p.codigo_sr||"—")}</td>
           <td className="px-3 py-2 font-medium text-gray-900">{isE?<input className="w-full border border-lime-400 rounded px-1 py-0.5 text-sm" value={prodData.nombre} onChange={e=>setProdData({...prodData,nombre:e.target.value})}/>:p.nombre}</td>
-          <td className="px-3 py-2 text-xs text-gray-500">{isE?<input className="w-20 border border-lime-400 rounded px-1 py-0.5 text-xs" value={prodData.categoria||""} onChange={e=>setProdData({...prodData,categoria:e.target.value})}/>:(p.categoria||"—")}</td>
+          <td className="px-3 py-2 text-xs text-gray-500">{isE?<input className="w-20 border border-lime-400 rounded px-1 py-0.5 text-xs" value={prodData.categoria||""} onChange={e=>setProdData({...prodData,categoria:e.target.value})}/>:(p.grupo_sr||p.categoria||"—")}</td>
           <td className="px-3 py-2 text-right">{isE?<input type="number" step="0.01" className="w-20 text-right border border-lime-400 rounded px-1 py-0.5 text-sm" value={prodData.precio_venta} onChange={e=>setProdData({...prodData,precio_venta:e.target.value})}/>:<span className="font-semibold">{fmt(p.precio_venta)}</span>}</td>
           <td className="px-3 py-2 text-right text-gray-600">{nRec>0?fmt(cR):<span className="text-gray-300">—</span>}</td>
           <td className="px-3 py-2 text-right">{nRec>0&&precio>0?<Badge v={margen<50?"danger":margen<65?"warning":"success"}>{margen.toFixed(0)}%</Badge>:"—"}</td>
-          <td className="px-3 py-2"><button onClick={()=>{setRecetaDe(openReceta?null:p.id);setNewLinea({ref:"",cantidad:0,merma_pct:0});}} className={`text-xs px-2 py-1 rounded font-medium ${nRec>0?"text-teal-700 hover:bg-teal-50":"text-red-500 hover:bg-red-50"}`}>{nRec>0?`${nRec} insumos ${openReceta?"▲":"▼"}`:"+ Crear receta"}</button></td>
+          <td className="px-3 py-2">{p.sin_insumos
+            ?<button onClick={()=>toggleSinInsumos(p)} title="Marcado como instrucción sin consumo de insumos. Clic para quitarle la marca." className="text-xs px-2 py-1 rounded font-medium text-gray-400 hover:bg-gray-100">no consume ✓</button>
+            :<span className="inline-flex items-center gap-1">
+              <button onClick={()=>{setRecetaDe(openReceta?null:p.id);setNewLinea({ref:"",cantidad:0,merma_pct:0});}} className={`text-xs px-2 py-1 rounded font-medium ${nRec>0?"text-teal-700 hover:bg-teal-50":"text-red-500 hover:bg-red-50"}`}>{nRec>0?`${nRec} insumos ${openReceta?"▲":"▼"}`:"+ Crear receta"}</button>
+              {nRec===0&&<button onClick={()=>toggleSinInsumos(p)} title="Marcar como instrucción de cocina que NO consume insumos (SIN CEBOLLA, PREPARADOS…). Deja de aparecer en la alarma de recetas." className="text-[10px] text-gray-400 hover:text-gray-600 underline px-1">no consume</button>}
+            </span>}</td>
           <td className="px-3 py-2 text-right">{isE?<div className="flex gap-1 justify-end"><button onClick={()=>saveProd(p)} disabled={saving} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded">{saving?"...":"Guardar"}</button><button onClick={()=>setEditingProd(null)} className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded">X</button></div>:<div className="flex gap-1 justify-end"><button onClick={()=>{setEditingProd(p.id);setProdData({codigo_sr:p.codigo_sr||"",nombre:p.nombre,categoria:p.categoria||"",precio_venta:p.precio_venta});}} className="text-xs text-amber-700 hover:bg-amber-100 px-2 py-1 rounded">Editar</button><button onClick={()=>delProd(p)} className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded">✕</button></div>}</td>
         </tr>
         {openReceta&&recetaEditorRow(p,cR,8)}
@@ -1797,9 +1809,16 @@ function VentasDashboardView({ventas,ventaDetalle,productosVenta,gastosOp}){
   const porDia=dias.map(f=>({f,total:sum(ventas.filter(v=>v.fecha===f),v=>num(v.total))}));
   const maxDia=Math.max(1,...porDia.map(d=>d.total));
   const etiquetaDia=(f)=>{const x=new Date(f+"T12:00:00");return `${["dom","lun","mar","mié","jue","vie","sáb"][x.getDay()]} ${x.getDate()}`;};
-  // Top productos del periodo
-  const porProd={};detSel.forEach(d=>{const k=d.producto_venta_id;if(!porProd[k])porProd[k]={imp:0,cant:0};porProd[k].imp+=num(d.importe);porProd[k].cant+=num(d.cantidad);});
-  const top=Object.entries(porProd).map(([k,v])=>({...v,nombre:productosVenta.find(p=>p.id===k)?.nombre||"(producto)"})).sort((a,b)=>b.imp-a.imp).slice(0,10);
+  // Venta por grupo del menú (grupo_sr viene de SoftRestaurant vía el conector)
+  const [grupoSel,setGrupoSel]=useState("todos");
+  const porGrupoMap={};detSel.forEach(d=>{const p=productosVenta.find(x=>x.id===d.producto_venta_id);const g=p?.grupo_sr||"Sin grupo";if(!porGrupoMap[g])porGrupoMap[g]=0;porGrupoMap[g]+=num(d.importe);});
+  let porGrupo=Object.entries(porGrupoMap).map(([g,imp])=>({g,imp})).sort((a,b)=>b.imp-a.imp);
+  if(porGrupo.length>8){const otros=porGrupo.slice(8).reduce((s,x)=>s+x.imp,0);porGrupo=[...porGrupo.slice(0,8),{g:`Otros (${Object.keys(porGrupoMap).length-8} grupos)`,imp:otros}];}
+  const maxGrupo=Math.max(1,...porGrupo.map(x=>x.imp));
+  const gruposDisp=Object.keys(porGrupoMap).sort();
+  // Top productos del periodo (filtrable por grupo)
+  const porProd={};detSel.forEach(d=>{const p=productosVenta.find(x=>x.id===d.producto_venta_id);const g=p?.grupo_sr||"Sin grupo";if(grupoSel!=="todos"&&g!==grupoSel)return;const k=d.producto_venta_id;if(!porProd[k])porProd[k]={imp:0,cant:0,nombre:p?.nombre||"(producto)",grupo:g};porProd[k].imp+=num(d.importe);porProd[k].cant+=num(d.cantidad);});
+  const top=Object.values(porProd).sort((a,b)=>b.imp-a.imp).slice(0,10);
   const maxTop=Math.max(1,...top.map(t=>t.imp));
   const pct=(x,t)=>t>0?`${Math.round((x/t)*100)}%`:"0%";
   const Kpi=({titulo,valor,sub,color})=><div className="bg-white border border-gray-200 rounded-xl p-4"><p className="text-xs text-gray-500">{titulo}</p><p className="text-2xl font-bold mt-1" style={color?{color}:{color:"#0b0b0b"}}>{valor}</p>{sub&&<p className="text-xs text-gray-400 mt-1">{sub}</p>}</div>;
@@ -1864,13 +1883,31 @@ function VentasDashboardView({ventas,ventaDetalle,productosVenta,gastosOp}){
         </div>
       </div>
     </div>
+    {/* Venta por grupo del menú */}
+    {porGrupo.length>1&&<div className="bg-white border border-gray-200 rounded-xl p-4 mb-4">
+      <div className="flex items-baseline justify-between"><h3 className="text-sm font-bold text-gray-700">Venta por grupo del menú</h3><p className="text-xs text-gray-400">grupos de SoftRestaurant — platillos vs adicionales</p></div>
+      <div className="mt-3 space-y-1.5">
+        {porGrupo.map((x,i)=><div key={i} className="flex items-center gap-2" title={`${x.g}: ${fmt(x.imp)}`}>
+          <span className="text-xs text-gray-700 w-56 truncate shrink-0" title={x.g}>{x.g}</span>
+          <div className="flex-1 h-4 rounded" style={{background:"#f4f4f2"}}><div className="h-4 rounded" style={{width:`${Math.max(1,(x.imp/maxGrupo)*100)}%`,background:DV.teal}}/></div>
+          <span className="text-xs font-semibold text-gray-700 w-24 text-right shrink-0">{fmt(x.imp)}</span>
+          <span className="text-[10px] text-gray-400 w-9 text-right shrink-0">{pct(x.imp,venta)}</span>
+        </div>)}
+      </div>
+    </div>}
     {/* Top productos */}
     <div className="bg-white border border-gray-200 rounded-xl p-4 mb-4">
-      <h3 className="text-sm font-bold text-gray-700">Top 10 productos del periodo (por venta)</h3>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <h3 className="text-sm font-bold text-gray-700">Top 10 productos del periodo (por venta)</h3>
+        {gruposDisp.length>1&&<select className="border border-gray-200 rounded-lg px-2 py-1 text-xs text-gray-600" value={grupoSel} onChange={e=>setGrupoSel(e.target.value)}>
+          <option value="todos">Todos los grupos</option>
+          {gruposDisp.map(g=><option key={g} value={g}>{g}</option>)}
+        </select>}
+      </div>
       {top.length===0?<p className="text-xs text-gray-400 mt-2">Sin detalle de productos en el periodo.</p>:<div className="mt-3 space-y-1.5">
-        {top.map((t,i)=><div key={i} className="flex items-center gap-2" title={`${t.nombre}: ${fmt(t.imp)} · ${t.cant.toLocaleString("es-MX")} uds`}>
+        {top.map((t,i)=><div key={i} className="flex items-center gap-2" title={`${t.nombre} (${t.grupo}): ${fmt(t.imp)} · ${t.cant.toLocaleString("es-MX")} uds`}>
           <span className="text-xs text-gray-400 w-4 shrink-0 text-right">{i+1}</span>
-          <span className="text-xs text-gray-700 w-56 truncate shrink-0" title={t.nombre}>{t.nombre}</span>
+          <span className="text-xs text-gray-700 w-56 truncate shrink-0" title={`${t.nombre} — ${t.grupo}`}>{t.nombre}</span>
           <div className="flex-1 h-4 rounded" style={{background:"#f4f4f2"}}><div className="h-4 rounded" style={{width:`${Math.max(1,(t.imp/maxTop)*100)}%`,background:DV.teal}}/></div>
           <span className="text-xs font-semibold text-gray-700 w-24 text-right shrink-0">{fmt(t.imp)}</span>
           <span className="text-[10px] text-gray-400 w-14 text-right shrink-0">{t.cant.toLocaleString("es-MX",{maximumFractionDigits:1})} uds</span>

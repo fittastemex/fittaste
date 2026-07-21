@@ -244,6 +244,14 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   check("5.3 jitomate descontado vía sub-receta: 6−0.375 = 5.625 kg",approx(exJit,5.625,0.001),exJit);
   check("5.3 kárdex: 3 salidas por venta",DB.movimientos_sucursal.filter(m=>m.tipo==="salida_venta").length===3);
 
+  console.log("\n== Parte 5b: marca 'no consume insumos' (v7.5) ==");
+  check("5b.1 alarma roja: JUGO vendido sin receta",await page.getByText(/con ventas SIN receta/).isVisible());
+  await page.getByRole("button",{name:/Productos y recetas/}).click();
+  await page.locator("tr",{hasText:"JUGO DE PRUEBA"}).getByRole("button",{name:"no consume",exact:true}).click();
+  await page.waitForTimeout(500);
+  check("5b.2 marcar 'no consume' apaga la alarma",!(await page.getByText(/con ventas SIN receta/).isVisible()));
+  check("5b.3 sin_insumos guardado en BD",DB.productos_venta.find(p=>p.codigo_sr==="JUGO99")?.sin_insumos===true);
+
   console.log("\n== Parte 6: Merma ==");
   await menu("Almacén","Inventario sucursal · merma");
   await page.getByRole("button",{name:"Registrar merma"}).first().click();
