@@ -159,7 +159,8 @@ const PASSWORDS={
   sucursal:"roma2026",
   proveedor:"prov2026",
   almacen:"almacen2026",
-  finanzas:"finanzas2026"
+  finanzas:"finanzas2026",
+  fernanda:"fer2026fit" // acceso individual con permisos de admin (solo visible en DEV)
 };
 
 // ======================== LOGIN ========================
@@ -168,10 +169,13 @@ function LoginScreen({onLogin,provToken}){
   const [selected,setSelected]=useState(null);
   const [pass,setPass]=useState("");
   const [error,setError]=useState("");
-  const roles=[{rol:"admin",label:"Admin / Dueño",desc:"Acceso total",icon:"★",color:"#e2a52a"},{rol:"compras",label:"Compras",desc:"Gestiona pedidos",icon:"◈",color:"#e2a52a"},{rol:"sucursal",label:"Sucursal",desc:"Crea pedidos",icon:"◉",color:"#bfcd3b"},{rol:"proveedor",label:"Proveedor",desc:"Captura precios",icon:"◇",color:"#d6816c"},{rol:"almacen",label:"Almacén",desc:"Inventario",icon:"◫",color:"#77b7b4"},{rol:"finanzas",label:"Finanzas",desc:"Cuentas por pagar",icon:"◎",color:"#d6816c"}];
+  const roles=[{rol:"admin",label:"Admin / Dueño",desc:"Acceso total",icon:"★",color:"#e2a52a"},{rol:"compras",label:"Compras",desc:"Gestiona pedidos",icon:"◈",color:"#e2a52a"},{rol:"sucursal",label:"Sucursal",desc:"Crea pedidos",icon:"◉",color:"#bfcd3b"},{rol:"proveedor",label:"Proveedor",desc:"Captura precios",icon:"◇",color:"#d6816c"},{rol:"almacen",label:"Almacén",desc:"Inventario",icon:"◫",color:"#77b7b4"},{rol:"finanzas",label:"Finanzas",desc:"Cuentas por pagar",icon:"◎",color:"#d6816c"},
+    // v7.6: acceso individual para la implementación — solo aparece en DEV;
+    // entra con contraseña propia y permisos de admin
+    ...(ENV_ID==="dev"?[{rol:"fernanda",label:"Fernanda",desc:"Implementación — acceso total",icon:"✦",color:"#77b7b4"}]:[])];
 
   const handleLogin=()=>{
-    if(PASSWORDS[selected]===pass){setError("");onLogin(selected);}
+    if(PASSWORDS[selected]===pass){setError("");onLogin(selected==="fernanda"?"admin":selected);}
     else{setError("Contraseña incorrecta");setPass("");}
   };
 
