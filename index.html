@@ -120,6 +120,37 @@ const Btn=({children,onClick,disabled,color="amber"})=><button onClick={onClick}
 
 const estatusBadge=(e)=>{const m={creado:"nuevo",en_proceso:"proceso",enviado_proveedor:"enviado",enviado:"enviado",entregado:"warning",precios_capturados:"success",completo:"success",surtido:"purple",comprado:"info",recibido_completo:"success",recibido_con_faltantes:"danger",cerrado:"cerrado",pendiente:"default"};return<Badge v={m[e]||"default"}>{e.replace(/_/g," ")}</Badge>;};
 
+// v7.6: combobox con autocompletado para elegir ingredientes/sub-recetas.
+// Filtra sin acentos y en cualquier parte del nombre; ordena: primero los que
+// EMPIEZAN con lo escrito, luego los más usados en recetas, luego alfabético.
+function BuscadorIngrediente({opciones,onPick,placeholder}){
+  const [q,setQ]=useState("");
+  const [open,setOpen]=useState(false);
+  const nrm=(s)=>String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toUpperCase();
+  const nq=nrm(q.trim());
+  const fil=(!nq?opciones:opciones.filter(o=>nrm(o.label).includes(nq)))
+    .map(o=>({...o,_pri:nq&&nrm(o.label).startsWith(nq)?0:1}))
+    .sort((a,b)=>a._pri-b._pri||(b.usos||0)-(a.usos||0)||a.label.localeCompare(b.label))
+    .slice(0,30);
+  return(<div className="relative">
+    <input className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:ring-2 focus:ring-teal-300 focus:outline-none"
+      placeholder={placeholder||"Escribe para buscar…"} value={q}
+      onFocus={()=>setOpen(true)}
+      onChange={e=>{setQ(e.target.value);setOpen(true);}}
+      onBlur={()=>setTimeout(()=>setOpen(false),150)}
+      onKeyDown={e=>{if(e.key==="Enter"&&fil.length>0){e.preventDefault();onPick(fil[0]);setQ(fil[0].label);setOpen(false);}if(e.key==="Escape")setOpen(false);}}/>
+    {open&&<div className="absolute z-30 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl max-h-56 overflow-y-auto">
+      {fil.length===0&&<p className="px-3 py-2 text-xs text-gray-400">Sin coincidencias{q?` para "${q}"`:""}</p>}
+      {fil.map(o=><button key={o.value} type="button" onMouseDown={e=>{e.preventDefault();onPick(o);setQ(o.label);setOpen(false);}}
+        className="flex w-full items-center justify-between gap-2 text-left px-3 py-1.5 text-xs hover:bg-teal-50">
+        <span className="font-medium text-gray-800 truncate">{o.label} {o.prep&&<Badge v="purple">prep</Badge>}</span>
+        <span className="text-gray-400 shrink-0">{o.extra}</span>
+      </button>)}
+      {opciones.length>30&&fil.length===30&&<p className="px-3 py-1 text-[10px] text-gray-400 border-t border-gray-100">Mostrando 30 — sigue escribiendo para afinar</p>}
+    </div>}
+  </div>);
+}
+
 // ======================== CONTRASEÑAS POR ROL ========================
 // Cambia estas contraseñas cuando quieras
 const PASSWORDS={
@@ -1457,8 +1488,8 @@ function GastosView({gastosOp,setGastosOp,catGastos,setCatGastos,rol}){
 // FitTaste importa su reporte de "Ventas por producto" (copiado desde Excel/CSV),
 // explota recetas y descuenta el inventario de sucursal. El campo ventas.origen
 // deja listo el terreno para un conector automático (agente SQL Server o API).
-function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,ventas,ventaDetalle,catalogo,insumos,invSucursal,onImport,rol}){
-  const [tab,setTab]=useState("importar");
+function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,ventas,ventaDetalle,catalogo,insumos,invSucursal,onImport,rol,tabInicial}){
+  const [tab,setTab]=useState(tabInicial||"importar");
   const [fecha,setFecha]=useState(new Date().toISOString().split("T")[0]);
   const [canal,setCanal]=useState("mostrador");
   const [pagosImp,setPagosImp]=useState({efectivo:0,tarjeta:0,plataforma:0,otros:0});
@@ -1574,15 +1605,11 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
         </tr>);})}
       </tbody></table>
       <div className="flex gap-2 items-end flex-wrap">
-        <div className="flex-1"><label className="text-xs text-gray-500">Agregar ingrediente</label><select className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs" value={newLinea.ref} onChange={e=>setNewLinea({...newLinea,ref:e.target.value})}>
-          <option value="">Seleccionar...</option>
-          <optgroup label="Preparaciones (sub-recetas)">
-            {productosVenta.filter(x=>x.es_preparacion&&x.id!==p.id&&!recetas.some(r=>r.producto_venta_id===p.id&&r.preparacion_id===x.id)).map(x=>{const rx=parseFloat(x.rendimiento)||1;return<option key={x.id} value={"prep:"+x.id}>{x.nombre} ({x.unidad||"u"}) — {fmt(costoReceta(x.id,recetas,invSucursal,catalogo,productosVenta)/rx)}</option>;})}
-          </optgroup>
-          <optgroup label="Insumos">
-            {insumos.filter(x=>x.tipo_control==="inventariable"&&!recetas.some(r=>r.producto_venta_id===p.id&&r.insumo_id===x.id)).map(x=><option key={x.id} value={"ins:"+x.id}>{x.nombre} ({x.unidad_base}) — {fmt(costoInsumo(x.id,invSucursal,catalogo))}/{x.unidad_base}</option>)}
-          </optgroup>
-        </select></div>
+        <div className="flex-1"><label className="text-xs text-gray-500">Agregar ingrediente (escribe para buscar)</label>
+        <BuscadorIngrediente key={p.id+"-"+recetas.filter(r=>r.producto_venta_id===p.id).length} placeholder="ej. pollo, salsa, crema…" onPick={(o)=>setNewLinea({...newLinea,ref:o.value})} opciones={[
+          ...productosVenta.filter(x=>x.es_preparacion&&x.id!==p.id&&!recetas.some(r=>r.producto_venta_id===p.id&&r.preparacion_id===x.id)).map(x=>{const rx=parseFloat(x.rendimiento)||1;return{value:"prep:"+x.id,label:x.nombre,prep:true,extra:`${x.unidad||"u"} — ${fmt(costoReceta(x.id,recetas,invSucursal,catalogo,productosVenta)/rx)}`,usos:recetas.filter(r=>r.preparacion_id===x.id).length};}),
+          ...insumos.filter(x=>x.tipo_control==="inventariable"&&!recetas.some(r=>r.producto_venta_id===p.id&&r.insumo_id===x.id)).map(x=>({value:"ins:"+x.id,label:x.nombre,extra:`${x.unidad_base} — ${fmt(costoInsumo(x.id,invSucursal,catalogo))}/${x.unidad_base}`,usos:recetas.filter(r=>r.insumo_id===x.id).length})),
+        ]}/></div>
         <div><label className="text-xs text-gray-500">Cantidad</label><input type="number" min="0" step="0.001" className="w-24 border border-gray-200 rounded-lg px-2 py-1.5 text-xs" value={newLinea.cantidad||""} onChange={e=>setNewLinea({...newLinea,cantidad:parseFloat(e.target.value)||0})}/></div>
         <div><label className="text-xs text-gray-500">Merma %</label><input type="number" min="0" step="1" className="w-16 border border-gray-200 rounded-lg px-2 py-1.5 text-xs" value={newLinea.merma_pct||""} onChange={e=>setNewLinea({...newLinea,merma_pct:parseFloat(e.target.value)||0})}/></div>
         <Btn onClick={addLinea} disabled={saving||!newLinea.ref||newLinea.cantidad<=0} color="purple">{saving?"...":"Agregar"}</Btn>
@@ -2653,6 +2680,7 @@ function App(){
     ]},
     {id:"g_catalogos",l:"Catálogos",icon:"🗂",items:[
       {id:"catalogo",l:"Catálogo e insumos",roles:["admin"]},
+      {id:"recetario",l:"Productos y recetas",roles:["admin","compras","finanzas","sucursal"]},
     ]},
   ].map(g=>({...g,items:g.items.filter(i=>i.roles.includes(rol))})).filter(g=>g.items.length>0);
   const irA=(id)=>{setView(id);setSelectedPedido(null);setSubview(null);setMenuAbierto(null);};
@@ -2764,6 +2792,7 @@ function App(){
         setInvSucursal(r.invList);if(r.mov)setMovSucursal(prev=>[...prev,r.mov]);
       }}/>}
       {view==="ventas"&&["admin","compras","sucursal","finanzas"].includes(rol)&&<VentasSRView productosVenta={productosVenta} setProductosVenta={setProductosVenta} recetas={recetas} setRecetas={setRecetas} ventas={ventas} ventaDetalle={ventaDetalle} catalogo={catalogo} insumos={insumos} invSucursal={invSucursal} onImport={handleImportVentas} rol={rol}/>}
+      {view==="recetario"&&["admin","compras","sucursal","finanzas"].includes(rol)&&<VentasSRView key="recetario" tabInicial="productos" productosVenta={productosVenta} setProductosVenta={setProductosVenta} recetas={recetas} setRecetas={setRecetas} ventas={ventas} ventaDetalle={ventaDetalle} catalogo={catalogo} insumos={insumos} invSucursal={invSucursal} onImport={handleImportVentas} rol={rol}/>}
       {view==="inv_sucursal"&&["admin","compras","sucursal"].includes(rol)&&<SucursalInvView invSucursal={invSucursal} setInvSucursal={setInvSucursal} movSucursal={movSucursal} setMovSucursal={setMovSucursal} mermas={mermas} setMermas={setMermas} catalogo={catalogo} insumos={insumos} sucursales={sucursales} rol={rol}/>}
       {view==="estados"&&["admin","compras","finanzas"].includes(rol)&&<EstadosView ventas={ventas} mermas={mermas} gastosOp={gastosOp} comprasDirectas={comprasDirectas} cxp={cxp} pagos={pagos} inventario={inventario} invSucursal={invSucursal} movSucursal={movSucursal} catalogo={catalogo}/>}
       {view==="gastos"&&["sucursal","admin","compras","finanzas"].includes(rol)&&<GastosView gastosOp={gastosOp} setGastosOp={setGastosOp} catGastos={catGastos} setCatGastos={setCatGastos} rol={rol}/>}

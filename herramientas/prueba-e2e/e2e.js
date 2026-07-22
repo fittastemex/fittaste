@@ -180,8 +180,10 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   check("3.3 CxP con IVA: $2,340.88",approx(cxpMonto,2340.88,0.05),cxpMonto);
 
   console.log("\n== Parte 4: Preparación y receta ==");
-  await menu("Ventas","Ventas SR · recetas");
-  await page.getByRole("button",{name:/Productos y recetas/}).click();
+  // v7.6: 'Productos y recetas' vive ahora en el grupo Catálogos y abre directo en esa pestaña
+  await menu("Catálogos","Productos y recetas");
+  await page.getByRole("button",{name:/Platillos \(/}).waitFor();
+  check("4.0 'Productos y recetas' accesible desde Catálogos (menú v7.6)",true);
   await page.getByRole("button",{name:/Preparaciones \(/}).click();
   await page.getByRole("button",{name:"+ Nueva preparación"}).click();
   await page.getByPlaceholder("SALSA DE LA CASA").fill("SALSA DE PRUEBA");
@@ -189,9 +191,16 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   await page.getByRole("button",{name:"Crear y armar receta"}).click();
   await page.getByText("Receta de SALSA DE PRUEBA").waitFor();
   const addRow=page.locator("div.flex.gap-2.items-end").filter({hasText:"Agregar ingrediente"});
-  const addLinea=async(val,cant)=>{await addRow.locator("select").selectOption(val);await addRow.locator("input[type=number]").nth(0).fill(String(cant));await addRow.getByRole("button",{name:"Agregar"}).click();await page.waitForTimeout(300);};
-  await addLinea("ins:ins-jitomate",1.5);
-  await addLinea("ins:ins-crema",500);
+  // v7.6: el ingrediente se elige con combobox (escribir → clic en la opción filtrada)
+  const addLinea=async(texto,cant)=>{
+    const buscador=addRow.locator("input").first();
+    await buscador.click();await buscador.fill(texto);
+    await addRow.getByRole("button",{name:new RegExp("^"+texto)}).first().click();
+    await addRow.locator("input[type=number]").nth(0).fill(String(cant));
+    await addRow.getByRole("button",{name:"Agregar",exact:true}).click();await page.waitForTimeout(300);
+  };
+  await addLinea("JITOMATE",1.5);
+  await addLinea("CREMA",500);
   const prep=DB.productos_venta.find(p=>p.nombre==="SALSA DE PRUEBA");
   check("4.1 preparación creada con rendimiento 2",prep&&parseFloat(prep.rendimiento)===2&&prep.es_preparacion===true,prep);
   check("4.1 receta de la tanda: 2 ingredientes",DB.recetas.filter(r=>r.producto_venta_id===prep?.id).length===2);
@@ -208,9 +217,9 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   await page.waitForTimeout(300);
   await page.getByRole("button",{name:"+ Crear receta"}).click();
   await page.getByText("Receta de BOWL DE PRUEBA").waitFor();
-  await addLinea("ins:ins-pollo",0.18);
-  await addLinea("ins:ins-crema",30);
-  await addLinea("prep:"+prep.id,0.05);
+  await addLinea("PECHUGA",0.18);
+  await addLinea("CREMA",30);
+  await addLinea("SALSA DE PRUEBA",0.05);
   const bowl=DB.productos_venta.find(p=>p.nombre==="BOWL DE PRUEBA");
   check("4.2 platillo con receta de 3 líneas (2 insumos + 1 prep)",DB.recetas.filter(r=>r.producto_venta_id===bowl?.id).length===3);
   const recetaTxt=await page.getByText("Costo total receta").innerText();
