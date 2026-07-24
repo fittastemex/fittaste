@@ -971,7 +971,8 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
     setTimeout(()=>setMsg(null),3000);
   };
 
-  const filtered=catalogo.filter(p=>{const textMatch=p.articulo.toLowerCase().includes(filter.toLowerCase())||p.sku.toLowerCase().includes(filter.toLowerCase())||p.tipo_producto.toLowerCase().includes(filter.toLowerCase())||p.proveedor_nombre.toLowerCase().includes(filter.toLowerCase());const provMatch=!filterProv||p.proveedor_id===filterProv;return textMatch&&provMatch;});
+  const norm=(s)=>String(s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+  const filtered=catalogo.filter(p=>{const q=norm(filter);const insN=insumos.find(x=>x.id===p.insumo_id)?.nombre||"";const textMatch=!q||norm(p.articulo).includes(q)||norm(p.sku).includes(q)||norm(p.tipo_producto).includes(q)||norm(p.proveedor_nombre).includes(q)||norm(insN).includes(q);const provMatch=!filterProv||p.proveedor_id===filterProv;return textMatch&&provMatch;});
   const tipos=[...new Set(catalogo.map(c=>c.tipo_producto))].sort();
 
   const startEdit=(p)=>{setEditing(p.id);setEditData({articulo:p.articulo,costo_referencia:p.costo_referencia,proveedor_id:p.proveedor_id,unidad_clave:p.unidad_clave,notas:p.notas||"",aplica_iva:p.aplica_iva!==false,inv_id:p.inv_id||"",insumo_id:p.insumo_id||"",contenido:p.contenido||1});};
@@ -1067,6 +1068,13 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
 
     {/* ===== PRODUCTOS TAB ===== */}
     {catTab==="productos"&&<div>
+    <div className="flex gap-2 mb-4">
+      <div className="relative flex-1"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">🔍</span><input className="w-full border border-gray-200 rounded-xl pl-9 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-amber-400" placeholder="Buscar presentación por nombre, SKU, tipo, insumo o proveedor..." value={filter} onChange={e=>setFilter(e.target.value)}/></div>
+      <select className="border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-white" value={filterProv} onChange={e=>setFilterProv(e.target.value)}>
+        <option value="">Todos los proveedores</option>
+        {proveedores.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
+      </select>
+    </div>
     {adding&&<div className="bg-white border-2 border-amber-300 rounded-xl p-4 mb-4">
       <h3 className="text-sm font-bold text-gray-700 mb-1">Agregar presentación de compra</h3>
       <p className="text-xs text-gray-500 mb-3">La caja/bote/bulto con que compras un insumo (proveedor + precio + contenido). Si es otra presentación de un insumo que ya existe, luego entra a <b>Editar</b> y apúntala a ese insumo.</p>
@@ -1083,13 +1091,6 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
         <div className="flex items-end"><Btn onClick={saveNew} disabled={saving}>{saving?"Guardando...":"Guardar presentación"}</Btn></div>
       </div>
     </div>}
-    <div className="flex gap-2 mb-4">
-      <input className="flex-1 border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-amber-400" placeholder="Buscar por SKU, artículo, tipo..." value={filter} onChange={e=>setFilter(e.target.value)}/>
-      <select className="border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-white" value={filterProv} onChange={e=>setFilterProv(e.target.value)}>
-        <option value="">Todos los proveedores</option>
-        {proveedores.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
-      </select>
-    </div>
     <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
       <table className="w-full text-sm"><thead className="bg-gray-50"><tr>
         {["SKU","Artículo","Tipo","Unidad","Costo ref","IVA","Insumo / contenido","Proveedor","Almacén","Notas",""].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${h==="Costo ref"?"text-right":h==="IVA"?"text-center":"text-left"}`}>{h}</th>)}
