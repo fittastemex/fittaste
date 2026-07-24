@@ -45,6 +45,9 @@ const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/js
 async function sbGet(t,params=""){try{const pageSize=1000;let from=0,all=[];while(true){const r=await fetch(`${SB}/${t}?select=*${params?"&"+params:""}`,{headers:{...H,"Range-Unit":"items",Range:`${from}-${from+pageSize-1}`}});const d=await r.json();if(!Array.isArray(d))return all;all=all.concat(d);if(d.length<pageSize)break;from+=pageSize;}return all;}catch(e){console.error(t,e);return[];}}
 async function sbPost(t,data){try{const r=await fetch(`${SB}/${t}`,{method:"POST",headers:{...H,Prefer:"return=representation"},body:JSON.stringify(data)});if(!r.ok){const err=await r.json();console.error(`POST ${t} error:`,r.status,err);return null;}return await r.json();}catch(e){console.error(t,e);return null;}}
 async function sbPatch(t,id,data){try{const r=await fetch(`${SB}/${t}?id=eq.${id}`,{method:"PATCH",headers:{...H,Prefer:"return=representation"},body:JSON.stringify(data)});return await r.json();}catch(e){console.error(t,e);return null;}}
+// Como sbPost pero devuelve el detalle del error (para mensajes claros y para
+// detectar choques de clave única, ej. SKU duplicado, y reintentar).
+async function sbPostE(t,data){try{const r=await fetch(`${SB}/${t}`,{method:"POST",headers:{...H,Prefer:"return=representation"},body:JSON.stringify(data)});const txt=await r.text();let j=null;try{j=txt?JSON.parse(txt):null;}catch(e){}if(!r.ok){console.error(`POST ${t} error:`,r.status,j||txt);return{data:null,error:j||{message:txt||("HTTP "+r.status)},status:r.status};}return{data:j,error:null,status:r.status};}catch(e){console.error(t,e);return{data:null,error:{message:String(e.message||e)},status:0};}}
 async function sbDelete(t,id){try{const r=await fetch(`${SB}/${t}?id=eq.${id}`,{method:"DELETE",headers:H});return r.ok;}catch(e){console.error(t,e);return false;}}
 async function sbDeleteWhere(t,filter){try{const r=await fetch(`${SB}/${t}?${filter}`,{method:"DELETE",headers:H});return r.ok;}catch(e){console.error(t,e);return false;}}
 function genToken(){return Array.from(crypto.getRandomValues(new Uint8Array(24))).map(b=>b.toString(36)).join("").slice(0,32);}
@@ -988,8 +991,26 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
     setTimeout(()=>setMsg(null),3000);
   };
 
+  // v7.7: SKU único garantizado. genCatSku solo ve el catálogo activo en
+  // memoria; si un producto se borró (queda inactivo) su SKU sigue ocupado en la
+  // base y el UNIQUE(sku) rechaza el alta. Aquí consultamos el número más alto
+  // real (activos + inactivos) del prefijo y arrancamos desde ahí.
+  const siguienteSkuReal=async(tipo)=>{
+    const prefix=prefixMap[tipo]||tipo.substring(0,3).toUpperCase();
+    let maxN=0;
+    try{
+      const filas=await sbGet("catalogo",`sku=like.${prefix}-*&select=sku`);
+      (filas||[]).forEach(r=>{const n=parseInt(String(r.sku).split("-")[1])||0;if(n>maxN)maxN=n;});
+    }catch(e){/* si falla la consulta caemos al cálculo local */}
+    // nunca por debajo de lo que ya vemos activo
+    catalogo.filter(c=>c.sku.startsWith(prefix+"-")).forEach(c=>{const n=parseInt(c.sku.split("-")[1])||0;if(n>maxN)maxN=n;});
+    return{prefix,n:maxN+1};
+  };
+  const bumpSku=(sku)=>{const[p,n]=sku.split("-");return`${p}-${String((parseInt(n)||0)+1).padStart(3,"0")}`;};
+  const esDupSku=(err,status)=>status===409||(err&&(String(err.code)==="23505"||/duplicat|already exists|unique|sku/i.test(err.message||err.details||"")));
+
   const saveNew=async()=>{
-    if(!newItem.sku||!newItem.articulo||!newItem.proveedor_id){setMsg("Completa SKU, artículo y proveedor");return;}
+    if(!newItem.articulo||!newItem.proveedor_id){setMsg("Completa artículo y proveedor");return;}
     setSaving(true);setMsg(null);
     const unid=unidades.find(u=>u.clave===newItem.unidad_clave);
     if(!unid){setMsg(`Error: unidad "${newItem.unidad_clave}" no encontrada. Recarga la página.`);setSaving(false);return;}
@@ -998,18 +1019,33 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
     const esGasto=newItem.tipo_producto==="LIMPIEZA";
     const insRes=await sbPost("insumos",{nombre:newItem.articulo.toUpperCase().trim(),unidad_base:newItem.unidad_clave,tipo_control:esGasto?"gasto":"inventariable",categoria_gasto:esGasto?"Limpieza":null});
     const insumoId=insRes&&insRes[0]?insRes[0].id:null;
-    if(insumoId)setInsumos(prev=>[...prev,insRes[0]]);
-    const data={sku:newItem.sku,articulo:newItem.articulo.toUpperCase(),tipo_producto:newItem.tipo_producto,unidad_id:unid.id,costo_referencia:newItem.costo_referencia||0,proveedor_id:newItem.proveedor_id,notas:newItem.notas||null,activo:true,insumo_id:insumoId,contenido:1};
-    const res=await sbPost("catalogo",data);
+    // SKU real y reintento ante choque de clave única
+    const{prefix,n}=await siguienteSkuReal(newItem.tipo_producto);
+    let sku=`${prefix}-${String(n).padStart(3,"0")}`;
+    let res=null,lastErr=null;
+    for(let intento=0;intento<25;intento++){
+      const data={sku,articulo:newItem.articulo.toUpperCase().trim(),tipo_producto:newItem.tipo_producto,unidad_id:unid.id,costo_referencia:newItem.costo_referencia||0,proveedor_id:newItem.proveedor_id,notas:newItem.notas||null,activo:true,insumo_id:insumoId,contenido:1};
+      const r=await sbPostE("catalogo",data);
+      if(r.data&&r.data[0]){res=r.data;break;}
+      lastErr=r.error;
+      if(esDupSku(r.error,r.status)){sku=bumpSku(sku);continue;}
+      break; // error distinto: no tiene sentido reintentar
+    }
     if(res&&res[0]){
       const prov=proveedores.find(pr=>pr.id===newItem.proveedor_id);
-      setCatalogo([...catalogo,{id:res[0].id,sku:newItem.sku,articulo:newItem.articulo.toUpperCase(),tipo_producto:newItem.tipo_producto,unidad_clave:newItem.unidad_clave,costo_referencia:parseFloat(newItem.costo_referencia),proveedor_id:newItem.proveedor_id,proveedor_nombre:prov?.nombre||"?",notas:newItem.notas,aplica_iva:true,inv_id:res[0].inventario_almacen_id||null,insumo_id:insumoId,contenido:1}]);
-      setMsg(`${newItem.articulo} agregado`);
+      if(insumoId)setInsumos(prev=>[...prev,insRes[0]]);
+      setCatalogo([...catalogo,{id:res[0].id,sku,articulo:newItem.articulo.toUpperCase().trim(),tipo_producto:newItem.tipo_producto,unidad_clave:newItem.unidad_clave,costo_referencia:parseFloat(newItem.costo_referencia)||0,proveedor_id:newItem.proveedor_id,proveedor_nombre:prov?.nombre||"?",notas:newItem.notas,aplica_iva:true,inv_id:res[0].inventario_almacen_id||null,insumo_id:insumoId,contenido:1}]);
+      setMsg(`${newItem.articulo.toUpperCase().trim()} agregado como ${sku}`);
       setNewItem({sku:genCatSku(newItem.tipo_producto),articulo:"",tipo_producto:newItem.tipo_producto,unidad_clave:"kg",costo_referencia:0,proveedor_id:"",notas:""});
       setAdding(false);
-    }else{setMsg("Error al agregar — verifica los datos e intenta de nuevo");}
+    }else{
+      // Falló: revertir el insumo recién creado para no dejar huérfanos.
+      if(insumoId)await sbDelete("insumos",insumoId);
+      const det=lastErr?(lastErr.message||lastErr.details||JSON.stringify(lastErr)):"causa desconocida";
+      setMsg(`Error al agregar: ${det}`);
+    }
     setSaving(false);
-    setTimeout(()=>setMsg(null),3000);
+    setTimeout(()=>setMsg(null),6000);
   };
 
   return(<div>

@@ -24,6 +24,7 @@ const DB={
     {id:"cat-pollo",sku:"PRO-001",articulo:"PECHUGA DE POLLO",tipo_producto:"PROTEINAS",unidad_id:"u-kg",costo_referencia:145,proveedor_id:"prov-1",aplica_iva:true,activo:true,insumo_id:"ins-pollo",contenido:1,inventario_almacen_id:null,notas:null},
     {id:"cat-jitomate",sku:"VER-001",articulo:"JITOMATE",tipo_producto:"VERDURA",unidad_id:"u-kg",costo_referencia:30,proveedor_id:"prov-1",aplica_iva:true,activo:true,insumo_id:"ins-jitomate",contenido:1,inventario_almacen_id:null,notas:null},
     {id:"cat-jabon",sku:"LIM-001",articulo:"JABON TRASTES",tipo_producto:"LIMPIEZA",unidad_id:"u-pz",costo_referencia:45,proveedor_id:"prov-1",aplica_iva:true,activo:true,insumo_id:"ins-jabon",contenido:1,inventario_almacen_id:null,notas:null},
+    {id:"cat-ver-del",sku:"VER-002",articulo:"CILANTRO (BORRADO)",tipo_producto:"VERDURA",unidad_id:"u-kg",costo_referencia:20,proveedor_id:"prov-1",aplica_iva:true,activo:false,insumo_id:null,contenido:1,inventario_almacen_id:null,notas:null},
   ],
   categorias_gastos:[{id:"cg-1",nombre:"Limpieza",activa:true}],
   inventario_almacen:[],lotes_almacen:[],movimientos_almacen:[],pedidos:[],pedido_detalle:[],
@@ -46,6 +47,7 @@ function matchFilters(row,params){
     if(["select","order","limit","offset"].includes(k))continue;
     if(v.startsWith("eq.")){if(String(row[k])!==v.slice(3))return false;}
     else if(v.startsWith("in.(")){const list=v.slice(4,-1).split(",");if(!list.includes(String(row[k])))return false;}
+    else if(v.startsWith("like.")){let pat=v.slice(5).replace(/[.+?^${}()|[\]\\]/g,"\\$&").replace(/[*%]/g,".*");const re=new RegExp("^"+pat+"$","i");if(!re.test(String(row[k]==null?"":row[k])))return false;}
     else if(v==="not.is.null"){if(row[k]==null)return false;}
   }
   return true;
@@ -61,6 +63,8 @@ function handleRest(method,table,search,body){
   }
   if(method==="POST"){
     const arr=Array.isArray(body)?body:[body];
+    // Emula UNIQUE(sku) del catálogo (incluye filas inactivas)
+    if(table==="catalogo"){for(const r of arr){if(r.sku&&DB.catalogo.some(x=>x.sku===r.sku))return{status:409,body:JSON.stringify({code:"23505",message:'duplicate key value violates unique constraint "catalogo_sku_key"',details:`Key (sku)=(${r.sku}) already exists.`})};}}
     const inserted=arr.map(r=>{const row={...(DEFAULTS[table]||{}),...r};if(!row.id)row.id="gen-"+(++genN);if(!row.created_at)row.created_at=new Date().toISOString();DB[table].push(row);return row;});
     return{status:201,body:JSON.stringify(inserted)};
   }
@@ -325,6 +329,29 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   check("7.2 resumen del mes: 3 bloques (Costos / Gastos / Mermas)",body.includes("Costos (materia prima)")&&body.includes("Gastos del mes")&&body.includes("Mermas del mes"),null);
   check("7.2 faltante de conteo físico integrado a merma",/[Ff]altantes de conteo f[íi]sico/.test(body),null);
   check("7.2 merma total del mes = registrada + conteo ($40.89)",body.includes("40.89"),null);
+
+  console.log("\n== Parte 8: Alta de producto en catálogo — SKU único (v7.7) ==");
+  await page.getByRole("button",{name:"Salir"}).click();
+  await page.getByText("Selecciona tu rol").waitFor();
+  await page.getByText("Admin / Dueño").click();
+  await page.locator("input[type=password]").fill("fittaste2026");
+  await page.getByRole("button",{name:"Ingresar"}).click();
+  await page.getByText("Fit Taste Roma").waitFor();
+  await menu("Catálogos","Catálogo e insumos");
+  const insumosAntes=DB.insumos.length;
+  await page.getByRole("button",{name:"+ Nuevo SKU"}).click();
+  await page.waitForTimeout(200);
+  const addCard=page.locator("div",{hasText:/^Agregar nuevo producto/}).last();
+  await addCard.locator("input[placeholder='NOMBRE DEL PRODUCTO']").fill("PEPINO");
+  await addCard.locator("select").nth(2).selectOption("prov-1"); // Tipo, Unidad, Proveedor
+  await addCard.getByRole("button",{name:/Guardar producto/}).click();
+  await page.waitForTimeout(700);
+  const nuevo=DB.catalogo.find(c=>c.articulo==="PEPINO");
+  // VER-001 activo + VER-002 inactivo (borrado) ⇒ el alta debe saltar al VER-003
+  check("8.1 producto creado con SKU único VER-003 (salta el borrado VER-002)",nuevo&&nuevo.sku==="VER-003",nuevo?.sku);
+  check("8.2 mensaje de éxito muestra el SKU asignado",(await page.locator("body").innerText()).includes("VER-003"),null);
+  check("8.3 insumo base creado (sin huérfanos: +1 insumo)",DB.insumos.length===insumosAntes+1,{antes:insumosAntes,ahora:DB.insumos.length});
+  check("8.4 el producto quedó ligado a su insumo base",nuevo&&!!nuevo.insumo_id,nuevo?.insumo_id);
 
   await browser.close();
   const fails=results.filter(r=>!r.ok);
