@@ -330,7 +330,7 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   check("7.2 faltante de conteo físico integrado a merma",/[Ff]altantes de conteo f[íi]sico/.test(body),null);
   check("7.2 merma total del mes = registrada + conteo ($40.89)",body.includes("40.89"),null);
 
-  console.log("\n== Parte 8: Alta de producto en catálogo — SKU único (v7.7) ==");
+  console.log("\n== Parte 8: Popup unificado insumo + presentación (v7.8) ==");
   await page.getByRole("button",{name:"Salir"}).click();
   await page.getByText("Selecciona tu rol").waitFor();
   await page.getByText("Admin / Dueño").click();
@@ -339,26 +339,49 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   await page.getByText("Fit Taste Roma").waitFor();
   await menu("Catálogos","Catálogo e insumos");
   const insumosAntes=DB.insumos.length;
-  await page.getByRole("button",{name:"+ Nueva presentación"}).click();
-  await page.waitForTimeout(200);
-  const addCard=page.locator("div",{hasText:/^Agregar presentación de compra/}).last();
-  await addCard.locator("input[placeholder='NOMBRE DEL PRODUCTO']").fill("PEPINO");
-  await addCard.locator("select").nth(2).selectOption("prov-1"); // Tipo, Unidad, Proveedor
-  await addCard.getByRole("button",{name:/Guardar presentación/}).click();
+  // --- Modo INSUMO NUEVO (desde el mismo botón) ---
+  await page.getByRole("button",{name:"+ Nuevo insumo / presentación"}).click();
+  await page.getByText("Nuevo insumo + presentación de compra").waitFor();
+  const modal=page.locator("div.max-w-2xl");
+  await modal.getByPlaceholder("EJ. MIEL DE AGAVE",{exact:true}).fill("PEPINO");
+  await modal.locator("select").nth(2).selectOption("VERDURA"); // Tipo presentación
+  await modal.getByPlaceholder("EJ. MIEL DE AGAVE 25 KG").fill("PEPINO CAJA 5 KG");
+  await modal.getByPlaceholder("Ej. 25000").fill("5000");
+  await modal.locator("input[type=number]").nth(1).fill("100"); // costo del paquete
+  await modal.locator("select").nth(4).selectOption("prov-1"); // Proveedor
+  await modal.getByRole("button",{name:/Guardar insumo/}).click();
   await page.waitForTimeout(700);
-  const nuevo=DB.catalogo.find(c=>c.articulo==="PEPINO");
+  const nuevo=DB.catalogo.find(c=>c.articulo==="PEPINO CAJA 5 KG");
+  const pepinoIns=DB.insumos.find(i=>i.nombre==="PEPINO");
   // VER-001 activo + VER-002 inactivo (borrado) ⇒ el alta debe saltar al VER-003
-  check("8.1 producto creado con SKU único VER-003 (salta el borrado VER-002)",nuevo&&nuevo.sku==="VER-003",nuevo?.sku);
-  check("8.2 mensaje de éxito muestra el SKU asignado",(await page.locator("body").innerText()).includes("VER-003"),null);
-  check("8.3 insumo base creado (sin huérfanos: +1 insumo)",DB.insumos.length===insumosAntes+1,{antes:insumosAntes,ahora:DB.insumos.length});
-  check("8.4 el producto quedó ligado a su insumo base",nuevo&&!!nuevo.insumo_id,nuevo?.insumo_id);
+  check("8.1 presentación creada con SKU único VER-003 (salta el borrado VER-002)",nuevo&&nuevo.sku==="VER-003",nuevo?.sku);
+  check("8.2 insumo nuevo PEPINO creado (+1) en unidad g",pepinoIns&&pepinoIns.unidad_base==="g"&&DB.insumos.length===insumosAntes+1,{antes:insumosAntes,ahora:DB.insumos.length});
+  check("8.3 presentación ligada al insumo con contenido 5000",nuevo&&nuevo.insumo_id===pepinoIns?.id&&parseFloat(nuevo.contenido)===5000,{ins:nuevo?.insumo_id,cont:nuevo?.contenido});
+  // --- Modo INSUMO EXISTENTE: 2a presentación del mismo insumo, sin duplicar ---
+  await page.getByRole("button",{name:"+ Nuevo insumo / presentación"}).click();
+  await page.getByText("Nuevo insumo + presentación de compra").waitFor();
+  const modal2=page.locator("div.max-w-2xl");
+  await modal2.getByRole("button",{name:"Insumo que ya existe"}).click();
+  await modal2.getByPlaceholder("Escribe para buscar el insumo…").fill("PEPINO");
+  await page.waitForTimeout(250);
+  await page.locator("div.absolute.z-30 button").filter({hasText:"PEPINO"}).first().click();
+  await modal2.locator("select").nth(0).selectOption("VERDURA"); // Tipo (sin campos de insumo nuevo)
+  await modal2.getByPlaceholder("EJ. MIEL DE AGAVE 25 KG").fill("PEPINO BOLSA 1 KG");
+  await modal2.getByPlaceholder("Ej. 25000").fill("1000");
+  await modal2.locator("input[type=number]").nth(1).fill("30");
+  await modal2.locator("select").nth(2).selectOption("prov-1"); // Proveedor
+  await modal2.getByRole("button",{name:/Guardar insumo/}).click();
+  await page.waitForTimeout(700);
+  const pres2=DB.catalogo.find(c=>c.articulo==="PEPINO BOLSA 1 KG");
+  check("8.4 2a presentación NO crea insumo duplicado (+0)",DB.insumos.length===insumosAntes+1,{ahora:DB.insumos.length});
+  check("8.5 ambas presentaciones apuntan al mismo insumo PEPINO",pres2&&pres2.insumo_id===pepinoIns?.id&&DB.catalogo.filter(c=>c.insumo_id===pepinoIns?.id).length===2,{n:DB.catalogo.filter(c=>c.insumo_id===pepinoIns?.id).length});
   // Buscador en la pestaña Insumos (v7.7)
   await page.getByRole("button",{name:/^Insumos \(/}).click();
   await page.waitForTimeout(200);
   await page.getByPlaceholder("Buscar insumo por nombre o unidad...").fill("PEPINO");
   await page.waitForTimeout(200);
   const insBody=await page.locator("tbody").last().innerText();
-  check("8.5 buscador de insumos filtra a PEPINO",insBody.includes("PEPINO")&&!insBody.includes("PECHUGA DE POLLO"),null);
+  check("8.6 buscador de insumos filtra a PEPINO",insBody.includes("PEPINO")&&!insBody.includes("PECHUGA DE POLLO"),null);
 
   await browser.close();
   const fails=results.filter(r=>!r.ok);
