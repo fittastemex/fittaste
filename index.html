@@ -883,6 +883,7 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
   // v7.2: gestión de insumos base
   const [editingIns,setEditingIns]=useState(null);
   const [editInsData,setEditInsData]=useState({});
+  const [filterIns,setFilterIns]=useState("");
 
   const saveIns=async(x)=>{
     setSaving(true);
@@ -1144,12 +1145,16 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
     {/* ===== INSUMOS TAB (v7.2) ===== */}
     {catTab==="insumos"&&<div>
     <div className="bg-teal-50 border border-teal-200 rounded-xl p-3 mb-4 text-xs text-teal-800">
-      El <b>insumo</b> es el ingrediente genérico (CREMA en ml) que usan recetas e inventario; las <b>presentaciones</b> (Crema Lala 900 ml) son los renglones de la pestaña Productos. Para fusionar marcas: en Productos, edita cada presentación y apúntala al mismo insumo con su contenido (ej. ×900 ml). Los insumos tipo <b>gasto</b> (jabón, fibras) no llevan inventario: su costo se registra como gasto operativo al recibirse.
+      El <b>insumo</b> es el ingrediente genérico (CREMA en ml) que usan recetas e inventario; las <b>presentaciones</b> (Crema Lala 900 ml) son los renglones de la pestaña Presentaciones de compra. Para fusionar marcas: en Presentaciones, edita cada una y apúntala al mismo insumo con su contenido (ej. ×900 ml). Los insumos tipo <b>gasto</b> (jabón, fibras) no llevan inventario: su costo se registra como gasto operativo al recibirse.
     </div>
+    <div className="mb-4">
+      <div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">🔍</span><input className="w-full border border-gray-200 rounded-xl pl-9 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-teal-400" placeholder="Buscar insumo por nombre o unidad..." value={filterIns} onChange={e=>setFilterIns(e.target.value)}/></div>
+    </div>
+    {(()=>{const insFiltrados=insumos.filter(x=>{const q=norm(filterIns);return !q||norm(x.nombre).includes(q)||norm(x.unidad_base).includes(q)||norm(x.categoria_gasto).includes(q);}).slice().sort((a,b)=>a.nombre.localeCompare(b.nombre));return(<>
     <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
       <table className="w-full text-sm"><thead className="bg-gray-50"><tr>
         {["Insumo","Unidad base","Control","Categoría gasto","Presentaciones","Costo/unidad",""].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Presentaciones","Costo/unidad"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
-      </tr></thead><tbody>{insumos.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(x=>{
+      </tr></thead><tbody>{insFiltrados.map(x=>{
         const isE=editingIns===x.id;
         const nPres=catalogo.filter(c=>c.insumo_id===x.id).length;
         return(<tr key={x.id} className={`border-t border-gray-100 ${isE?"bg-teal-50":"hover:bg-gray-50"}`}>
@@ -1162,7 +1167,9 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
           <td className="px-3 py-2 text-right">{isE?<div className="flex gap-1 justify-end"><button onClick={()=>saveIns(x)} disabled={saving} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded">{saving?"...":"Guardar"}</button><button onClick={()=>setEditingIns(null)} className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded">X</button></div>:<div className="flex gap-1 justify-end"><button onClick={()=>{setEditingIns(x.id);setEditInsData({nombre:x.nombre,unidad_base:x.unidad_base,tipo_control:x.tipo_control,categoria_gasto:x.categoria_gasto||""});}} className="text-xs text-amber-700 hover:bg-amber-100 px-2 py-1 rounded">Editar</button><button onClick={()=>delIns(x)} className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded">✕</button></div>}</td>
         </tr>);})}</tbody></table>
     </div>
-    <p className="text-xs text-gray-400 mt-2 text-right">{insumos.length} insumos activos · Si cambias la unidad base de un insumo con historial, recalibra sus recetas</p>
+    {insFiltrados.length===0&&<p className="text-sm text-gray-400 text-center py-6">Ningún insumo coincide con "{filterIns}".</p>}
+    <p className="text-xs text-gray-400 mt-2 text-right">{filterIns?`${insFiltrados.length} de ${insumos.length}`:insumos.length} insumos{filterIns?"":" activos"} · Si cambias la unidad base de un insumo con historial, recalibra sus recetas</p>
+    </>);})()}
     </div>}
   </div>);
 }

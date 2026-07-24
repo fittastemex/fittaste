@@ -352,6 +352,13 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   check("8.2 mensaje de éxito muestra el SKU asignado",(await page.locator("body").innerText()).includes("VER-003"),null);
   check("8.3 insumo base creado (sin huérfanos: +1 insumo)",DB.insumos.length===insumosAntes+1,{antes:insumosAntes,ahora:DB.insumos.length});
   check("8.4 el producto quedó ligado a su insumo base",nuevo&&!!nuevo.insumo_id,nuevo?.insumo_id);
+  // Buscador en la pestaña Insumos (v7.7)
+  await page.getByRole("button",{name:/^Insumos \(/}).click();
+  await page.waitForTimeout(200);
+  await page.getByPlaceholder("Buscar insumo por nombre o unidad...").fill("PEPINO");
+  await page.waitForTimeout(200);
+  const insBody=await page.locator("tbody").last().innerText();
+  check("8.5 buscador de insumos filtra a PEPINO",insBody.includes("PEPINO")&&!insBody.includes("PECHUGA DE POLLO"),null);
 
   await browser.close();
   const fails=results.filter(r=>!r.ok);
