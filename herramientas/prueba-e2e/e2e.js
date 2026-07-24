@@ -339,12 +339,12 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   await page.getByText("Fit Taste Roma").waitFor();
   await menu("Catálogos","Catálogo e insumos");
   const insumosAntes=DB.insumos.length;
-  await page.getByRole("button",{name:"+ Nuevo SKU"}).click();
+  await page.getByRole("button",{name:"+ Nueva presentación"}).click();
   await page.waitForTimeout(200);
-  const addCard=page.locator("div",{hasText:/^Agregar nuevo producto/}).last();
+  const addCard=page.locator("div",{hasText:/^Agregar presentación de compra/}).last();
   await addCard.locator("input[placeholder='NOMBRE DEL PRODUCTO']").fill("PEPINO");
   await addCard.locator("select").nth(2).selectOption("prov-1"); // Tipo, Unidad, Proveedor
-  await addCard.getByRole("button",{name:/Guardar producto/}).click();
+  await addCard.getByRole("button",{name:/Guardar presentación/}).click();
   await page.waitForTimeout(700);
   const nuevo=DB.catalogo.find(c=>c.articulo==="PEPINO");
   // VER-001 activo + VER-002 inactivo (borrado) ⇒ el alta debe saltar al VER-003

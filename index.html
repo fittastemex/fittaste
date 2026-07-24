@@ -1050,15 +1050,15 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
 
   return(<div>
     <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-      <div><h2 className="text-lg font-bold text-gray-900">Catálogo</h2><p className="text-sm text-gray-500">{catalogo.length} productos · {proveedores.length} proveedores</p></div>
+      <div><h2 className="text-lg font-bold text-gray-900">Catálogo</h2><p className="text-sm text-gray-500">{catalogo.length} presentaciones de compra · {proveedores.length} proveedores</p></div>
       <div className="flex gap-2">
-        {catTab==="productos"&&<Btn onClick={()=>{if(!adding){setNewItem({sku:genCatSku("VERDURA"),articulo:"",tipo_producto:"VERDURA",unidad_clave:"kg",costo_referencia:0,proveedor_id:"",notas:""});}setAdding(!adding);}}>{adding?"Cancelar":"+ Nuevo SKU"}</Btn>}
+        {catTab==="productos"&&<Btn onClick={()=>{if(!adding){setNewItem({sku:genCatSku("VERDURA"),articulo:"",tipo_producto:"VERDURA",unidad_clave:"kg",costo_referencia:0,proveedor_id:"",notas:""});}setAdding(!adding);}}>{adding?"Cancelar":"+ Nueva presentación"}</Btn>}
         {catTab==="proveedores"&&<Btn onClick={()=>setAddingProv(!addingProv)}>{addingProv?"Cancelar":"+ Nuevo proveedor"}</Btn>}
       </div>
     </div>
 
     <div className="flex gap-1 mb-4">
-      <button onClick={()=>{setCatTab("productos");setAddingProv(false);}} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${catTab==="productos"?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={catTab==="productos"?{background:"#e2a52a"}:{}}>Productos ({catalogo.length})</button>
+      <button onClick={()=>{setCatTab("productos");setAddingProv(false);}} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${catTab==="productos"?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={catTab==="productos"?{background:"#e2a52a"}:{}}>Presentaciones de compra ({catalogo.length})</button>
       <button onClick={()=>{setCatTab("proveedores");setAdding(false);}} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${catTab==="proveedores"?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={catTab==="proveedores"?{background:"#d6816c"}:{}}>Proveedores ({proveedores.length})</button>
       <button onClick={()=>{setCatTab("insumos");setAdding(false);setAddingProv(false);}} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${catTab==="insumos"?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={catTab==="insumos"?{background:"#77b7b4"}:{}}>Insumos ({insumos.length})</button>
     </div>
@@ -1068,7 +1068,8 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
     {/* ===== PRODUCTOS TAB ===== */}
     {catTab==="productos"&&<div>
     {adding&&<div className="bg-white border-2 border-amber-300 rounded-xl p-4 mb-4">
-      <h3 className="text-sm font-bold text-gray-700 mb-3">Agregar nuevo producto</h3>
+      <h3 className="text-sm font-bold text-gray-700 mb-1">Agregar presentación de compra</h3>
+      <p className="text-xs text-gray-500 mb-3">La caja/bote/bulto con que compras un insumo (proveedor + precio + contenido). Si es otra presentación de un insumo que ya existe, luego entra a <b>Editar</b> y apúntala a ese insumo.</p>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
         <div><label className="text-xs text-gray-500 block mb-1">SKU <span className="text-amber-600">(auto)</span></label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-gray-50 text-gray-600" value={newItem.sku} readOnly/></div>
         <div><label className="text-xs text-gray-500 block mb-1">Artículo</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-amber-400" placeholder="NOMBRE DEL PRODUCTO" value={newItem.articulo} onChange={e=>setNewItem({...newItem,articulo:e.target.value})}/></div>
@@ -1079,7 +1080,7 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
         <div><label className="text-xs text-gray-500 block mb-1">Costo referencia</label><input type="number" step="0.01" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-amber-400" value={newItem.costo_referencia||""} onChange={e=>setNewItem({...newItem,costo_referencia:parseFloat(e.target.value)||0})}/></div>
         <div><label className="text-xs text-gray-500 block mb-1">Proveedor</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newItem.proveedor_id} onChange={e=>setNewItem({...newItem,proveedor_id:e.target.value})}><option value="">Seleccionar...</option>{proveedores.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}</select></div>
         <div><label className="text-xs text-gray-500 block mb-1">Notas</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Opcional" value={newItem.notas} onChange={e=>setNewItem({...newItem,notas:e.target.value})}/></div>
-        <div className="flex items-end"><Btn onClick={saveNew} disabled={saving}>{saving?"Guardando...":"Guardar producto"}</Btn></div>
+        <div className="flex items-end"><Btn onClick={saveNew} disabled={saving}>{saving?"Guardando...":"Guardar presentación"}</Btn></div>
       </div>
     </div>}
     <div className="flex gap-2 mb-4">
