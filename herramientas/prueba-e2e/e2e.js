@@ -383,6 +383,26 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   const insBody=await page.locator("tbody").last().innerText();
   check("8.6 buscador de insumos filtra a PEPINO",insBody.includes("PEPINO")&&!insBody.includes("PECHUGA DE POLLO"),null);
 
+  console.log("\n== Parte 9: Clasificación y filtro de productos (v7.8) ==");
+  await menu("Catálogos","Productos y recetas");
+  await page.getByRole("heading",{name:"Ventas — SoftRestaurant"}).waitFor();
+  const body9=await page.locator("body").innerText();
+  check("9.1 columna Clasificación visible",body9.includes("Clasificación"),null);
+  const tb=page.locator("tbody").first();
+  await page.getByRole("button",{name:/Con receta \(/}).click();
+  await page.waitForTimeout(200);
+  let t9=await tb.innerText();
+  check("9.2 filtro 'Con receta' muestra BOWL y oculta JUGO",t9.includes("BOWL DE PRUEBA")&&!t9.includes("JUGO DE PRUEBA"),null);
+  await page.getByRole("button",{name:/No consume \(/}).click();
+  await page.waitForTimeout(200);
+  t9=await tb.innerText();
+  check("9.3 filtro 'No consume' muestra JUGO y oculta BOWL",t9.includes("JUGO DE PRUEBA")&&!t9.includes("BOWL DE PRUEBA"),null);
+  await page.getByRole("button",{name:/Todos \(/}).click();
+  await page.getByPlaceholder("Buscar producto por nombre, código o grupo...").fill("BOWL");
+  await page.waitForTimeout(200);
+  t9=await tb.innerText();
+  check("9.4 buscador de productos filtra a BOWL",t9.includes("BOWL DE PRUEBA")&&!t9.includes("JUGO DE PRUEBA"),null);
+
   await browser.close();
   const fails=results.filter(r=>!r.ok);
   console.log("\n================ RESULTADO ================");

@@ -1650,6 +1650,12 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
   const [newLinea,setNewLinea]=useState({ref:"",cantidad:0,merma_pct:0});
   // v7.1: preparaciones (sub-recetas)
   const [verTipo,setVerTipo]=useState("platillos");
+  // v7.8: filtro y buscador de productos para triar rápido lo que falta
+  const [busqProd,setBusqProd]=useState("");
+  const [filtroEst,setFiltroEst]=useState("todos"); // todos | falta | con | noconsume
+  const nrmP=(s)=>String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toUpperCase();
+  // clasificación de un platillo para el indicador
+  const clasifProd=(p)=>p.sin_insumos?"noconsume":(recetas.some(r=>r.producto_venta_id===p.id)?"con":"falta");
   const [addingPrep,setAddingPrep]=useState(false);
   const [newPrep,setNewPrep]=useState({nombre:"",unidad:"kg",rendimiento:0});
   const [saving,setSaving]=useState(false);
@@ -1786,7 +1792,7 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
     {vendidosSinReceta.length>0&&<div className="bg-red-50 border-2 border-red-300 rounded-xl p-3 mb-4">
       <p className="text-sm font-bold text-red-800">⚠ {vendidosSinReceta.length} producto{vendidosSinReceta.length>1?"s":""} con ventas SIN receta — su consumo no está descontando inventario</p>
       <p className="text-xs text-red-700 mt-1">{vendidosSinReceta.slice(0,10).map(p=>p.nombre).join(" · ")}{vendidosSinReceta.length>10?` · y ${vendidosSinReceta.length-10} más…`:""}</p>
-      <button onClick={()=>{setTab("productos");setVerTipo("platillos");}} className="text-xs font-semibold text-red-800 underline mt-1">Ir a capturar recetas →</button>
+      <button onClick={()=>{setTab("productos");setVerTipo("platillos");setFiltroEst("falta");setBusqProd("");}} className="text-xs font-semibold text-red-800 underline mt-1">Ir a capturar recetas →</button>
     </div>}
     <div className="flex gap-1 mb-4">{tabsV.map(t=><button key={t.id} onClick={()=>setTab(t.id)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${tab===t.id?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={tab===t.id?{background:"#bfcd3b",color:"#2D2D2D"}:{}}>{t.l}</button>)}</div>
 
@@ -1879,10 +1885,19 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
         <Btn onClick={addProd} disabled={saving||!newProd.nombre.trim()} color="green">{saving?"...":"Guardar"}</Btn>
         <button onClick={()=>setAddingProd(false)} className="text-xs text-gray-500 px-2 py-1.5">Cancelar</button>
       </div></div>}
-      {(()=>{const lista=productosVenta.filter(p=>verTipo==="preparaciones"?p.es_preparacion:!p.es_preparacion);
-      return lista.length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400 mb-2">{verTipo==="preparaciones"?"Sin preparaciones":"Sin productos de venta"}</p><p className="text-xs text-gray-400">{verTipo==="preparaciones"?"Una preparación (salsa, arroz cocido, aderezo…) tiene su propia receta y los platillos la usan como un ingrediente más":"Se crean automáticamente al importar tu primer reporte de SR, o agrégalos manualmente"}</p></div>
-      :<div className="bg-white border border-gray-200 rounded-xl overflow-hidden"><table className="w-full text-sm"><thead className="bg-gray-50"><tr>
-        {(verTipo==="preparaciones"?["Preparación","Se mide en","Rinde/tanda","Costo tanda","Costo unidad","Receta",""]:["Código SR","Producto","Grupo","Precio","Costo receta","Margen","Receta",""]).map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Precio","Costo receta","Margen","Rinde/tanda","Costo tanda","Costo unidad"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
+      {verTipo==="platillos"&&(()=>{const base=productosVenta.filter(p=>!p.es_preparacion);const cFalta=base.filter(p=>clasifProd(p)==="falta").length;const cCon=base.filter(p=>clasifProd(p)==="con").length;const cNo=base.filter(p=>clasifProd(p)==="noconsume").length;const chip=(id,l,n,col)=>(<button key={id} onClick={()=>setFiltroEst(id)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${filtroEst===id?"text-white border-transparent":"bg-white border-gray-200 text-gray-600 hover:text-gray-800"}`} style={filtroEst===id?{background:col}:{}}>{l} ({n})</button>);
+        return(<div className="flex flex-col md:flex-row md:items-center gap-2 mb-3">
+          <div className="relative flex-1"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">🔍</span><input className="w-full border border-gray-200 rounded-xl pl-9 pr-4 py-2 text-sm focus:ring-2 focus:ring-lime-400 focus:outline-none" placeholder="Buscar producto por nombre, código o grupo..." value={busqProd} onChange={e=>setBusqProd(e.target.value)}/></div>
+          <div className="flex gap-1 flex-wrap">{chip("todos","Todos",base.length,"#2D2D2D")}{chip("falta","⚠ Falta receta",cFalta,"#bb4430")}{chip("con","Con receta",cCon,"#0e918b")}{chip("noconsume","No consume",cNo,"#9ca3af")}</div>
+        </div>);})()}
+      {(()=>{let lista=productosVenta.filter(p=>verTipo==="preparaciones"?p.es_preparacion:!p.es_preparacion);
+      if(verTipo==="platillos"){
+        if(filtroEst!=="todos")lista=lista.filter(p=>clasifProd(p)===filtroEst);
+        if(busqProd.trim()){const q=nrmP(busqProd);lista=lista.filter(p=>nrmP(p.nombre).includes(q)||nrmP(p.codigo_sr).includes(q)||nrmP(p.grupo_sr).includes(q)||nrmP(p.categoria).includes(q));}
+      }
+      return lista.length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400 mb-2">{verTipo==="preparaciones"?"Sin preparaciones":(busqProd||filtroEst!=="todos")?"Ningún producto coincide con el filtro":"Sin productos de venta"}</p><p className="text-xs text-gray-400">{verTipo==="preparaciones"?"Una preparación (salsa, arroz cocido, aderezo…) tiene su propia receta y los platillos la usan como un ingrediente más":(busqProd||filtroEst!=="todos")?"Cambia el filtro o la búsqueda":"Se crean automáticamente al importar tu primer reporte de SR, o agrégalos manualmente"}</p></div>
+      :<div className="bg-white border border-gray-200 rounded-xl overflow-hidden overflow-x-auto"><table className="w-full text-sm"><thead className="bg-gray-50"><tr>
+        {(verTipo==="preparaciones"?["Preparación","Se mide en","Rinde/tanda","Costo tanda","Costo unidad","Receta",""]:["Código SR","Producto","Grupo","Clasificación","Precio","Costo receta","Margen","Receta",""]).map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Precio","Costo receta","Margen","Rinde/tanda","Costo tanda","Costo unidad"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
       </tr></thead><tbody>{lista.map(p=>{
         const isE=editingProd===p.id;
         const cR=costoReceta(p.id,recetas,invSucursal,catalogo,productosVenta);
@@ -1906,6 +1921,7 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
           <td className="px-3 py-2 font-mono text-xs text-gray-500">{isE?<input className="w-20 border border-lime-400 rounded px-1 py-0.5 text-xs" value={prodData.codigo_sr||""} onChange={e=>setProdData({...prodData,codigo_sr:e.target.value})}/>:(p.codigo_sr||"—")}</td>
           <td className="px-3 py-2 font-medium text-gray-900">{isE?<input className="w-full border border-lime-400 rounded px-1 py-0.5 text-sm" value={prodData.nombre} onChange={e=>setProdData({...prodData,nombre:e.target.value})}/>:p.nombre}</td>
           <td className="px-3 py-2 text-xs text-gray-500">{isE?<input className="w-20 border border-lime-400 rounded px-1 py-0.5 text-xs" value={prodData.categoria||""} onChange={e=>setProdData({...prodData,categoria:e.target.value})}/>:(p.grupo_sr||p.categoria||"—")}</td>
+          <td className="px-3 py-2">{(()=>{const c=clasifProd(p);return c==="con"?<Badge v="success">Con receta</Badge>:c==="noconsume"?<Badge v="default">No consume</Badge>:<Badge v="danger">⚠ Falta receta</Badge>;})()}</td>
           <td className="px-3 py-2 text-right">{isE?<input type="number" step="0.01" className="w-20 text-right border border-lime-400 rounded px-1 py-0.5 text-sm" value={prodData.precio_venta} onChange={e=>setProdData({...prodData,precio_venta:e.target.value})}/>:<span className="font-semibold">{fmt(p.precio_venta)}</span>}</td>
           <td className="px-3 py-2 text-right text-gray-600">{nRec>0?fmt(cR):<span className="text-gray-300">—</span>}</td>
           <td className="px-3 py-2 text-right">{nRec>0&&precio>0?<Badge v={margen<50?"danger":margen<65?"warning":"success"}>{margen.toFixed(0)}%</Badge>:"—"}</td>
@@ -1917,7 +1933,7 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
             </span>}</td>
           <td className="px-3 py-2 text-right">{isE?<div className="flex gap-1 justify-end"><button onClick={()=>saveProd(p)} disabled={saving} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded">{saving?"...":"Guardar"}</button><button onClick={()=>setEditingProd(null)} className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded">X</button></div>:<div className="flex gap-1 justify-end"><button onClick={()=>{setEditingProd(p.id);setProdData({codigo_sr:p.codigo_sr||"",nombre:p.nombre,categoria:p.categoria||"",precio_venta:p.precio_venta});}} className="text-xs text-amber-700 hover:bg-amber-100 px-2 py-1 rounded">Editar</button><button onClick={()=>delProd(p)} className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded">✕</button></div>}</td>
         </tr>
-        {openReceta&&recetaEditorRow(p,cR,8)}
+        {openReceta&&recetaEditorRow(p,cR,9)}
         </React.Fragment>);})}</tbody></table></div>;})()}
     </div>}
   </div>);
