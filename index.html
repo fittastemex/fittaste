@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.2";
+const V="7.7";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -1961,6 +1961,14 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
   const [ajusteNota,setAjusteNota]=useState("");
   const [fMerma,setFMerma]=useState({insumo_id:"",cantidad:0,motivo:"caducidad",nota:""});
   const [saving,setSaving]=useState(false);
+  // v7.7: hoja de conteo físico
+  const [conteo,setConteo]=useState({});        // insumo_id -> físico (texto)
+  const [conteoNota,setConteoNota]=useState("");
+  const [conteoBusq,setConteoBusq]=useState("");
+  const [soloDif,setSoloDif]=useState(false);
+  const [cerrando,setCerrando]=useState(false);
+  const [resConteo,setResConteo]=useState(null);
+  const nrm=(s)=>String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toUpperCase();
 
   const rows=invSucursal.filter(i=>!sucId||i.sucursal_id===sucId).map(i=>({...i,ins:insumos.find(x=>x.id===i.insumo_id)||{}})).sort((a,b)=>(a.ins.nombre||"").localeCompare(b.ins.nombre||""));
   const valor=rows.reduce((s,i)=>s+Math.max(0,parseFloat(i.existencia)||0)*costoInsumo(i.insumo_id,invSucursal,catalogo),0);
@@ -1995,6 +2003,46 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
     setAjustando(null);setAjusteNota("");setSaving(false);
   };
 
+  // v7.7: cerrar la hoja de conteo. Para cada insumo con físico capturado que
+  // difiera del teórico, registra un movimiento de ajuste (entrada=sobrante,
+  // salida=faltante) y actualiza la existencia. Los faltantes alimentan la
+  // línea de "Mermas del mes" en el estado de resultados. Los renglones en
+  // blanco se omiten (no se contaron). Todo con un mismo folio de conteo.
+  const cerrarConteo=async()=>{
+    if(cerrando)return;
+    const cambios=rows.map(r=>{
+      const txt=conteo[r.insumo_id];
+      if(txt==null||txt==="")return null;                 // no contado
+      const fisico=parseFloat(txt);if(isNaN(fisico)||fisico<0)return null;
+      const teorico=parseFloat(r.existencia)||0;
+      const diff=Math.round((fisico-teorico)*1000)/1000;
+      if(diff===0)return null;                             // contado, sin diferencia
+      return {row:r,fisico,teorico,diff,costo:costoInsumo(r.insumo_id,invSucursal,catalogo)};
+    }).filter(Boolean);
+    if(cambios.length===0){alert("No hay diferencias que registrar. Captura el conteo físico de al menos un insumo.");return;}
+    setCerrando(true);
+    const fecha=new Date().toISOString().split("T")[0];
+    const ymd=fecha.replace(/-/g,"");
+    const nHoy=movSucursal.filter(m=>(m.nota||"").startsWith(`CONT-${ymd}`)).map(m=>parseInt((m.nota.match(/CONT-\d{8}-(\d+)/)||[])[1]||0)).reduce((a,b)=>Math.max(a,b),0);
+    const folio=`CONT-${ymd}-${String(nHoy+1).padStart(2,"0")}`;
+    const nota=`${folio}${conteoNota?" · "+conteoNota:""}`;
+    let invLocal=[...invSucursal];const nuevosMov=[];
+    let faltante=0,sobrante=0;
+    for(const c of cambios){
+      const mv=await sbPost("movimientos_sucursal",{sucursal_id:c.row.sucursal_id,insumo_id:c.row.insumo_id,tipo:c.diff>0?"entrada_ajuste":"salida_ajuste",cantidad:Math.abs(c.diff),costo_unitario:c.costo,fecha,nota,registrado_por:rol});
+      if(mv&&mv[0])nuevosMov.push(mv[0]);
+      await sbPatch("inventario_sucursal",c.row.id,{existencia:c.fisico,updated_at:new Date().toISOString()});
+      invLocal=invLocal.map(i=>i.id===c.row.id?{...i,existencia:c.fisico}:i);
+      const val=Math.abs(c.diff)*c.costo;
+      if(c.diff<0)faltante+=val;else sobrante+=val;
+    }
+    setInvSucursal(invLocal);
+    if(nuevosMov.length)setMovSucursal(prev=>[...prev,...nuevosMov]);
+    setResConteo({folio,fecha,items:cambios.length,faltante:Math.round(faltante*100)/100,sobrante:Math.round(sobrante*100)/100,neto:Math.round((faltante-sobrante)*100)/100,detalle:cambios});
+    setConteo({});setConteoNota("");setSoloDif(false);setConteoBusq("");
+    setCerrando(false);
+  };
+
   const registrarMerma=async()=>{
     if(!fMerma.insumo_id||fMerma.cantidad<=0||saving)return;
     setSaving(true);
@@ -2015,7 +2063,30 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
 
   const motivoBadge=(m)=>({caducidad:"warning",dano:"danger",produccion:"info",robo:"danger",ajuste_inventario:"default"})[m]||"default";
   const movsSorted=movSucursal.slice().sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).slice(0,40);
-  const tabsS=[{id:"inventario",l:`Inventario (${rows.length})`},{id:"merma",l:"Registrar merma"},{id:"movimientos",l:"Movimientos"}];
+
+  // v7.7: renglones de la hoja de conteo (con filtro y cálculo en vivo)
+  const conteoRows=rows.filter(r=>!conteoBusq||nrm(r.ins.nombre).includes(nrm(conteoBusq))).map(r=>{
+    const teorico=parseFloat(r.existencia)||0;
+    const costo=costoInsumo(r.insumo_id,invSucursal,catalogo);
+    const txt=conteo[r.insumo_id];
+    const contado=txt!=null&&txt!=="";
+    const fisico=contado?parseFloat(txt):null;
+    const valido=contado&&!isNaN(fisico)&&fisico>=0;
+    const diff=valido?Math.round((fisico-teorico)*1000)/1000:0;
+    return {r,teorico,costo,txt,contado,fisico,valido,diff,diffVal:Math.round(diff*costo*100)/100};
+  });
+  const conteoVista=soloDif?conteoRows.filter(c=>c.valido&&c.diff!==0):conteoRows;
+  const cCont=conteoRows.filter(c=>c.valido).length;
+  const cDif=conteoRows.filter(c=>c.valido&&c.diff!==0).length;
+  const cFaltante=conteoRows.filter(c=>c.valido&&c.diff<0).reduce((s,c)=>s+Math.abs(c.diffVal),0);
+  const cSobrante=conteoRows.filter(c=>c.valido&&c.diff>0).reduce((s,c)=>s+c.diffVal,0);
+
+  // v7.7: historial de conteos cerrados (agrupa movimientos por folio CONT-)
+  const conteosPrev={};
+  movSucursal.forEach(m=>{const f=(m.nota||"").match(/^(CONT-\d{8}-\d+)/);if(!f)return;const k=f[1];if(!conteosPrev[k])conteosPrev[k]={folio:k,fecha:m.fecha,items:0,faltante:0,sobrante:0};const g=conteosPrev[k];g.items++;const val=(parseFloat(m.cantidad)||0)*(parseFloat(m.costo_unitario)||0);if(m.tipo==="salida_ajuste")g.faltante+=val;else g.sobrante+=val;});
+  const conteosHist=Object.values(conteosPrev).map(g=>({...g,neto:Math.round((g.faltante-g.sobrante)*100)/100})).sort((a,b)=>b.folio.localeCompare(a.folio));
+
+  const tabsS=[{id:"inventario",l:`Inventario (${rows.length})`},{id:"conteo",l:"Hoja de conteo"},{id:"merma",l:"Registrar merma"},{id:"movimientos",l:"Movimientos"}];
 
   return(<div>
     <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
@@ -2055,6 +2126,69 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
           <td className="px-3 py-2 text-right">{isAj?<div className="flex gap-1 justify-end items-center"><input className="w-32 border border-gray-200 rounded px-1 py-0.5 text-xs" placeholder="Motivo del ajuste" value={ajusteNota} onChange={e=>setAjusteNota(e.target.value)}/><button onClick={()=>confirmarAjuste(r)} disabled={saving} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded">{saving?"...":"✓"}</button><button onClick={()=>setAjustando(null)} className="text-xs bg-gray-200 px-2 py-1 rounded">✕</button></div>:<button onClick={()=>{setAjustando(r.id);setAjusteVal(ex);setAjusteNota("");}} className="text-xs text-teal-700 hover:bg-teal-50 px-2 py-1 rounded font-medium">Ajustar</button>}</td>
         </tr>);})}</tbody></table></div>}
       <p className="text-xs text-gray-400 mt-2">El ajuste registra la diferencia como movimiento de conteo físico. Las existencias negativas indican ventas sin recepción registrada o recetas con cantidades altas — revísalas.</p>
+    </div>}
+
+    {tab==="conteo"&&<div>
+      {resConteo&&<div className="bg-white border-2 rounded-xl p-4 mb-4" style={{borderColor:resConteo.neto>0?"#bb4430":"#0e918b"}}>
+        <div className="flex items-center justify-between flex-wrap gap-2 mb-2"><h3 className="text-sm font-bold text-gray-800">Conteo cerrado — {resConteo.folio}</h3><button onClick={()=>setResConteo(null)} className="text-xs text-gray-400 hover:text-gray-600">Ocultar ✕</button></div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="bg-gray-50 rounded-lg p-2"><p className="text-xs text-gray-500">Insumos ajustados</p><p className="text-lg font-bold text-gray-800">{resConteo.items}</p></div>
+          <div className="rounded-lg p-2" style={{background:"#fdece8"}}><p className="text-xs" style={{color:"#bb4430"}}>Faltante (merma)</p><p className="text-lg font-bold" style={{color:"#bb4430"}}>{fmt(resConteo.faltante)}</p></div>
+          <div className="rounded-lg p-2" style={{background:"#e6f4f3"}}><p className="text-xs" style={{color:"#0e918b"}}>Sobrante</p><p className="text-lg font-bold" style={{color:"#0e918b"}}>{fmt(resConteo.sobrante)}</p></div>
+          <div className="rounded-lg p-2" style={{background:resConteo.neto>0?"#fdece8":"#e6f4f3"}}><p className="text-xs text-gray-600">Merma neta del conteo</p><p className="text-lg font-bold" style={{color:resConteo.neto>0?"#bb4430":"#0e918b"}}>{fmt(resConteo.neto)}</p></div>
+        </div>
+        <p className="text-xs text-gray-500 mt-2">El faltante neto ya se sumó a <b>Mermas del mes</b> en Estados financieros. Las existencias quedaron actualizadas al valor físico.</p>
+      </div>}
+
+      <div className="bg-white border border-gray-200 rounded-xl p-4 mb-4">
+        <div className="flex items-start justify-between flex-wrap gap-2 mb-1"><div><h3 className="text-sm font-bold text-gray-800">Hoja de conteo físico</h3><p className="text-xs text-gray-500">Captura la existencia física real de cada insumo. Al cerrar, el sistema ajusta el inventario y suma los faltantes a la merma del mes. Deja en blanco lo que no cuentes hoy.</p></div></div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
+          <div className="bg-gray-50 rounded-lg p-2 text-center"><p className="text-xs text-gray-500">Contados</p><p className="text-base font-bold text-gray-800">{cCont} / {rows.length}</p></div>
+          <div className="bg-gray-50 rounded-lg p-2 text-center"><p className="text-xs text-gray-500">Con diferencia</p><p className="text-base font-bold" style={{color:cDif>0?"#e2a52a":"#0e918b"}}>{cDif}</p></div>
+          <div className="rounded-lg p-2 text-center" style={{background:"#fdece8"}}><p className="text-xs" style={{color:"#bb4430"}}>Faltante $</p><p className="text-base font-bold" style={{color:"#bb4430"}}>{fmt(cFaltante)}</p></div>
+          <div className="rounded-lg p-2 text-center" style={{background:"#e6f4f3"}}><p className="text-xs" style={{color:"#0e918b"}}>Sobrante $</p><p className="text-base font-bold" style={{color:"#0e918b"}}>{fmt(cSobrante)}</p></div>
+        </div>
+        <div className="flex items-center gap-2 mt-3 flex-wrap">
+          <input className="flex-1 min-w-40 border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Buscar insumo..." value={conteoBusq} onChange={e=>setConteoBusq(e.target.value)}/>
+          <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none"><input type="checkbox" checked={soloDif} onChange={e=>setSoloDif(e.target.checked)}/> Solo con diferencia</label>
+          {cCont>0&&<button onClick={()=>{if(confirm("¿Borrar el conteo capturado sin guardar?")){setConteo({});setSoloDif(false);}}} className="text-xs text-gray-400 hover:text-red-600 px-2 py-1">Limpiar</button>}
+        </div>
+      </div>
+
+      {rows.length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center text-gray-400 text-sm">No hay insumos en inventario de sucursal para contar.</div>
+      :<div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+        <table className="w-full text-sm"><thead className="bg-gray-50"><tr>
+          {["Insumo","Teórico","Físico","Diferencia","$ Diferencia"].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${h==="Insumo"?"text-left":"text-right"}`}>{h}</th>)}
+        </tr></thead><tbody>{conteoVista.map(c=>{
+          const dcolor=!c.valido||c.diff===0?"text-gray-400":c.diff<0?"text-red-600":"text-emerald-600";
+          return(<tr key={c.r.id} className={`border-t border-gray-100 ${c.valido&&c.diff<0?"bg-red-50/50":c.valido&&c.diff>0?"bg-emerald-50/40":"hover:bg-gray-50"}`}>
+            <td className="px-3 py-2 font-medium text-gray-900">{c.r.ins.nombre||"?"} <span className="text-gray-400 text-xs">{c.r.ins.unidad_base}</span></td>
+            <td className="px-3 py-2 text-right text-gray-600">{fmtQ(c.teorico,c.r.ins.unidad_base||"")}</td>
+            <td className="px-3 py-2 text-right"><input type="number" min="0" step="0.01" inputMode="decimal" className="w-24 text-right border border-gray-300 rounded-lg px-2 py-1.5 text-sm focus:border-teal-500 focus:outline-none" placeholder="—" value={c.txt==null?"":c.txt} onChange={e=>setConteo({...conteo,[c.r.insumo_id]:e.target.value})}/></td>
+            <td className={`px-3 py-2 text-right font-bold ${dcolor}`}>{c.valido&&c.diff!==0?(c.diff>0?"+":"")+fmtQ(c.diff,c.r.ins.unidad_base||""):c.valido?"✓":"—"}</td>
+            <td className={`px-3 py-2 text-right font-semibold ${dcolor}`}>{c.valido&&c.diff!==0?fmt(c.diff*c.costo):"—"}</td>
+          </tr>);})}</tbody></table>
+      </div>}
+
+      <div className="bg-white border border-gray-200 rounded-xl p-4 mt-4 flex items-end gap-3 flex-wrap">
+        <div className="flex-1 min-w-48"><label className="text-xs text-gray-500 block mb-1">Nota del conteo (opcional)</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Ej. Conteo semanal de proteínas, cierre de mes…" value={conteoNota} onChange={e=>setConteoNota(e.target.value)}/></div>
+        <Btn onClick={cerrarConteo} disabled={cerrando||cDif===0} color="purple">{cerrando?"Guardando...":`Cerrar conteo${cDif>0?` (${cDif} ajuste${cDif>1?"s":""})`:""}`}</Btn>
+      </div>
+      <p className="text-xs text-gray-400 mt-2">Solo se registran los insumos con diferencia. Los faltantes se contabilizan como merma del mes; los sobrantes la reducen. El inventario queda igual al conteo físico.</p>
+
+      {conteosHist.length>0&&<div className="bg-white border border-gray-200 rounded-xl overflow-hidden mt-5">
+        <div className="px-4 py-2 bg-gray-50 border-b border-gray-100"><h3 className="text-sm font-bold text-gray-700">Conteos anteriores</h3></div>
+        <table className="w-full text-xs"><thead><tr>{["Folio","Fecha","Ajustes","Faltante","Sobrante","Merma neta"].map(h=><th key={h} className={`px-3 py-1.5 font-medium text-gray-500 ${["Folio","Fecha"].includes(h)?"text-left":"text-right"}`}>{h}</th>)}</tr></thead><tbody>
+          {conteosHist.slice(0,12).map((g,i)=>{const prev=conteosHist[i+1];const delta=prev?g.neto-prev.neto:null;return(<tr key={g.folio} className="border-t border-gray-50">
+            <td className="px-3 py-1.5 font-mono text-gray-700">{g.folio}</td>
+            <td className="px-3 py-1.5 text-gray-500">{g.fecha?new Date(g.fecha+"T12:00:00").toLocaleDateString("es-MX"):"—"}</td>
+            <td className="px-3 py-1.5 text-right text-gray-600">{g.items}</td>
+            <td className="px-3 py-1.5 text-right font-semibold text-red-600">{fmt(g.faltante)}</td>
+            <td className="px-3 py-1.5 text-right font-semibold text-emerald-600">{fmt(g.sobrante)}</td>
+            <td className="px-3 py-1.5 text-right font-bold" style={{color:g.neto>0?"#bb4430":"#0e918b"}}>{fmt(g.neto)}{delta!=null&&<span className="text-xs font-normal ml-1" style={{color:delta>0?"#bb4430":"#0e918b"}} title="vs conteo anterior">({delta>0?"▲":"▼"}{fmt(Math.abs(delta))})</span>}</td>
+          </tr>);})}
+        </tbody></table>
+      </div>}
     </div>}
 
     {tab==="merma"&&<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -2124,7 +2258,13 @@ function EstadosView({ventas,mermas,gastosOp,comprasDirectas,cxp,pagos,inventari
   const cogsTeorico=vMes.reduce((s,v)=>s+parseFloat(v.costo_teorico||0),0);
   const costoVentas=cogsKardex>0?cogsKardex:cogsTeorico;
 
-  const mermaMes=mermas.filter(m=>enMes(m.fecha||"")).reduce((s,m)=>s+parseFloat(m.costo_total||0),0);
+  // Mermas del mes = mermas registradas + faltantes netos de conteo físico.
+  // Los ajustes de conteo se guardan como entrada/salida_ajuste; la baja
+  // (salida) es faltante/merma, la alta (entrada) es sobrante y la reduce.
+  // Se excluye el "Inventario inicial" (carga, no sobrante real).
+  const mermaRegistrada=mermas.filter(m=>enMes(m.fecha||"")).reduce((s,m)=>s+parseFloat(m.costo_total||0),0);
+  const ajusteFaltante=movSucursal.filter(m=>enMes(m.fecha||"")&&(m.tipo==="salida_ajuste"||m.tipo==="entrada_ajuste")&&(m.nota||"")!=="Inventario inicial").reduce((s,m)=>{const val=(parseFloat(m.cantidad)||0)*(parseFloat(m.costo_unitario)||0);return s+(m.tipo==="salida_ajuste"?val:-val);},0);
+  const mermaMes=Math.round((mermaRegistrada+ajusteFaltante)*100)/100;
   const gMes=gastosOp.filter(g=>enMes(g.fecha||g.created_at?.split("T")[0]||""));
   const gastosTotal=gMes.reduce((s,g)=>s+parseFloat(g.monto||0),0);
   const gPorCat={};gMes.forEach(g=>{const k=g.categoria||"Otros";gPorCat[k]=(gPorCat[k]||0)+parseFloat(g.monto||0);});
@@ -2174,6 +2314,29 @@ function EstadosView({ventas,mermas,gastosOp,comprasDirectas,cxp,pagos,inventari
       <div className="bg-white border border-gray-200 rounded-xl p-3"><p className="text-xs text-gray-500">Flujo neto del mes</p><p className={`text-xl font-bold ${flujoNeto>=0?"text-emerald-600":"text-red-600"}`}>{fmt(flujoNeto)}</p></div>
     </div>
 
+    {/* RESUMEN DEL MES: TRES LÍNEAS SEPARADAS — Costos / Gastos / Mermas */}
+    <div className="rounded-xl p-4 mb-6" style={{background:"#2D2D2D"}}>
+      <h3 className="text-sm font-bold text-white mb-3">Resumen del mes — <span className="capitalize">{mesNombre}</span></h3>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="bg-white rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-1"><span className="w-2.5 h-2.5 rounded-full" style={{background:"#e2a52a"}}></span><p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Costos (materia prima)</p></div>
+          <p className="text-2xl font-bold text-gray-900">{fmt(costoVentas)}</p>
+          <p className="text-xs text-gray-400 mt-1">{ventasNetas>0?`${foodCost.toFixed(1)}% de la venta neta`:"—"} · {cogsKardex>0?"consumo real (kárdex)":"costo teórico de recetas"}</p>
+        </div>
+        <div className="bg-white rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-1"><span className="w-2.5 h-2.5 rounded-full" style={{background:"#2a78d6"}}></span><p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Gastos del mes</p></div>
+          <p className="text-2xl font-bold text-gray-900">{fmt(gastosTotal)}</p>
+          <p className="text-xs text-gray-400 mt-1">{gCats.length} categoría{gCats.length===1?"":"s"} de gasto operativo</p>
+        </div>
+        <div className="bg-white rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-1"><span className="w-2.5 h-2.5 rounded-full" style={{background:"#bb4430"}}></span><p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Mermas del mes</p></div>
+          <p className="text-2xl font-bold" style={{color:"#bb4430"}}>{fmt(mermaMes)}</p>
+          <p className="text-xs text-gray-400 mt-1">{fmt(mermaRegistrada)} registradas{ajusteFaltante!==0?` · ${fmt(ajusteFaltante)} de conteo físico`:""}</p>
+        </div>
+      </div>
+      <p className="text-xs text-gray-400 mt-3">Tres bloques independientes del corte mensual. Las <b className="text-gray-200">mermas</b> (faltantes por caducidad, daño y diferencias de conteo físico) se reportan por separado de los <b className="text-gray-200">costos</b> de materia prima vendida y de los <b className="text-gray-200">gastos</b> operativos.</p>
+    </div>
+
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
       {/* ESTADO DE RESULTADOS */}
       <div className="bg-white border border-gray-200 rounded-xl p-4">
@@ -2183,11 +2346,13 @@ function EstadosView({ventas,mermas,gastosOp,comprasDirectas,cxp,pagos,inventari
           {Object.entries(porCanal).map(([c,t])=><Row key={c} label={`Canal ${c} (con IVA)`} value={fmt(t)} indent/>)}
           <Row label="(−) Costo de ventas (insumos por receta)" value={fmt(-costoVentas)} color="text-red-600"/>
           <Row label="Utilidad bruta" value={fmt(utilidadBruta)} bold color={utilidadBruta>=0?"text-emerald-700":"text-red-600"} pct={margenBruto}/>
-          <Row label="(−) Merma" value={fmt(-mermaMes)} color="text-red-600"/>
+          <Row label="(−) Mermas (total)" value={fmt(-mermaMes)} color="text-red-600"/>
+          <Row label="Mermas registradas (caducidad, daño…)" value={fmt(-mermaRegistrada)} color="text-red-500" indent/>
+          {ajusteFaltante!==0&&<Row label={`${ajusteFaltante>=0?"Faltantes":"Sobrantes"} de conteo físico`} value={fmt(-ajusteFaltante)} color={ajusteFaltante>=0?"text-red-500":"text-emerald-600"} indent/>}
           {gCats.map(([c,t])=><Row key={c} label={`(−) ${c}`} value={fmt(-t)} color="text-red-500" indent/>)}
           <Row label="(−) Total gastos operativos" value={fmt(-gastosTotal)} color="text-red-600"/>
           <Row label="Utilidad operativa" value={fmt(utilidadOperativa)} bold color={utilidadOperativa>=0?"text-emerald-700":"text-red-600"} pct={margenOperativo}/>
-          <p className="text-xs text-gray-400 mt-3">Costo de ventas: {cogsKardex>0?"kárdex de sucursal (consumo real registrado)":"costo teórico de recetas"}. IVA de ventas del mes: {fmt(ivaVentas)} (no es ingreso, se traslada al SAT).</p>
+          <p className="text-xs text-gray-400 mt-3">Costo de ventas: {cogsKardex>0?"kárdex de sucursal (consumo real registrado)":"costo teórico de recetas"}. Mermas del mes = mermas registradas + faltantes de conteo físico. IVA de ventas del mes: {fmt(ivaVentas)} (no es ingreso, se traslada al SAT).</p>
         </div>}
       </div>
 

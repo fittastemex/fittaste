@@ -273,6 +273,25 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   check("6.1 merma registrada: 200 ml = $12.89",merma&&approx(parseFloat(merma.costo_total),12.89,0.005),merma?.costo_total);
   check("6.1 existencia crema tras merma: 4,775 ml",approx(DB.inventario_sucursal.find(i=>i.insumo_id==="ins-crema")?.existencia,4775,0.01));
 
+  console.log("\n== Parte 6c: Hoja de conteo físico (v7.7) ==");
+  await page.getByRole("button",{name:"Hoja de conteo"}).click();
+  await page.waitForTimeout(200);
+  // Pollo teórico 8.2 kg → físico 8.0 kg = faltante 0.2 kg × $145 = $29.00
+  await fila("PECHUGA DE POLLO").locator("input[type=number]").fill("8");
+  await page.waitForTimeout(200);
+  const conteoBody=await page.locator("body").innerText();
+  check("6c.1 diferencia en vivo del pollo: −0.2 kg",/−0\.2 kg|-0\.2 kg/.test(conteoBody),null);
+  check("6c.2 $ faltante en vivo $28.00 visible (0.2kg × $140)",conteoBody.includes("28.00"),null);
+  await page.getByRole("button",{name:/Cerrar conteo/}).click();
+  await page.waitForTimeout(600);
+  const ajuste=DB.movimientos_sucursal.find(m=>m.tipo==="salida_ajuste"&&(m.nota||"").startsWith("CONT-"));
+  check("6c.3 movimiento salida_ajuste con folio CONT- creado",!!ajuste,ajuste?.nota);
+  check("6c.4 ajuste registra 0.2 kg de faltante",ajuste&&approx(parseFloat(ajuste.cantidad),0.2,0.001),ajuste?.cantidad);
+  check("6c.5 existencia pollo actualizada al físico: 8 kg",approx(DB.inventario_sucursal.find(i=>i.insumo_id==="ins-pollo")?.existencia,8,0.001));
+  const cierreBody=await page.locator("body").innerText();
+  check("6c.6 resumen de cierre muestra 'Conteo cerrado'",cierreBody.includes("Conteo cerrado"),null);
+  check("6c.7 historial de conteos anteriores visible",cierreBody.includes("Conteos anteriores"),null);
+
   console.log("\n== Parte 6b: Dashboard de ventas (v7.4) ==");
   await menu("Ventas","Dashboard de ventas");
   await page.getByRole("heading",{name:"Dashboard de ventas"}).waitFor();
@@ -299,9 +318,13 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   const body=await page.locator("body").innerText();
   check("7.1 ventas netas $1,301.72 en estado de resultados",body.includes("1,301.72"),null);
   check("7.1 flujo: efectivo $710 y tarjeta $800",body.includes("710.00")&&body.includes("800.00"));
-  check("7.1 merma del mes visible ($12.89)",body.includes("12.89"));
+  check("7.1 merma registrada visible ($12.89)",body.includes("12.89"));
   check("7.1 food cost ~22.3%",/22\.[0-9]%/.test(body));
   check("7.1 CxP pendiente en posición ($2,340.88)",body.includes("2,340.88"));
+  // v7.7: resumen mensual de 3 líneas + integración de conteo en mermas
+  check("7.2 resumen del mes: 3 bloques (Costos / Gastos / Mermas)",body.includes("Costos (materia prima)")&&body.includes("Gastos del mes")&&body.includes("Mermas del mes"),null);
+  check("7.2 faltante de conteo físico integrado a merma",/[Ff]altantes de conteo f[íi]sico/.test(body),null);
+  check("7.2 merma total del mes = registrada + conteo ($40.89)",body.includes("40.89"),null);
 
   await browser.close();
   const fails=results.filter(r=>!r.ok);
