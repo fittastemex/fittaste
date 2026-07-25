@@ -2881,6 +2881,47 @@ function App(){
     return true;
   };
 
+  // v7.8: descuento PEPS del ALMACÉN para un pedido de "Almacén interno".
+  // Reutilizable: lo llama el botón Surtir y, como red de seguridad, la
+  // recepción de sucursal si el pedido nunca se surtió (así el almacén nunca
+  // queda con inventario fantasma). cantMap: {pedido_detalle_id: cantidad}.
+  const descontarAlmacenPEPS=async(pedId,cantMap)=>{
+    const almItems=pedidoDetalle.filter(d=>d.pedido_id===pedId&&proveedores.find(pr=>pr.id===d.proveedor_id)?.tipo_flujo==="Almacen interno");
+    let updatedLotes=[...lotes];let updatedInv=[...inventario];const movsNew=[];
+    const numPed=pedidos.find(p=>p.id===pedId)?.numero_pedido||"";
+    for(const d of almItems){
+      const cs=cantMap[d.id]||0;if(cs<=0)continue;
+      const cat=catalogo.find(c=>c.id===d.catalogo_id);if(!cat)continue;
+      const inv=cat.inv_id?updatedInv.find(i=>i.id===cat.inv_id):updatedInv.find(i=>{const dL=i.descripcion.toLowerCase();const words=cat.articulo.toLowerCase().split(" ");return words.some(w=>w.length>3&&dL.includes(w));});
+      if(!inv)continue;
+      const movRes=await sbPost("movimientos_almacen",{inventario_id:inv.id,pedido_id:pedId,fecha:new Date().toISOString().split("T")[0],tipo:"salida",cantidad:cs,nota:`PEPS Pedido ${numPed}`});
+      const movId=movRes&&movRes[0]?movRes[0].id:null;
+      const prodLotes=updatedLotes.filter(l=>l.inventario_id===inv.id&&(l.existencia_restante||0)>0).sort((a,b)=>new Date(a.fecha_entrada)-new Date(b.fecha_entrada));
+      let remaining=cs;let costoPeps=0;
+      for(const lote of prodLotes){
+        if(remaining<=0)break;
+        const available=lote.existencia_restante||0;
+        const take=Math.min(remaining,available);
+        const costoU=parseFloat(lote.costo_unitario)+(parseFloat(lote.iva)||0);
+        costoPeps+=take*costoU;
+        await sbPost("salidas_peps",{movimiento_id:movId,lote_id:lote.id,cantidad_consumida:take,costo_unitario_lote:costoU,costo_total:Math.round(take*costoU*100)/100});
+        const newRest=available-take;
+        await sbPatch("lotes_almacen",lote.id,{existencia_restante:newRest});
+        updatedLotes=updatedLotes.map(l=>l.id===lote.id?{...l,existencia_restante:newRest}:l);
+        remaining-=take;
+      }
+      const newExist=Math.max(0,parseFloat(inv.existencia)-cs);
+      const avgCost=cs>0&&costoPeps>0?costoPeps/cs:inv.costo_unitario_actual;
+      await sbPatch("inventario_almacen",inv.id,{existencia:newExist,costo_unitario_actual:avgCost});
+      updatedInv=updatedInv.map(p=>p.id===inv.id?{...p,existencia:newExist,costo_unitario_actual:avgCost}:p);
+      await sbPatch("pedido_detalle",d.id,{cantidad:cs,costo_real:avgCost,capturado_por:"sistema",fecha_captura:new Date().toISOString()});
+      movsNew.push({id:Date.now().toString()+d.id,inv_id:inv.id,tipo:"salida",qty:cs,nota:`PEPS Pedido #${numPed}`,fecha:new Date().toLocaleDateString("es-MX")});
+    }
+    setLotes(updatedLotes);setInventario(updatedInv);
+    if(movsNew.length)setMovimientos(prev=>[...prev,...movsNew]);
+    return movsNew.length;
+  };
+
   // RECEPCIÓN DE MERCANCÍA
   const handleRecibir=async(pedId,provId,estatus,items)=>{
     const res=await sbPost("recepciones",{pedido_id:pedId,proveedor_id:provId,estatus:estatus,recibido_por:"sucursal"});
@@ -2935,6 +2976,19 @@ function App(){
         setInvSucursal(invList);
         if(movsNew.length)setMovSucursal(prev=>[...prev,...movsNew]);
         if(gastosNew.length)setGastosOp(prev=>[...gastosNew,...prev]);
+      }
+
+      // v7.8: RED DE SEGURIDAD — si el proveedor es "Almacén interno" y el
+      // pedido NO se surtió (no hay salida de almacén registrada), descontar el
+      // almacén ahora con lo efectivamente recibido. Evita el inventario
+      // fantasma (mercancía que salió físicamente pero el sistema no descontó).
+      if(proveedores.find(pr=>pr.id===provId)?.tipo_flujo==="Almacen interno"){
+        const yaSurtido=await sbGet("movimientos_almacen",`pedido_id=eq.${pedId}&tipo=eq.salida&limit=1`);
+        if(!yaSurtido||yaSurtido.length===0){
+          const cantMap={};items.forEach(it=>{cantMap[it.pedido_detalle_id]=it.cantidad_recibida||0;});
+          const n=await descontarAlmacenPEPS(pedId,cantMap);
+          if(n>0)console.log(`Almacén descontado en recepción (no se había surtido): ${n} artículo(s), pedido ${pedId}`);
+        }
       }
 
       // Check if ALL providers for this pedido now have reception → auto-close only if pedido is "comprado"
