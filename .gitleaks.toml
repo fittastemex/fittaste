@@ -1,0 +1,18 @@
+# Configuración de gitleaks para Fit Taste
+#
+# Las llaves de Supabase incrustadas en el cliente (index.html) y en
+# herramientas/copiar-datos-a-dev.js son llaves anon (role=anon), públicas por
+# diseño: van en el bundle del navegador y la protección real es RLS, no el
+# secreto de la llave. Se permiten explícitamente por su payload (ref+role=anon)
+# de los dos proyectos conocidos. Cualquier otra JWT (p. ej. una service_role)
+# seguirá siendo detectada.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Supabase anon (public) keys — safe in client code (protected by RLS)"
+regexes = [
+  'eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4eXJidmdwanN4ZXZiaGF4cHJyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3MTgyNTMsImV4cCI6MjA5MDI5NDI1M30',
+  'eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndoZ2ZyZmRxZXRqdHRsZnNwcnR0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQyMzQzMTgsImV4cCI6MjA5OTgxMDMxOH0',
+]
