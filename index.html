@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.8";
+const V="7.9";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -489,6 +489,10 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
   const [addingInv,setAddingInv]=useState(false);
   const [newInv,setNewInv]=useState({sku:"",descripcion:"",unidad_clave:"kg"});
   const [savingInv,setSavingInv]=useState(false);
+  const [verOcultos,setVerOcultos]=useState(false);
+  // Kardex por producto
+  const [kardexProd,setKardexProd]=useState(null);
+  const [kardexRows,setKardexRows]=useState(null);
   const isAdmin=rol==="admin";
 
   // Auto-serial MP-XXX
@@ -546,15 +550,28 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
     setSavingInv(false);
   };
 
-  // Change #7: Delete product from almacén (admin only)
-  const handleDeleteInv=async(invId)=>{
+  // Change #7: Ocultar (archivar) producto del almacén — conserva historial (admin only)
+  const handleArchiveInv=async(invId)=>{
     const prod=inventario.find(p=>p.id===invId);
-    if(!confirm(`¿Eliminar "${prod?.descripcion}" del almacén?\n\nEsto borrará todos sus lotes y movimientos. Los productos del catálogo vinculados se desvincularán.`))return;
-    await sbDeleteWhere("lotes_almacen",`inventario_id=eq.${invId}`);
-    await sbDelete("inventario_almacen",invId);
-    setInventario(inventario.filter(p=>p.id!==invId));
-    setLotes(lotes.filter(l=>l.inventario_id!==invId));
-    alert(`${prod?.descripcion} eliminado del almacén`);
+    if(!confirm(`¿Ocultar "${prod?.descripcion}" del almacén?\n\nDeja de aparecer en el inventario activo, pero se conserva TODO su historial (lotes, movimientos y kardex). Podrás restaurarlo con "Ver ocultos".`))return;
+    await sbPatch("inventario_almacen",invId,{activo:false});
+    setInventario(inventario.map(p=>p.id===invId?{...p,activo:false}:p));
+  };
+  const handleRestoreInv=async(invId)=>{
+    await sbPatch("inventario_almacen",invId,{activo:true});
+    setInventario(inventario.map(p=>p.id===invId?{...p,activo:true}:p));
+  };
+
+  // Kardex: historial completo de entradas y salidas de un producto
+  const abrirKardex=async(prod)=>{
+    setKardexProd(prod);setKardexRows(null);
+    const movs=await sbGet("movimientos_almacen",`inventario_id=eq.${prod.id}&order=fecha.asc`);
+    const ev=[];
+    lotes.filter(l=>l.inventario_id===prod.id).forEach(l=>ev.push({fecha:l.fecha_entrada,tipo:"entrada",cant:parseFloat(l.cantidad)||0,costo:(parseFloat(l.costo_unitario)||0)+(parseFloat(l.iva)||0),nota:l.nota||l.proveedor_origen||"Entrada de lote",_c:l.created_at||""}));
+    (movs||[]).forEach(m=>ev.push({fecha:m.fecha,tipo:m.tipo,cant:-(parseFloat(m.cantidad)||0),costo:null,nota:m.nota||"",_c:m.created_at||""}));
+    ev.sort((a,b)=>a.fecha<b.fecha?-1:a.fecha>b.fecha?1:(a._c<b._c?-1:a._c>b._c?1:0));
+    let saldo=0;ev.forEach(e=>{saldo+=e.cant;e.saldo=saldo;});
+    setKardexRows(ev);
   };
 
   // Pedidos ya surtidos (for print)
@@ -584,23 +601,34 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
     {/* INVENTARIO con costos PEPS */}
     {tab==="inventario"&&<div>
       {isAdmin&&<div className="mb-3 flex justify-end">{addingInv?<div className="bg-white border-2 border-teal-300 rounded-xl p-3 w-full"><h3 className="text-sm font-bold text-teal-800 mb-2">Agregar producto al almacén</h3><div className="flex gap-2 items-end flex-wrap"><div><label className="text-xs text-gray-500 block mb-1">SKU <span className="text-teal-600">(auto)</span></label><input className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm w-28 bg-gray-50 text-gray-600" value={newInv.sku} readOnly/></div><div className="flex-1"><label className="text-xs text-gray-500 block mb-1">Descripción</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="NOMBRE DEL PRODUCTO" value={newInv.descripcion} onChange={e=>setNewInv({...newInv,descripcion:e.target.value})}/></div><div><label className="text-xs text-gray-500 block mb-1">Unidad</label><select className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newInv.unidad_clave} onChange={e=>setNewInv({...newInv,unidad_clave:e.target.value})}><option value="kg">kg</option><option value="pz">pz</option><option value="lt">lt</option><option value="paq">paq</option></select></div><Btn onClick={handleAddInv} disabled={savingInv} color="purple">{savingInv?"Guardando...":"Agregar"}</Btn><button onClick={()=>setAddingInv(false)} className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1.5">Cancelar</button></div></div>:<Btn onClick={()=>{setNewInv({sku:genInvSku(),descripcion:"",unidad_clave:"kg"});setAddingInv(true);}} color="purple">+ Agregar producto</Btn>}</div>}
+      {(()=>{const nOcultos=inventario.filter(p=>p.activo===false).length;return isAdmin&&nOcultos>0?<div className="mb-2 flex justify-end"><label className="text-xs text-gray-500 flex items-center gap-1.5 cursor-pointer select-none"><input type="checkbox" checked={verOcultos} onChange={e=>setVerOcultos(e.target.checked)}/> Ver ocultos ({nOcultos})</label></div>:null;})()}
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
       <table className="w-full text-sm"><thead className="bg-gray-50"><tr>
-        {["SKU","Producto","Existencia","Costo PEPS","Valor PEPS","Lotes","Estado"].concat(isAdmin?[""]:[]).map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Existencia","Costo PEPS","Valor PEPS","Lotes"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
-      </tr></thead><tbody>{inventario.map(p=>{
+        {["SKU","Producto","Existencia","Costo PEPS","Valor PEPS","Lotes","Estado",""].map((h,hi)=><th key={hi} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Existencia","Costo PEPS","Valor PEPS","Lotes"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
+      </tr></thead><tbody>{inventario
+        .filter(p=>verOcultos?true:p.activo!==false)
+        .slice()
+        .sort((a,b)=>{const av=a.existencia>0?1:0,bv=b.existencia>0?1:0;if(av!==bv)return bv-av;const va=a.existencia*a.costo_unitario_actual,vb=b.existencia*b.costo_unitario_actual;if(vb!==va)return vb-va;return a.descripcion.localeCompare(b.descripcion);})
+        .map(p=>{
         const prodLotes=lotes.filter(l=>l.inventario_id===p.id&&(l.existencia_restante||0)>0);
         const valorPeps=prodLotes.reduce((s,l)=>(l.existencia_restante||0)*(parseFloat(l.costo_unitario)+parseFloat(l.iva||0))+s,0);
         const costoPeps=p.existencia>0&&prodLotes.length>0?valorPeps/prodLotes.reduce((s,l)=>s+(l.existencia_restante||0),0):p.costo_unitario_actual;
         const low=(p.unidad_clave==="kg"&&p.existencia<2)||(p.unidad_clave!=="kg"&&p.existencia<50);
-        return(<tr key={p.id} className={`border-t border-gray-100 ${low?"bg-red-50/50":"hover:bg-gray-50"}`}>
+        const oculto=p.activo===false;
+        return(<tr key={p.id} className={`border-t border-gray-100 ${oculto?"bg-gray-50 opacity-60":low?"bg-red-50/50":"hover:bg-gray-50"}`}>
           <td className="px-3 py-2 text-gray-400 font-mono text-xs">{p.sku}</td>
-          <td className="px-3 py-2 font-medium text-gray-900">{p.descripcion}</td>
+          <td className="px-3 py-2 font-medium text-gray-900">{p.descripcion}{oculto&&<span className="ml-2 text-xs text-gray-400 font-normal">(oculto)</span>}</td>
           <td className="px-3 py-2 text-right font-bold">{fmtQ(p.existencia,p.unidad_clave)}</td>
           <td className="px-3 py-2 text-right text-gray-600">{fmt(costoPeps)}<span className="text-gray-400 text-xs">/{p.unidad_clave}</span></td>
           <td className="px-3 py-2 text-right font-medium text-gray-700">{fmt(valorPeps||p.existencia*p.costo_unitario_actual)}</td>
           <td className="px-3 py-2 text-right"><span className={`text-xs font-medium ${prodLotes.length>0?"text-teal-600":"text-gray-400"}`}>{prodLotes.length}</span></td>
           <td className="px-3 py-2">{p.existencia===0?<Badge v="danger">Agotado</Badge>:low?<Badge v="warning">Bajo</Badge>:<Badge v="success">OK</Badge>}</td>
-          {isAdmin&&<td className="px-3 py-2 text-right"><button onClick={()=>handleDeleteInv(p.id)} className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded" title="Eliminar producto">✕</button></td>}
+          <td className="px-3 py-2 text-right whitespace-nowrap">
+            <button onClick={()=>abrirKardex(p)} className="text-xs text-teal-600 hover:text-teal-800 hover:bg-teal-50 px-2 py-1 rounded font-medium" title="Ver kardex (entradas y salidas)">📋 Kardex</button>
+            {isAdmin&&(oculto
+              ?<button onClick={()=>handleRestoreInv(p.id)} className="text-xs text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 px-2 py-1 rounded ml-1" title="Restaurar producto">↩ Restaurar</button>
+              :<button onClick={()=>handleArchiveInv(p.id)} className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded ml-1" title="Ocultar producto (conserva historial)">✕</button>)}
+          </td>
         </tr>);
       })}</tbody></table>
     </div></div>}
@@ -639,7 +667,7 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
     {tab==="entrada"&&<div className="bg-white border-2 border-teal-300 rounded-xl p-4">
       <h3 className="text-sm font-bold text-teal-800 mb-3">Registrar entrada de lote</h3>
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
-        <div><label className="text-xs text-gray-500 block mb-1">Producto</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={nLote.inv_id} onChange={e=>setNLote({...nLote,inv_id:e.target.value})}><option value="">Seleccionar...</option>{inventario.map(p=><option key={p.id} value={p.id}>{p.descripcion} ({p.unidad_clave})</option>)}</select></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Producto</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={nLote.inv_id} onChange={e=>setNLote({...nLote,inv_id:e.target.value})}><option value="">Seleccionar...</option>{inventario.filter(p=>p.activo!==false).map(p=><option key={p.id} value={p.id}>{p.descripcion} ({p.unidad_clave})</option>)}</select></div>
         <div><label className="text-xs text-gray-500 block mb-1">Cantidad</label><input type="number" min="0" step="0.25" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={nLote.cantidad||""} onChange={e=>setNLote({...nLote,cantidad:parseFloat(e.target.value)||0})}/></div>
         <div><label className="text-xs text-gray-500 block mb-1">Costo unitario (sin IVA)</label><input type="number" min="0" step="0.01" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={nLote.costo_unitario||""} onChange={e=>setNLote({...nLote,costo_unitario:parseFloat(e.target.value)||0})}/></div>
       </div>
@@ -718,6 +746,45 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
 
     {/* MOVIMIENTOS RECIENTES */}
     {movimientos.length>0&&<div className="mt-4"><h3 className="text-sm font-bold text-gray-700 mb-2">Movimientos recientes</h3><div className="space-y-1">{movimientos.slice().reverse().slice(0,8).map(m=>{const prod=inventario.find(p=>p.id===m.inv_id);return(<div key={m.id} className="flex items-center gap-2 text-sm bg-white border border-gray-100 rounded-lg px-3 py-2"><Badge v={m.tipo==="entrada"?"success":"danger"}>{m.tipo}</Badge><span className="font-medium text-gray-800">{prod?.descripcion}</span><span className="text-gray-500">{fmtQ(m.qty,prod?.unidad_clave||"pz")}</span>{m.nota&&<span className="text-gray-400 text-xs">— {m.nota}</span>}<span className="ml-auto text-xs text-gray-400">{m.fecha}</span></div>);})}</div></div>}
+
+    {/* KARDEX POR PRODUCTO */}
+    {kardexProd&&<div className="fixed inset-0 z-50 flex items-start justify-center p-4 overflow-y-auto" style={{background:"rgba(0,0,0,0.45)"}} onMouseDown={e=>{if(e.target===e.currentTarget){setKardexProd(null);setKardexRows(null);}}}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl my-4">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100 sticky top-0 bg-white rounded-t-2xl">
+          <div>
+            <h3 className="text-base font-bold text-gray-900">Kardex — {kardexProd.descripcion}</h3>
+            <p className="text-xs text-gray-500">{kardexProd.sku} · Existencia actual: <span className="font-semibold">{fmtQ(kardexProd.existencia,kardexProd.unidad_clave)}</span></p>
+          </div>
+          <button onClick={()=>{setKardexProd(null);setKardexRows(null);}} className="text-gray-400 hover:text-gray-700 text-xl leading-none">✕</button>
+        </div>
+        <div className="p-5">
+          {kardexRows===null?<p className="text-center text-gray-400 py-8">Cargando historial…</p>
+          :kardexRows.length===0?<p className="text-center text-gray-400 py-8">Sin movimientos registrados para este producto.</p>
+          :(()=>{const tEnt=kardexRows.filter(e=>e.cant>0).reduce((s,e)=>s+e.cant,0);const tSal=kardexRows.filter(e=>e.cant<0).reduce((s,e)=>s-e.cant,0);return(<div>
+            <div className="grid grid-cols-3 gap-2 mb-3 text-center">
+              <div className="bg-emerald-50 rounded-lg py-2"><p className="text-xs text-emerald-600">Total entradas</p><p className="font-bold text-emerald-700">{fmtQ(tEnt,kardexProd.unidad_clave)}</p></div>
+              <div className="bg-red-50 rounded-lg py-2"><p className="text-xs text-red-500">Total salidas</p><p className="font-bold text-red-600">{fmtQ(tSal,kardexProd.unidad_clave)}</p></div>
+              <div className="bg-teal-50 rounded-lg py-2"><p className="text-xs text-teal-600">Saldo</p><p className="font-bold text-teal-700">{fmtQ(tEnt-tSal,kardexProd.unidad_clave)}</p></div>
+            </div>
+            <div className="border border-gray-100 rounded-xl overflow-hidden max-h-[55vh] overflow-y-auto">
+            <table className="w-full text-xs"><thead className="bg-gray-50 sticky top-0"><tr>
+              {["Fecha","Movimiento","Entrada","Salida","Costo/u","Saldo","Nota"].map((h,i)=><th key={i} className={`px-3 py-2 font-medium text-gray-500 ${["Entrada","Salida","Costo/u","Saldo"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
+            </tr></thead><tbody>{kardexRows.slice().reverse().map((e,i)=>(
+              <tr key={i} className="border-t border-gray-50">
+                <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{new Date(e.fecha).toLocaleDateString("es-MX")}</td>
+                <td className="px-3 py-1.5"><Badge v={e.cant>0?"success":"danger"}>{e.cant>0?"entrada":"salida"}</Badge></td>
+                <td className="px-3 py-1.5 text-right font-medium text-emerald-700">{e.cant>0?fmtQ(e.cant,kardexProd.unidad_clave):"—"}</td>
+                <td className="px-3 py-1.5 text-right font-medium text-red-600">{e.cant<0?fmtQ(-e.cant,kardexProd.unidad_clave):"—"}</td>
+                <td className="px-3 py-1.5 text-right text-gray-500">{e.costo!=null?fmt(e.costo):"—"}</td>
+                <td className="px-3 py-1.5 text-right font-bold text-gray-800">{fmtQ(e.saldo,kardexProd.unidad_clave)}</td>
+                <td className="px-3 py-1.5 text-gray-500 max-w-[16rem] truncate" title={e.nota}>{e.nota||"—"}</td>
+              </tr>))}</tbody></table>
+            </div>
+            <p className="text-xs text-gray-400 mt-2">Orden: más reciente arriba. Entradas = lotes recibidos · Salidas = surtidos/ajustes registrados.</p>
+          </div>);})()}
+        </div>
+      </div>
+    </div>}
   </div>);
 }
 
@@ -2640,7 +2707,7 @@ function App(){
 
       setCatalogo((results.catalogo||[]).filter(c=>c.activo!==false).map(c=>({id:c.id,sku:c.sku,articulo:c.articulo,tipo_producto:c.tipo_producto,unidad_clave:uMap[c.unidad_id]?.clave||"?",costo_referencia:parseFloat(c.costo_referencia)||0,proveedor_id:c.proveedor_id,proveedor_nombre:pMap[c.proveedor_id]?.nombre||"?",notas:c.notas,aplica_iva:c.aplica_iva!==false,inv_id:c.inventario_almacen_id,insumo_id:c.insumo_id,contenido:parseFloat(c.contenido)||1})));
       setProveedores((results.proveedores||[]).filter(p=>p.activo!==false).map(p=>{const fl=fMap[p.tipo_flujo_id]||{};return{id:p.id,nombre:p.nombre,tipo_flujo:fl.nombre||"?",quien_captura:fl.quien_captura_precio||"?"};}));
-      setInventario((results.inventario_almacen||[]).map(i=>({id:i.id,sku:i.sku,descripcion:i.descripcion,unidad_clave:uMap[i.unidad_id]?.clave||"?",existencia:parseFloat(i.existencia)||0,costo_unitario_actual:parseFloat(i.costo_unitario_actual)||0,lead_time:i.lead_time})));
+      setInventario((results.inventario_almacen||[]).map(i=>({id:i.id,sku:i.sku,descripcion:i.descripcion,unidad_clave:uMap[i.unidad_id]?.clave||"?",existencia:parseFloat(i.existencia)||0,costo_unitario_actual:parseFloat(i.costo_unitario_actual)||0,lead_time:i.lead_time,activo:i.activo!==false})));
       setPedidos((results.pedidos||[]).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)));
       setPedidoDetalle(results.pedido_detalle||[]);
       setProvEstatus(results.pedido_proveedor_estatus||[]);
