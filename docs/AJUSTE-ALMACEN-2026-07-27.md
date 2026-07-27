@@ -58,3 +58,44 @@ buckets de inventario sin receta.
 1. Aplicar la migración `20260727_v7_9_inventario_activo.sql`.
 2. Re-sincronizar datos con `herramientas/copiar-datos-a-dev.js`, o re-ejecutar
    los ajustes equivalentes. Verificar siempre que `existencia = SUM(lotes.existencia_restante)`.
+
+---
+
+## 4. Corrección de costo de las bolsas (mismo día, hallazgo posterior)
+
+Se detectó que los lotes del **13-jul-2026** de ambas bolsas tenían el **total de
+la factura** capturado en el campo de *costo unitario*:
+
+| SKU | Cantidad | Capturado (costo/u) | IVA | Total/u falso |
+|-----|---------:|--------------------:|----:|-------------:|
+| MP018 Bolsas Papel Grande | 3,000 | 18,000 | 2,880 | $20,880 |
+| MP019 Bolsas Papel Chicas | 4,000 | 12,000 | 1,920 | $13,920 |
+
+Eso inflaba el capital del almacén a ~$118 millones. Costos reales confirmados
+por dirección: **$5.18** (grande) y **$3.99** (chica), ambos **sin IVA**; como
+las dos presentaciones tienen `aplica_iva=true`, se registró IVA al 16%:
+
+| SKU | costo_unitario | IVA | Costo total/u |
+|-----|---------------:|----:|-------------:|
+| MP018 | 5.18 | 0.8288 | **$6.0088** |
+| MP019 | 3.99 | 0.6384 | **$4.6284** |
+
+También se recosteó la salida PEPS del ajuste por conteo que ya había consumido
+200 piezas del lote malo de MP019: su costo pasó de **$2,784,000** a **$925.68**.
+
+Capital del almacén después de la corrección: **$143,326.94**.
+
+### Pendiente de revisar (no modificado)
+
+1. Los totales capturados implican $6.00 y $3.00 por pieza (18,000/3,000 y
+   12,000/4,000), no $5.18 y $3.99. Vale confirmar contra la factura de Bolsas MX
+   si el precio subió en esa compra.
+2. `catalogo.costo_referencia` sigue en **$6.96** (grande) y **$3.48** (chica),
+   que ya no coincide con el costo real ($6.0088 y $4.6284). Afecta el costeo de
+   los pedidos de sucursal. Requiere decisión de dirección para actualizarlo.
+
+### Prevención (código)
+
+`handleNewLote` ahora exige confirmación explícita cuando el costo capturado es
+más de 10× el costo actual del producto, o cuando el lote completo supera
+$200,000 — y le sugiere el costo unitario correcto dividiendo entre la cantidad.

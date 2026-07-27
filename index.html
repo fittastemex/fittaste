@@ -510,6 +510,21 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
   // Save new lote to Supabase
   const handleNewLote=async()=>{
     if(!nLote.inv_id||nLote.cantidad<=0||nLote.costo_unitario<=0)return;
+    // Candado anti-error de captura: el costo va POR UNIDAD, no el total de la factura.
+    // Un error así (teclear el total) infló el almacén en millones en julio 2026.
+    const prodL=inventario.find(p=>p.id===nLote.inv_id);
+    const totalU=nLote.costo_unitario+(nLote.iva||0);
+    const totalLote=nLote.cantidad*totalU;
+    const costoPrevio=prodL?.costo_unitario_actual||0;
+    const avisos=[];
+    if(costoPrevio>0&&totalU>costoPrevio*10)
+      avisos.push(`El costo que capturaste (${fmt(totalU)} por ${prodL.unidad_clave}) es ${(totalU/costoPrevio).toFixed(0)} veces el costo actual de este producto (${fmt(costoPrevio)}).`);
+    if(totalLote>200000)
+      avisos.push(`El lote completo suma ${fmt(totalLote)}.`);
+    if(avisos.length>0){
+      const ok=confirm(`⚠️ Revisa el costo antes de guardar\n\n${avisos.join("\n\n")}\n\nRecuerda: el campo es el costo POR ${(prodL?.unidad_clave||"unidad").toUpperCase()}, no el total de la factura.\nSi la factura fue de ${fmt(nLote.costo_unitario)} por ${fmtQ(nLote.cantidad,prodL?.unidad_clave||"")}, el costo unitario sería ${fmt(nLote.costo_unitario/nLote.cantidad)}.\n\n¿Guardar de todas formas?`);
+      if(!ok)return;
+    }
     setSavingLote(true);
     const data={inventario_id:nLote.inv_id,fecha_entrada:new Date().toISOString().split("T")[0],cantidad:nLote.cantidad,costo_unitario:nLote.costo_unitario,iva:nLote.iva||0,sobreprecio_transporte:0,proveedor_origen:nLote.proveedor||null,nota:nLote.nota||null};
     const res=await sbPost("lotes_almacen",data);
