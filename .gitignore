@@ -1,0 +1,6 @@
+# Conector SoftRestaurant: credenciales y estado local — nunca subir
+conector-sr/config.json
+conector-sr/estado-sync.json
+conector-sr/node_modules/
+
+node_modules/

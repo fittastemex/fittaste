@@ -1,0 +1,15 @@
+{
+  "name": "fittaste-conector-sr",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Conector SoftRestaurant (SQL Server) → FitTaste (Supabase): sube tickets cobrados casi en tiempo real",
+  "main": "sync.js",
+  "scripts": {
+    "start": "node sync.js --daemon",
+    "una-vez": "node sync.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "mssql": "^11.0.1"
+  }
+}

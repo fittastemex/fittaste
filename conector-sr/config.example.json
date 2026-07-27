@@ -1,0 +1,35 @@
+{
+  "_comentario": "Copia este archivo como config.json y llena tus datos. config.json NUNCA se sube a git (contiene contraseñas).",
+
+  "_sqlServer_nota": "SR local: server 'localhost\\NATIONALSOFT' (sin port). SR12 con base remota vía Radmin VPN: server = IP dentro de la VPN (26.x.x.x) y port como campo SEPARADO (no 'ip,puerto' — la librería mssql no acepta la coma). La VPN da acceso a la red; el usuario/contraseña de SQL son aparte (te los da soporte de SR).",
+  "sqlServer": {
+    "server": "26.X.X.X",
+    "port": 1433,
+    "database": "NOMBRE_BASE_SR12",
+    "user": "sa",
+    "password": "AQUI_TU_PASSWORD_SQL",
+    "options": { "trustServerCertificate": true, "encrypt": false },
+    "connectionTimeout": 30000,
+    "requestTimeout": 30000
+  },
+
+  "supabase": {
+    "url": "https://jxyrbvgpjsxevbhaxprr.supabase.co/rest/v1",
+    "apiKey": "AQUI_LA_ANON_KEY_DE_SUPABASE"
+  },
+
+  "intervaloMinutos": 2,
+  "sincronizarMenu": true,
+
+  "formaPagoMap": {
+    "efectivo": ["EFECTIVO"],
+    "tarjeta": ["TARJETA", "VISA", "MASTER", "AMEX", "DEBITO", "CREDITO"],
+    "plataforma": ["UBER", "RAPPI", "DIDI"]
+  },
+
+  "canalPlataforma": {
+    "UBER": "ubereats",
+    "RAPPI": "rappi",
+    "DIDI": "didi"
+  }
+}
