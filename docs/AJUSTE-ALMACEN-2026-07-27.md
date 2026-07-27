@@ -120,3 +120,48 @@ Capital del almacén después de la corrección: **$143,326.94**.
 `handleNewLote` ahora exige confirmación explícita cuando el costo capturado es
 más de 10× el costo actual del producto, o cuando el lote completo supera
 $200,000 — y le sugiere el costo unitario correcto dividiendo entre la cantidad.
+
+---
+
+## 5. Variantes de almacén (v7.10)
+
+El desglose de vasos del punto 2 dejó un hueco: `catalogo.inventario_almacen_id`
+es uno a uno, así que solo el SKU base quedó ligado a la presentación de compra
+y al insumo. Los 4 SKU nuevos quedaron **huérfanos**: la sucursal no podía
+pedirlos y PEPS solo descontaba del base. Cuando la variante Fit Taste llegara a
+0, el sistema habría reportado "sin stock" con 1,500 vasos de Navidad y 400 de
+Halloween físicamente en el almacén — el problema del inventario fantasma, al
+revés.
+
+**Solución elegida (opción A):** un insumo, varios buckets de almacén.
+`inventario_almacen.variante_de` agrupa SKU bajo un base. La sucursal sigue
+pidiendo el insumo normal y el almacén surte del grupo:
+
+- La existencia disponible al surtir es la **suma del grupo**.
+- El descuento PEPS recorre los lotes de **todas las variantes** por antigüedad.
+- Se genera un movimiento de almacén **por cada SKU tocado**, con nota que
+  identifica la variante (auditoría).
+- El costo real de la línea es el promedio ponderado de lo consumido del grupo.
+- El almacenista puede **forzar una variante** ("Surtir de: solo Navidad") para
+  sacar primero empaque de temporada.
+
+Agrupación aplicada: MP043/MP044/MP045 → MP023 · MP046 → MP030.
+
+La base valida con un trigger que no haya cadenas de variantes ni
+auto-referencia (solo un nivel de agrupación).
+
+### Hallazgo de fondo durante la implementación
+
+El botón **Surtir** tenía su **propia copia inline de la lógica PEPS**, distinta
+de `descontarAlmacenPEPS()`. La extracción de v7.8 creó la función compartida y
+la usó en la red de seguridad de recepción, pero **dejó la copia vieja en el
+botón**. Esa duplicación es exactamente la causa raíz del inventario fantasma de
+julio: cualquier mejora aplicada a una ruta no llegaba a la otra. Ahora hay una
+sola ruta.
+
+Además, ni la suite principal ni `e2e-almacen.js` cubrían el botón Surtir — el
+camino más usado del almacén no tenía prueba. Se agregó
+`herramientas/prueba-e2e/e2e-variantes.js` (19 verificaciones) que lo ejercita
+de punta a punta junto con el consumo PEPS entre variantes.
+
+Estado de las pruebas: **99/99** (71 suite principal + 9 almacén + 19 variantes).
