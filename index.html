@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.9";
+const V="7.10";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -48,6 +48,9 @@ async function sbPatch(t,id,data){try{const r=await fetch(`${SB}/${t}?id=eq.${id
 // Como sbPost pero devuelve el detalle del error (para mensajes claros y para
 // detectar choques de clave única, ej. SKU duplicado, y reintentar).
 async function sbPostE(t,data){try{const r=await fetch(`${SB}/${t}`,{method:"POST",headers:{...H,Prefer:"return=representation"},body:JSON.stringify(data)});const txt=await r.text();let j=null;try{j=txt?JSON.parse(txt):null;}catch(e){}if(!r.ok){console.error(`POST ${t} error:`,r.status,j||txt);return{data:null,error:j||{message:txt||("HTTP "+r.status)},status:r.status};}return{data:j,error:null,status:r.status};}catch(e){console.error(t,e);return{data:null,error:{message:String(e.message||e)},status:0};}}
+// Como sbPatch pero devuelve el detalle del error, para mostrar los mensajes que
+// levantan los triggers de validación de la base (ej. agrupación de variantes).
+async function sbPatchE(t,id,data){try{const r=await fetch(`${SB}/${t}?id=eq.${id}`,{method:"PATCH",headers:{...H,Prefer:"return=representation"},body:JSON.stringify(data)});const txt=await r.text();let j=null;try{j=txt?JSON.parse(txt):null;}catch(e){}if(!r.ok){console.error(`PATCH ${t} error:`,r.status,j||txt);return{data:null,error:j||{message:txt||("HTTP "+r.status)},status:r.status};}return{data:j,error:null,status:r.status};}catch(e){console.error(t,e);return{data:null,error:{message:String(e.message||e)},status:0};}}
 async function sbDelete(t,id){try{const r=await fetch(`${SB}/${t}?id=eq.${id}`,{method:"DELETE",headers:H});return r.ok;}catch(e){console.error(t,e);return false;}}
 async function sbDeleteWhere(t,filter){try{const r=await fetch(`${SB}/${t}?${filter}`,{method:"DELETE",headers:H});return r.ok;}catch(e){console.error(t,e);return false;}}
 function genToken(){return Array.from(crypto.getRandomValues(new Uint8Array(24))).map(b=>b.toString(36)).join("").slice(0,32);}
@@ -120,6 +123,28 @@ const Badge=({children,v="default"})=>{const s={default:"bg-gray-100 text-gray-7
 const LOGO_SRC="data:image/png;base64,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";
 const Logo=({size=32})=><img src={LOGO_SRC} height={size} style={{objectFit:"contain",borderRadius:6,background:"#2D2D2D",padding:2}} alt="Fit Taste"/>;
 const Btn=({children,onClick,disabled,color="amber"})=><button onClick={onClick} disabled={disabled} className={`text-sm font-semibold px-4 py-2 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed`} style={{background:disabled?"#ccc":color==="amber"?"#e2a52a":color==="green"?"#10b981":color==="red"?"#ef4444":color==="purple"?"#77b7b4":"#77b7b4",color:color==="amber"?"#2D2D2D":"white"}}>{children}</button>;
+
+// v7.10 — Variantes de almacén: varios SKU de inventario (mismo insumo, distinto
+// branding) agrupados bajo un SKU base vía `variante_de`. La sucursal pide el
+// insumo normal y el almacén surte del grupo completo.
+// Raíz del grupo al que pertenece un producto de almacén.
+const raizInv=(inv)=>inv?(inv.variante_de||inv.id):null;
+// Todos los SKU del grupo: base primero, luego variantes por descripción.
+const grupoInv=(inv,inventario)=>{
+  if(!inv)return[];
+  const raiz=raizInv(inv);
+  const base=inventario.find(i=>i.id===raiz)||inv;
+  const vars=inventario.filter(i=>i.variante_de===raiz).sort((a,b)=>a.descripcion.localeCompare(b.descripcion));
+  return[base,...vars];
+};
+// Existencia sumada del grupo.
+const existenciaGrupo=(inv,inventario)=>grupoInv(inv,inventario).reduce((s,i)=>s+(parseFloat(i.existencia)||0),0);
+// Lotes con saldo de todo el grupo, en orden PEPS estricto (más antiguo primero).
+const lotesGrupoPEPS=(inv,inventario,lotes)=>{
+  const ids=new Set(grupoInv(inv,inventario).map(i=>i.id));
+  return lotes.filter(l=>ids.has(l.inventario_id)&&(l.existencia_restante||0)>0)
+    .sort((a,b)=>{const d=new Date(a.fecha_entrada)-new Date(b.fecha_entrada);return d!==0?d:String(a.created_at||"").localeCompare(String(b.created_at||""));});
+};
 
 const estatusBadge=(e)=>{const m={creado:"nuevo",en_proceso:"proceso",enviado_proveedor:"enviado",enviado:"enviado",entregado:"warning",precios_capturados:"success",completo:"success",surtido:"purple",comprado:"info",recibido_completo:"success",recibido_con_faltantes:"danger",cerrado:"cerrado",pendiente:"default"};return<Badge v={m[e]||"default"}>{e.replace(/_/g," ")}</Badge>;};
 
@@ -482,6 +507,8 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
   const [surtiendo,setSurtiendo]=useState(null);
   const [surtidos,setSurtidos]=useState({});
   const [cantSurtida,setCantSurtida]=useState({});
+  // v7.10: variante forzada por línea {pedido_detalle_id: inventario_almacen_id}
+  const [variantePref,setVariantePref]=useState({});
   // Entrada de lote
   const [nLote,setNLote]=useState({inv_id:"",cantidad:0,costo_unitario:0,iva:0,proveedor:"",nota:""});
   const [savingLote,setSavingLote]=useState(false);
@@ -493,6 +520,9 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
   // Kardex por producto
   const [kardexProd,setKardexProd]=useState(null);
   const [kardexRows,setKardexRows]=useState(null);
+  // v7.10: agrupación de variantes
+  const [agrupando,setAgrupando]=useState(null);
+  const [guardandoGrupo,setGuardandoGrupo]=useState(false);
   const isAdmin=rol==="admin";
 
   // Auto-serial MP-XXX
@@ -577,6 +607,16 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
     setInventario(inventario.map(p=>p.id===invId?{...p,activo:true}:p));
   };
 
+  // v7.10: agrupar/desagrupar variantes de almacén
+  const guardarAgrupacion=async(prod,baseId)=>{
+    setGuardandoGrupo(true);
+    const res=await sbPatchE("inventario_almacen",prod.id,{variante_de:baseId||null});
+    setGuardandoGrupo(false);
+    if(res.error){alert("No se pudo agrupar:\n\n"+(res.error.message||"error desconocido"));return;}
+    setInventario(inventario.map(p=>p.id===prod.id?{...p,variante_de:baseId||null}:p));
+    setAgrupando(null);
+  };
+
   // Kardex: historial completo de entradas y salidas de un producto
   const abrirKardex=async(prod)=>{
     setKardexProd(prod);setKardexRows(null);
@@ -623,16 +663,42 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
       </tr></thead><tbody>{inventario
         .filter(p=>verOcultos?true:p.activo!==false)
         .slice()
-        .sort((a,b)=>{const av=a.existencia>0?1:0,bv=b.existencia>0?1:0;if(av!==bv)return bv-av;const va=a.existencia*a.costo_unitario_actual,vb=b.existencia*b.costo_unitario_actual;if(vb!==va)return vb-va;return a.descripcion.localeCompare(b.descripcion);})
+        // Orden: con existencia arriba (por valor del GRUPO), y cada variante
+        // pegada a su base para que el grupo se lea junto (v7.10).
+        .sort((a,b)=>{
+          const inv2=inventario;
+          const clave=(x)=>{
+            const grupo=grupoInv(x,inv2);
+            const exG=grupo.reduce((s,i)=>s+(parseFloat(i.existencia)||0),0);
+            const valG=grupo.reduce((s,i)=>s+(parseFloat(i.existencia)||0)*(parseFloat(i.costo_unitario_actual)||0),0);
+            const raiz=inv2.find(i=>i.id===raizInv(x))||x;
+            return{exG,valG,raizDesc:raiz.descripcion||"",esVar:x.variante_de?1:0,desc:x.descripcion||""};
+          };
+          const ka=clave(a),kb=clave(b);
+          const av=ka.exG>0?1:0,bv=kb.exG>0?1:0;
+          if(av!==bv)return bv-av;
+          if(kb.valG!==ka.valG)return kb.valG-ka.valG;
+          const r=ka.raizDesc.localeCompare(kb.raizDesc);if(r!==0)return r;
+          if(ka.esVar!==kb.esVar)return ka.esVar-kb.esVar;
+          return ka.desc.localeCompare(kb.desc);
+        })
         .map(p=>{
         const prodLotes=lotes.filter(l=>l.inventario_id===p.id&&(l.existencia_restante||0)>0);
         const valorPeps=prodLotes.reduce((s,l)=>(l.existencia_restante||0)*(parseFloat(l.costo_unitario)+parseFloat(l.iva||0))+s,0);
         const costoPeps=p.existencia>0&&prodLotes.length>0?valorPeps/prodLotes.reduce((s,l)=>s+(l.existencia_restante||0),0):p.costo_unitario_actual;
         const low=(p.unidad_clave==="kg"&&p.existencia<2)||(p.unidad_clave!=="kg"&&p.existencia<50);
         const oculto=p.activo===false;
+        const esVariante=!!p.variante_de;
+        const base=esVariante?inventario.find(i=>i.id===p.variante_de):null;
+        const misVariantes=esVariante?[]:inventario.filter(i=>i.variante_de===p.id);
+        const totalGrupo=misVariantes.length>0?p.existencia+misVariantes.reduce((s,v)=>s+(parseFloat(v.existencia)||0),0):null;
         return(<tr key={p.id} className={`border-t border-gray-100 ${oculto?"bg-gray-50 opacity-60":low?"bg-red-50/50":"hover:bg-gray-50"}`}>
-          <td className="px-3 py-2 text-gray-400 font-mono text-xs">{p.sku}</td>
-          <td className="px-3 py-2 font-medium text-gray-900">{p.descripcion}{oculto&&<span className="ml-2 text-xs text-gray-400 font-normal">(oculto)</span>}</td>
+          <td className="px-3 py-2 text-gray-400 font-mono text-xs">{esVariante&&<span className="text-sky-400 mr-1">└</span>}{p.sku}</td>
+          <td className="px-3 py-2 font-medium text-gray-900">{p.descripcion}
+            {oculto&&<span className="ml-2 text-xs text-gray-400 font-normal">(oculto)</span>}
+            {esVariante&&<span className="ml-2 text-xs text-sky-600 font-normal" title={`Se surte junto con ${base?.descripcion||"su base"}`}>variante de {base?.sku||"?"}</span>}
+            {misVariantes.length>0&&<span className="ml-2 text-xs text-sky-700 font-normal">+{misVariantes.length} variante{misVariantes.length>1?"s":""} · grupo: <b>{fmtQ(totalGrupo,p.unidad_clave)}</b></span>}
+          </td>
           <td className="px-3 py-2 text-right font-bold">{fmtQ(p.existencia,p.unidad_clave)}</td>
           <td className="px-3 py-2 text-right text-gray-600">{fmt(costoPeps)}<span className="text-gray-400 text-xs">/{p.unidad_clave}</span></td>
           <td className="px-3 py-2 text-right font-medium text-gray-700">{fmt(valorPeps||p.existencia*p.costo_unitario_actual)}</td>
@@ -640,6 +706,7 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
           <td className="px-3 py-2">{p.existencia===0?<Badge v="danger">Agotado</Badge>:low?<Badge v="warning">Bajo</Badge>:<Badge v="success">OK</Badge>}</td>
           <td className="px-3 py-2 text-right whitespace-nowrap">
             <button onClick={()=>abrirKardex(p)} className="text-xs text-teal-600 hover:text-teal-800 hover:bg-teal-50 px-2 py-1 rounded font-medium" title="Ver kardex (entradas y salidas)">📋 Kardex</button>
+            {isAdmin&&misVariantes.length===0&&<button onClick={()=>setAgrupando(p)} className="text-xs text-sky-600 hover:text-sky-800 hover:bg-sky-50 px-2 py-1 rounded ml-1" title={esVariante?"Cambiar o quitar la agrupación":"Agrupar como variante de otro SKU (se surten juntos)"}>{esVariante?"⇄ Agrupación":"⇄ Agrupar"}</button>}
             {isAdmin&&(oculto
               ?<button onClick={()=>handleRestoreInv(p.id)} className="text-xs text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 px-2 py-1 rounded ml-1" title="Restaurar producto">↩ Restaurar</button>
               :<button onClick={()=>handleArchiveInv(p.id)} className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded ml-1" title="Ocultar producto (conserva historial)">✕</button>)}
@@ -726,8 +793,14 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
           const parcial=cs<d.cantidad&&cs>0;
           // Buscar inventario y lotes para este producto
           const inv=cat.inv_id?inventario.find(i=>i.id===cat.inv_id):inventario.find(i=>{const dL=i.descripcion.toLowerCase();const words=cat.articulo.toLowerCase().split(" ");return words.some(w=>w.length>3&&dL.includes(w));});
-          const existencia=inv?inv.existencia:0;
-          const prodLotes=inv?lotes.filter(l=>l.inventario_id===inv.id&&(l.existencia_restante||0)>0).sort((a,b)=>new Date(a.fecha_entrada)-new Date(b.fecha_entrada)):[];
+          // v7.10: existencia y lotes del GRUPO de variantes (o de la variante forzada)
+          const grupo=inv?grupoInv(inv,inventario):[];
+          const forzadoId=variantePref[d.id]||"";
+          const forzado=forzadoId?inventario.find(i=>i.id===forzadoId):null;
+          const existencia=forzado?(parseFloat(forzado.existencia)||0):(inv?existenciaGrupo(inv,inventario):0);
+          const prodLotes=forzado
+            ?lotes.filter(l=>l.inventario_id===forzado.id&&(l.existencia_restante||0)>0).sort((a,b)=>new Date(a.fecha_entrada)-new Date(b.fecha_entrada))
+            :(inv?lotesGrupoPEPS(inv,inventario,lotes):[]);
           const alcanza=existencia>=cs;
           return(<div key={d.id} className={`p-3 mb-2 rounded-xl border-2 transition-all ${done?"border-emerald-400 bg-emerald-50":"border-gray-200 bg-white"}`}>
             <div className="flex items-center gap-3">
@@ -753,14 +826,61 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
               </div>}
               {!inv&&<span className="text-xs text-red-600 font-medium">No vinculado a inventario</span>}
             </div>
+            {/* v7.10: desglose por variante + opción de forzar una */}
+            {grupo.length>1&&<div className="ml-10 mt-2 p-2 rounded-lg bg-sky-50 border border-sky-200">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="text-xs text-sky-900">
+                  <span className="font-semibold">{grupo.length} variantes</span> en almacén:
+                  {grupo.map(g=><span key={g.id} className="inline-block ml-1 bg-white border border-sky-200 rounded px-1.5 py-0.5">{g.descripcion}: <b>{fmtQ(parseFloat(g.existencia)||0,cat.unidad_clave)}</b></span>)}
+                </div>
+                <div className="flex items-center gap-1">
+                  <label className="text-xs text-sky-700">Surtir de:</label>
+                  <select className="border border-sky-300 rounded-lg px-2 py-1 text-xs bg-white" value={forzadoId} onChange={e=>setVariantePref({...variantePref,[d.id]:e.target.value})}>
+                    <option value="">PEPS automático (lote más antiguo del grupo)</option>
+                    {grupo.map(g=><option key={g.id} value={g.id}>Solo {g.descripcion} ({fmtQ(parseFloat(g.existencia)||0,cat.unidad_clave)})</option>)}
+                  </select>
+                </div>
+              </div>
+              {!forzado&&<p className="text-xs text-sky-600 mt-1">Se descontará del lote más antiguo entre todas las variantes. Elige una variante si quieres sacar primero empaque de temporada.</p>}
+            </div>}
           </div>);
         })}
-        <div className="flex justify-end mt-4"><Btn onClick={()=>{onSurtirPedido(surtiendo,cantSurtida);setSurtiendo(null);setSurtidos({});}} disabled={!allSurtidos} color="purple">{allSurtidos?"Pedido Surtido (PEPS) ✓":`Marca los ${pedidoItems.length-totalSurtidos} restantes`}</Btn></div>
+        <div className="flex justify-end mt-4"><Btn onClick={()=>{onSurtirPedido(surtiendo,cantSurtida,variantePref);setSurtiendo(null);setSurtidos({});setVariantePref({});}} disabled={!allSurtidos} color="purple">{allSurtidos?"Pedido Surtido (PEPS) ✓":`Marca los ${pedidoItems.length-totalSurtidos} restantes`}</Btn></div>
       </div>
     </div>}
 
     {/* MOVIMIENTOS RECIENTES */}
     {movimientos.length>0&&<div className="mt-4"><h3 className="text-sm font-bold text-gray-700 mb-2">Movimientos recientes</h3><div className="space-y-1">{movimientos.slice().reverse().slice(0,8).map(m=>{const prod=inventario.find(p=>p.id===m.inv_id);return(<div key={m.id} className="flex items-center gap-2 text-sm bg-white border border-gray-100 rounded-lg px-3 py-2"><Badge v={m.tipo==="entrada"?"success":"danger"}>{m.tipo}</Badge><span className="font-medium text-gray-800">{prod?.descripcion}</span><span className="text-gray-500">{fmtQ(m.qty,prod?.unidad_clave||"pz")}</span>{m.nota&&<span className="text-gray-400 text-xs">— {m.nota}</span>}<span className="ml-auto text-xs text-gray-400">{m.fecha}</span></div>);})}</div></div>}
+
+    {/* v7.10: AGRUPAR VARIANTES DE ALMACÉN */}
+    {agrupando&&(()=>{
+      const candidatos=inventario.filter(i=>i.id!==agrupando.id&&!i.variante_de&&i.unidad_clave===agrupando.unidad_clave&&i.activo!==false)
+        .sort((a,b)=>a.descripcion.localeCompare(b.descripcion));
+      return(<div className="fixed inset-0 z-50 flex items-start justify-center p-4 overflow-y-auto" style={{background:"rgba(0,0,0,0.45)"}} onMouseDown={e=>{if(e.target===e.currentTarget)setAgrupando(null);}}>
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl my-4">
+          <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
+            <div>
+              <h3 className="text-base font-bold text-gray-900">Agrupar como variante</h3>
+              <p className="text-xs text-gray-500">{agrupando.sku} — {agrupando.descripcion}</p>
+            </div>
+            <button onClick={()=>setAgrupando(null)} className="text-gray-400 hover:text-gray-700 text-xl leading-none">✕</button>
+          </div>
+          <div className="p-5">
+            <p className="text-sm text-gray-600 mb-3">Las variantes son el <b>mismo insumo con distinto branding o empaque</b> (ej. vaso Fit Taste / Navidad / Halloween). La sucursal sigue pidiendo el insumo normal y el almacén surte del grupo completo: la existencia disponible es la suma, y el descuento PEPS toma el lote más antiguo de cualquier variante.</p>
+            <label className="text-xs text-gray-500 block mb-1">SKU base del grupo</label>
+            <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-1" defaultValue={agrupando.variante_de||""} id="sel-base-variante">
+              <option value="">— No es variante (es un producto independiente) —</option>
+              {candidatos.map(c=><option key={c.id} value={c.id}>{c.sku} — {c.descripcion} ({fmtQ(parseFloat(c.existencia)||0,c.unidad_clave)})</option>)}
+            </select>
+            <p className="text-xs text-gray-400 mb-4">Solo aparecen SKU de la misma unidad ({agrupando.unidad_clave}) que no sean ya variantes. La agrupación no mueve existencias ni lotes: cada variante conserva su historial y su costo.</p>
+            <div className="flex justify-end gap-2">
+              <button onClick={()=>setAgrupando(null)} className="text-sm text-gray-500 hover:text-gray-700 px-4 py-2">Cancelar</button>
+              <Btn onClick={()=>{const v=document.getElementById("sel-base-variante")?.value||"";guardarAgrupacion(agrupando,v);}} disabled={guardandoGrupo} color="purple">{guardandoGrupo?"Guardando...":"Guardar agrupación"}</Btn>
+            </div>
+          </div>
+        </div>
+      </div>);
+    })()}
 
     {/* KARDEX POR PRODUCTO */}
     {kardexProd&&<div className="fixed inset-0 z-50 flex items-start justify-center p-4 overflow-y-auto" style={{background:"rgba(0,0,0,0.45)"}} onMouseDown={e=>{if(e.target===e.currentTarget){setKardexProd(null);setKardexRows(null);}}}>
@@ -2722,7 +2842,7 @@ function App(){
 
       setCatalogo((results.catalogo||[]).filter(c=>c.activo!==false).map(c=>({id:c.id,sku:c.sku,articulo:c.articulo,tipo_producto:c.tipo_producto,unidad_clave:uMap[c.unidad_id]?.clave||"?",costo_referencia:parseFloat(c.costo_referencia)||0,proveedor_id:c.proveedor_id,proveedor_nombre:pMap[c.proveedor_id]?.nombre||"?",notas:c.notas,aplica_iva:c.aplica_iva!==false,inv_id:c.inventario_almacen_id,insumo_id:c.insumo_id,contenido:parseFloat(c.contenido)||1})));
       setProveedores((results.proveedores||[]).filter(p=>p.activo!==false).map(p=>{const fl=fMap[p.tipo_flujo_id]||{};return{id:p.id,nombre:p.nombre,tipo_flujo:fl.nombre||"?",quien_captura:fl.quien_captura_precio||"?"};}));
-      setInventario((results.inventario_almacen||[]).map(i=>({id:i.id,sku:i.sku,descripcion:i.descripcion,unidad_clave:uMap[i.unidad_id]?.clave||"?",existencia:parseFloat(i.existencia)||0,costo_unitario_actual:parseFloat(i.costo_unitario_actual)||0,lead_time:i.lead_time,activo:i.activo!==false})));
+      setInventario((results.inventario_almacen||[]).map(i=>({id:i.id,sku:i.sku,descripcion:i.descripcion,unidad_clave:uMap[i.unidad_id]?.clave||"?",existencia:parseFloat(i.existencia)||0,costo_unitario_actual:parseFloat(i.costo_unitario_actual)||0,lead_time:i.lead_time,activo:i.activo!==false,variante_de:i.variante_de||null})));
       setPedidos((results.pedidos||[]).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)));
       setPedidoDetalle(results.pedido_detalle||[]);
       setProvEstatus(results.pedido_proveedor_estatus||[]);
@@ -2967,7 +3087,9 @@ function App(){
   // Reutilizable: lo llama el botón Surtir y, como red de seguridad, la
   // recepción de sucursal si el pedido nunca se surtió (así el almacén nunca
   // queda con inventario fantasma). cantMap: {pedido_detalle_id: cantidad}.
-  const descontarAlmacenPEPS=async(pedId,cantMap)=>{
+  // variantePref (opcional): {pedido_detalle_id: inventario_almacen_id} para
+  // forzar el surtido desde una variante concreta del grupo (v7.10).
+  const descontarAlmacenPEPS=async(pedId,cantMap,variantePref)=>{
     const almItems=pedidoDetalle.filter(d=>d.pedido_id===pedId&&proveedores.find(pr=>pr.id===d.proveedor_id)?.tipo_flujo==="Almacen interno");
     let updatedLotes=[...lotes];let updatedInv=[...inventario];const movsNew=[];
     const numPed=pedidos.find(p=>p.id===pedId)?.numero_pedido||"";
@@ -2976,28 +3098,57 @@ function App(){
       const cat=catalogo.find(c=>c.id===d.catalogo_id);if(!cat)continue;
       const inv=cat.inv_id?updatedInv.find(i=>i.id===cat.inv_id):updatedInv.find(i=>{const dL=i.descripcion.toLowerCase();const words=cat.articulo.toLowerCase().split(" ");return words.some(w=>w.length>3&&dL.includes(w));});
       if(!inv)continue;
-      const movRes=await sbPost("movimientos_almacen",{inventario_id:inv.id,pedido_id:pedId,fecha:new Date().toISOString().split("T")[0],tipo:"salida",cantidad:cs,nota:`PEPS Pedido ${numPed}`});
-      const movId=movRes&&movRes[0]?movRes[0].id:null;
-      const prodLotes=updatedLotes.filter(l=>l.inventario_id===inv.id&&(l.existencia_restante||0)>0).sort((a,b)=>new Date(a.fecha_entrada)-new Date(b.fecha_entrada));
+      // v7.10: el descuento recorre TODO el grupo de variantes (mismo insumo,
+      // distinto branding) en orden PEPS estricto. Si el almacenista forzó una
+      // variante para esta línea, solo se consume de ella.
+      const forzado=variantePref&&variantePref[d.id]?updatedInv.find(i=>i.id===variantePref[d.id]):null;
+      const prodLotes=forzado
+        ?updatedLotes.filter(l=>l.inventario_id===forzado.id&&(l.existencia_restante||0)>0).sort((a,b)=>new Date(a.fecha_entrada)-new Date(b.fecha_entrada))
+        :lotesGrupoPEPS(inv,updatedInv,updatedLotes);
       let remaining=cs;let costoPeps=0;
+      // Consumido por SKU de almacén: un movimiento por SKU tocado.
+      const consumoPorInv={};
       for(const lote of prodLotes){
         if(remaining<=0)break;
         const available=lote.existencia_restante||0;
         const take=Math.min(remaining,available);
         const costoU=parseFloat(lote.costo_unitario)+(parseFloat(lote.iva)||0);
         costoPeps+=take*costoU;
-        await sbPost("salidas_peps",{movimiento_id:movId,lote_id:lote.id,cantidad_consumida:take,costo_unitario_lote:costoU,costo_total:Math.round(take*costoU*100)/100});
-        const newRest=available-take;
-        await sbPatch("lotes_almacen",lote.id,{existencia_restante:newRest});
-        updatedLotes=updatedLotes.map(l=>l.id===lote.id?{...l,existencia_restante:newRest}:l);
+        if(!consumoPorInv[lote.inventario_id])consumoPorInv[lote.inventario_id]={qty:0,lotes:[]};
+        consumoPorInv[lote.inventario_id].qty+=take;
+        consumoPorInv[lote.inventario_id].lotes.push({lote,take,costoU});
         remaining-=take;
       }
-      const newExist=Math.max(0,parseFloat(inv.existencia)-cs);
+      // Si el grupo no alcanzó, el faltante se carga al SKU base (queda en 0).
+      if(remaining>0){
+        const baseId=forzado?forzado.id:raizInv(inv);
+        if(!consumoPorInv[baseId])consumoPorInv[baseId]={qty:0,lotes:[]};
+        consumoPorInv[baseId].qty+=remaining;
+        remaining=0;
+      }
+      for(const[invId,c]of Object.entries(consumoPorInv)){
+        if(c.qty<=0)continue;
+        const invRow=updatedInv.find(i=>i.id===invId);if(!invRow)continue;
+        const esVariante=invId!==raizInv(inv);
+        const movRes=await sbPost("movimientos_almacen",{inventario_id:invId,pedido_id:pedId,fecha:new Date().toISOString().split("T")[0],tipo:"salida",cantidad:c.qty,nota:`PEPS Pedido ${numPed}${esVariante?` (variante: ${invRow.descripcion})`:""}`});
+        const movId=movRes&&movRes[0]?movRes[0].id:null;
+        let costoInv=0;
+        for(const{lote,take,costoU}of c.lotes){
+          costoInv+=take*costoU;
+          await sbPost("salidas_peps",{movimiento_id:movId,lote_id:lote.id,cantidad_consumida:take,costo_unitario_lote:costoU,costo_total:Math.round(take*costoU*100)/100});
+          const newRest=(lote.existencia_restante||0)-take;
+          await sbPatch("lotes_almacen",lote.id,{existencia_restante:newRest});
+          updatedLotes=updatedLotes.map(l=>l.id===lote.id?{...l,existencia_restante:newRest}:l);
+        }
+        const newExist=Math.max(0,parseFloat(invRow.existencia)-c.qty);
+        const avgInv=c.qty>0&&costoInv>0?costoInv/c.qty:invRow.costo_unitario_actual;
+        await sbPatch("inventario_almacen",invId,{existencia:newExist,costo_unitario_actual:avgInv});
+        updatedInv=updatedInv.map(p=>p.id===invId?{...p,existencia:newExist,costo_unitario_actual:avgInv}:p);
+        movsNew.push({id:Date.now().toString()+d.id+invId,inv_id:invId,tipo:"salida",qty:c.qty,nota:`PEPS Pedido #${numPed}${esVariante?` (${invRow.descripcion})`:""}`,fecha:new Date().toLocaleDateString("es-MX")});
+      }
+      // Costo real de la línea: promedio ponderado de todo lo consumido del grupo.
       const avgCost=cs>0&&costoPeps>0?costoPeps/cs:inv.costo_unitario_actual;
-      await sbPatch("inventario_almacen",inv.id,{existencia:newExist,costo_unitario_actual:avgCost});
-      updatedInv=updatedInv.map(p=>p.id===inv.id?{...p,existencia:newExist,costo_unitario_actual:avgCost}:p);
       await sbPatch("pedido_detalle",d.id,{cantidad:cs,costo_real:avgCost,capturado_por:"sistema",fecha_captura:new Date().toISOString()});
-      movsNew.push({id:Date.now().toString()+d.id,inv_id:inv.id,tipo:"salida",qty:cs,nota:`PEPS Pedido #${numPed}`,fecha:new Date().toLocaleDateString("es-MX")});
     }
     setLotes(updatedLotes);setInventario(updatedInv);
     if(movsNew.length)setMovimientos(prev=>[...prev,...movsNew]);
@@ -3187,53 +3338,22 @@ function App(){
           alert("Precios confirmados");setSelectedPedido(null);
         }}/>;
       })()}
-      {view==="almacen"&&<AlmacenView inventario={inventario} setInventario={setInventario} movimientos={movimientos} setMovimientos={setMovimientos} pedidosAlm={pedidosAlm} catalogo={catalogo} pedidoDetalle={pedidoDetalle} proveedores={proveedores} lotes={lotes} setLotes={setLotes} rol={rol} allPedidos={pedidos} allProvEstatus={provEstatus} onSurtirPedido={async(pedId,cantSurtida)=>{
-        // 0. VALIDATE stock
+      {view==="almacen"&&<AlmacenView inventario={inventario} setInventario={setInventario} movimientos={movimientos} setMovimientos={setMovimientos} pedidosAlm={pedidosAlm} catalogo={catalogo} pedidoDetalle={pedidoDetalle} proveedores={proveedores} lotes={lotes} setLotes={setLotes} rol={rol} allPedidos={pedidos} allProvEstatus={provEstatus} onSurtirPedido={async(pedId,cantSurtida,variantePref)=>{
+        // 0. VALIDATE stock — v7.10: contra la existencia del GRUPO de variantes
+        // (o de la variante forzada), no solo del SKU base.
         const almItems=pedidoDetalle.filter(d=>d.pedido_id===pedId&&proveedores.find(pr=>pr.id===d.proveedor_id)?.tipo_flujo==="Almacen interno");
         const sinStock=[];
-        for(const d of almItems){const cs=cantSurtida[d.id]||0;if(cs<=0)continue;const cat=catalogo.find(c=>c.id===d.catalogo_id);if(!cat)continue;const inv=cat.inv_id?inventario.find(i=>i.id===cat.inv_id):inventario.find(i=>{const dL=i.descripcion.toLowerCase();const words=cat.articulo.toLowerCase().split(" ");return words.some(w=>w.length>3&&dL.includes(w));});if(inv&&cs>inv.existencia)sinStock.push(`${cat.articulo}: surtir ${fmtQ(cs,cat.unidad_clave)} pero hay ${fmtQ(inv.existencia,cat.unidad_clave)}`);else if(!inv&&cs>0)sinStock.push(`${cat.articulo}: no vinculado a inventario — ve a Catálogo y vincula`);}
+        for(const d of almItems){const cs=cantSurtida[d.id]||0;if(cs<=0)continue;const cat=catalogo.find(c=>c.id===d.catalogo_id);if(!cat)continue;const inv=cat.inv_id?inventario.find(i=>i.id===cat.inv_id):inventario.find(i=>{const dL=i.descripcion.toLowerCase();const words=cat.articulo.toLowerCase().split(" ");return words.some(w=>w.length>3&&dL.includes(w));});const fz=(variantePref&&variantePref[d.id])?inventario.find(i=>i.id===variantePref[d.id]):null;const disp=fz?(parseFloat(fz.existencia)||0):(inv?existenciaGrupo(inv,inventario):0);if(inv&&cs>disp)sinStock.push(`${cat.articulo}: surtir ${fmtQ(cs,cat.unidad_clave)} pero hay ${fmtQ(disp,cat.unidad_clave)}${fz?` en ${fz.descripcion}`:""}`);else if(!inv&&cs>0)sinStock.push(`${cat.articulo}: no vinculado a inventario — ve a Catálogo y vincula`);}
         if(sinStock.length>0){alert("Inventario insuficiente:\n\n"+sinStock.join("\n")+"\n\nRegistra una entrada de lote primero.");return;}
         // 1. Update estatus
         const pe=provEstatus.find(x=>x.pedido_id===pedId&&proveedores.find(pr=>pr.id===x.proveedor_id)?.tipo_flujo==="Almacen interno");
         if(pe){await sbPatch("pedido_proveedor_estatus",pe.id,{estatus:"surtido",fecha_completado:new Date().toISOString()});setProvEstatus(provEstatus.map(x=>x.id===pe.id?{...x,estatus:"surtido"}:x));}
-        // 2. PEPS deduction per item
-        let updatedLotes=[...lotes];
-        let updatedInv=[...inventario];
-        for(const d of almItems){
-          let cs=cantSurtida[d.id]||0;if(cs<=0)continue;
-          const cat=catalogo.find(c=>c.id===d.catalogo_id);if(!cat)continue;
-          const inv=cat.inv_id?updatedInv.find(i=>i.id===cat.inv_id):updatedInv.find(i=>{const dL=i.descripcion.toLowerCase();const words=cat.articulo.toLowerCase().split(" ");return words.some(w=>w.length>3&&dL.includes(w));});
-          if(!inv)continue;
-          // v6.1: Registrar movimiento de salida en BD (trazabilidad PEPS)
-          const movRes=await sbPost("movimientos_almacen",{inventario_id:inv.id,pedido_id:pedId,fecha:new Date().toISOString().split("T")[0],tipo:"salida",cantidad:cs,nota:`PEPS Pedido ${pedidosAlm.find(p=>p.id===pedId)?.numero_pedido||""}`});
-          const movId=movRes&&movRes[0]?movRes[0].id:null;
-          // Get lotes for this product sorted by date (PEPS)
-          const prodLotes=updatedLotes.filter(l=>l.inventario_id===inv.id&&(l.existencia_restante||0)>0).sort((a,b)=>new Date(a.fecha_entrada)-new Date(b.fecha_entrada));
-          let remaining=cs;let costoPeps=0;
-          for(const lote of prodLotes){
-            if(remaining<=0)break;
-            const available=lote.existencia_restante||0;
-            const take=Math.min(remaining,available);
-            const costoU=parseFloat(lote.costo_unitario)+(parseFloat(lote.iva)||0);
-            costoPeps+=take*costoU;
-            // v6.1: Registrar salida PEPS por lote (auditoría de costos)
-            await sbPost("salidas_peps",{movimiento_id:movId,lote_id:lote.id,cantidad_consumida:take,costo_unitario_lote:costoU,costo_total:Math.round(take*costoU*100)/100});
-            // Update lote
-            const newRest=available-take;
-            await sbPatch("lotes_almacen",lote.id,{existencia_restante:newRest});
-            updatedLotes=updatedLotes.map(l=>l.id===lote.id?{...l,existencia_restante:newRest}:l);
-            remaining-=take;
-          }
-          // Update inventory total
-          const newExist=Math.max(0,inv.existencia-cs);
-          const avgCost=cs>0?costoPeps/cs:inv.costo_unitario_actual;
-          await sbPatch("inventario_almacen",inv.id,{existencia:newExist,costo_unitario_actual:avgCost});
-          updatedInv=updatedInv.map(p=>p.id===inv.id?{...p,existencia:newExist,costo_unitario_actual:avgCost}:p);
-          // Update pedido_detalle with PEPS cost
-          await sbPatch("pedido_detalle",d.id,{cantidad:cs,costo_real:avgCost,capturado_por:"sistema",fecha_captura:new Date().toISOString()});
-          setMovimientos(prev=>[...prev,{id:Date.now().toString()+d.id,inv_id:inv.id,tipo:"salida",qty:cs,nota:`PEPS Pedido #${pedidosAlm.find(p=>p.id===pedId)?.numero_pedido||""}`,fecha:new Date().toLocaleDateString("es-MX")}]);
-        }
-        setLotes(updatedLotes);setInventario(updatedInv);
+        // 2. PEPS deduction — v7.10: UNA sola ruta compartida con la red de
+        // seguridad de la recepción (descontarAlmacenPEPS). Antes este botón
+        // tenía su propia copia inline de la lógica: la duplicación fue la causa
+        // del inventario fantasma de julio, y hacía que las mejoras aplicadas a
+        // la función compartida no llegaran al surtido normal.
+        await descontarAlmacenPEPS(pedId,cantSurtida,variantePref);
         setPedidoDetalle(pedidoDetalle.map(d=>{if(d.pedido_id===pedId&&proveedores.find(pr=>pr.id===d.proveedor_id)?.tipo_flujo==="Almacen interno"){return{...d,cantidad:cantSurtida[d.id]||0};}return d;}));
         alert("Pedido surtido con PEPS — lotes e inventario actualizados");
       }}/>}
