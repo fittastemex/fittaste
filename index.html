@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.10";
+const V="7.14";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -69,6 +69,20 @@ function costoInsumo(insumoId,invSucursal,catalogo){
   const pres=(catalogo||[]).filter(c=>c.insumo_id===insumoId&&parseFloat(c.costo_referencia)>0);
   if(pres.length===0)return 0;
   return Math.min(...pres.map(c=>parseFloat(c.costo_referencia)/(parseFloat(c.contenido)||1)));
+}
+// v7.12: de dónde salió el costo unitario que se está usando. costo_promedio le gana
+// SIEMPRE al catálogo (línea de arriba), así que corregir una presentación no cambia
+// nada mientras el promedio de compra traiga un valor viejo. Devuelve null cuando no
+// hay conflicto; si lo hay, el editor de recetas lo marca para que sea visible.
+function origenCosto(insumoId,invSucursal,catalogo){
+  const inv=(invSucursal||[]).find(i=>i.insumo_id===insumoId);
+  const cp=inv?parseFloat(inv.costo_promedio):0;
+  if(!(cp>0))return null;
+  const pres=(catalogo||[]).filter(c=>c.insumo_id===insumoId&&parseFloat(c.costo_referencia)>0);
+  if(pres.length===0)return null;
+  const cat=Math.min(...pres.map(c=>parseFloat(c.costo_referencia)/(parseFloat(c.contenido)||1)));
+  if(!(cat>0)||(cp<=cat*1.2&&cp>=cat*0.8))return null;
+  return {promedio:cp,catalogo:cat};
 }
 // v7.2: presentaciones de compra de un insumo, la más barata por unidad base primero
 function presentacionesDe(insumoId,catalogo){return (catalogo||[]).filter(c=>c.insumo_id===insumoId).sort((a,b)=>(parseFloat(a.costo_referencia)/(parseFloat(a.contenido)||1))-(parseFloat(b.costo_referencia)/(parseFloat(b.contenido)||1)));}
@@ -543,12 +557,15 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
     // Candado anti-error de captura: el costo va POR UNIDAD, no el total de la factura.
     // Un error así (teclear el total) infló el almacén en millones en julio 2026.
     const prodL=inventario.find(p=>p.id===nLote.inv_id);
-    const totalU=nLote.costo_unitario+(nLote.iva||0);
-    const totalLote=nLote.cantidad*totalU;
+    // v7.13: el costeo va SIN IVA (el IVA de compras es acreditable). El IVA se
+    // sigue capturando porque la cuenta por pagar sí lo incluye, pero no entra
+    // en la valuación del almacén ni en el costo de las recetas.
+    const costoU=nLote.costo_unitario;
+    const totalLote=nLote.cantidad*(nLote.costo_unitario+(nLote.iva||0));
     const costoPrevio=prodL?.costo_unitario_actual||0;
     const avisos=[];
-    if(costoPrevio>0&&totalU>costoPrevio*10)
-      avisos.push(`El costo que capturaste (${fmt(totalU)} por ${prodL.unidad_clave}) es ${(totalU/costoPrevio).toFixed(0)} veces el costo actual de este producto (${fmt(costoPrevio)}).`);
+    if(costoPrevio>0&&costoU>costoPrevio*10)
+      avisos.push(`El costo que capturaste (${fmt(costoU)} por ${prodL.unidad_clave}, sin IVA) es ${(costoU/costoPrevio).toFixed(0)} veces el costo actual de este producto (${fmt(costoPrevio)}).`);
     if(totalLote>200000)
       avisos.push(`El lote completo suma ${fmt(totalLote)}.`);
     if(avisos.length>0){
@@ -561,8 +578,7 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
     if(res&&res[0]){
       setLotes([...lotes,res[0]]);
       // Update local inventory (trigger in DB does it too)
-      const costoTotal=nLote.costo_unitario+(nLote.iva||0);
-      setInventario(inventario.map(p=>p.id===nLote.inv_id?{...p,existencia:p.existencia+nLote.cantidad,costo_unitario_actual:costoTotal}:p));
+      setInventario(inventario.map(p=>p.id===nLote.inv_id?{...p,existencia:p.existencia+nLote.cantidad,costo_unitario_actual:nLote.costo_unitario}:p));
       setNLote({inv_id:"",cantidad:0,costo_unitario:0,iva:0,proveedor:"",nota:""});
       alert("Lote registrado — inventario actualizado");
     }else{alert("Error al registrar lote");}
@@ -622,7 +638,7 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
     setKardexProd(prod);setKardexRows(null);
     const movs=await sbGet("movimientos_almacen",`inventario_id=eq.${prod.id}&order=fecha.asc`);
     const ev=[];
-    lotes.filter(l=>l.inventario_id===prod.id).forEach(l=>ev.push({fecha:l.fecha_entrada,tipo:"entrada",cant:parseFloat(l.cantidad)||0,costo:(parseFloat(l.costo_unitario)||0)+(parseFloat(l.iva)||0),nota:l.nota||l.proveedor_origen||"Entrada de lote",_c:l.created_at||""}));
+    lotes.filter(l=>l.inventario_id===prod.id).forEach(l=>ev.push({fecha:l.fecha_entrada,tipo:"entrada",cant:parseFloat(l.cantidad)||0,costo:parseFloat(l.costo_unitario)||0,nota:l.nota||l.proveedor_origen||"Entrada de lote",_c:l.created_at||""}));
     (movs||[]).forEach(m=>ev.push({fecha:m.fecha,tipo:m.tipo,cant:-(parseFloat(m.cantidad)||0),costo:null,nota:m.nota||"",_c:m.created_at||""}));
     ev.sort((a,b)=>a.fecha<b.fecha?-1:a.fecha>b.fecha?1:(a._c<b._c?-1:a._c>b._c?1:0));
     let saldo=0;ev.forEach(e=>{saldo+=e.cant;e.saldo=saldo;});
@@ -684,7 +700,7 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
         })
         .map(p=>{
         const prodLotes=lotes.filter(l=>l.inventario_id===p.id&&(l.existencia_restante||0)>0);
-        const valorPeps=prodLotes.reduce((s,l)=>(l.existencia_restante||0)*(parseFloat(l.costo_unitario)+parseFloat(l.iva||0))+s,0);
+        const valorPeps=prodLotes.reduce((s,l)=>(l.existencia_restante||0)*(parseFloat(l.costo_unitario)||0)+s,0);
         const costoPeps=p.existencia>0&&prodLotes.length>0?valorPeps/prodLotes.reduce((s,l)=>s+(l.existencia_restante||0),0):p.costo_unitario_actual;
         const low=(p.unidad_clave==="kg"&&p.existencia<2)||(p.unidad_clave!=="kg"&&p.existencia<50);
         const oculto=p.activo===false;
@@ -725,7 +741,7 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
             <span className="text-sm font-bold text-teal-700">{pLotes.length} lote{pLotes.length>1?"s":""}</span>
           </div>
           <table className="w-full text-xs"><thead><tr className="border-b border-gray-100">
-            {["Fecha","Original","Restante","Costo unit.","IVA","Costo total/u","Valor restante","Proveedor"].map(h=><th key={h} className={`px-3 py-1.5 font-medium text-gray-500 ${h==="Fecha"||h==="Proveedor"?"text-left":"text-right"}`}>{h}</th>)}
+            {["Fecha","Original","Restante","Costo unit. (costeo)","IVA","Total/u c/IVA","Valor restante","Proveedor"].map(h=><th key={h} className={`px-3 py-1.5 font-medium text-gray-500 ${h==="Fecha"||h==="Proveedor"?"text-left":"text-right"}`}>{h}</th>)}
           </tr></thead><tbody>{pLotes.map((l,i)=>{
             const rest=l.existencia_restante||0;
             const cu=parseFloat(l.costo_unitario)||0;
@@ -735,10 +751,10 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
               <td className="px-3 py-1.5 text-gray-600">{new Date(l.fecha_entrada).toLocaleDateString("es-MX")}{i===0&&<span className="ml-1 text-teal-600 font-semibold">← PEPS</span>}</td>
               <td className="px-3 py-1.5 text-right text-gray-400">{fmtQ(l.cantidad,prod?.unidad_clave||"?")}</td>
               <td className="px-3 py-1.5 text-right font-bold text-gray-800">{fmtQ(rest,prod?.unidad_clave||"?")}</td>
-              <td className="px-3 py-1.5 text-right">{fmt(cu)}</td>
-              <td className="px-3 py-1.5 text-right">{fmt(iv)}</td>
-              <td className="px-3 py-1.5 text-right font-semibold text-teal-700">{fmt(ct)}</td>
-              <td className="px-3 py-1.5 text-right">{fmt(rest*ct)}</td>
+              <td className="px-3 py-1.5 text-right font-semibold text-teal-700">{fmt(cu)}</td>
+              <td className="px-3 py-1.5 text-right text-gray-400">{fmt(iv)}</td>
+              <td className="px-3 py-1.5 text-right text-gray-400">{fmt(ct)}</td>
+              <td className="px-3 py-1.5 text-right">{fmt(rest*cu)}</td>
               <td className="px-3 py-1.5 text-gray-500">{l.proveedor_origen||"-"}</td>
             </tr>);})}</tbody></table>
         </div>
@@ -760,11 +776,12 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
       </div>
       {nLote.costo_unitario>0&&nLote.cantidad>0&&<div className="bg-teal-50 rounded-xl p-3 mb-4">
         <div className="grid grid-cols-4 gap-3 text-sm">
-          <div><p className="text-xs text-teal-600">Costo/u</p><p className="font-bold text-teal-800">{fmt(nLote.costo_unitario)}</p></div>
+          <div><p className="text-xs text-teal-600">Costo/u (costeo)</p><p className="font-bold text-teal-800">{fmt(nLote.costo_unitario)}</p></div>
           <div><p className="text-xs text-teal-600">IVA/u</p><p className="font-bold text-teal-800">{fmt(nLote.iva||0)}</p></div>
-          <div><p className="text-xs text-teal-600">Total/u</p><p className="font-bold text-teal-900">{fmt(nLote.costo_unitario+(nLote.iva||0))}</p></div>
-          <div><p className="text-xs text-teal-600">Total lote</p><p className="font-bold text-teal-900">{fmt(nLote.cantidad*(nLote.costo_unitario+(nLote.iva||0)))}</p></div>
+          <div><p className="text-xs text-teal-600">Total/u c/IVA</p><p className="font-bold text-teal-900">{fmt(nLote.costo_unitario+(nLote.iva||0))}</p></div>
+          <div><p className="text-xs text-teal-600">Total lote c/IVA</p><p className="font-bold text-teal-900">{fmt(nLote.cantidad*(nLote.costo_unitario+(nLote.iva||0)))}</p></div>
         </div>
+        <p className="text-xs text-teal-700 mt-2">El almacén y las recetas se costean con <b>{fmt(nLote.costo_unitario)}</b> (sin IVA, porque el IVA de compras es acreditable). El IVA se guarda para la cuenta por pagar.</p>
       </div>}
       <Btn onClick={handleNewLote} disabled={savingLote||!nLote.inv_id||nLote.cantidad<=0||nLote.costo_unitario<=0} color="purple">{savingLote?"Guardando...":"Registrar lote de entrada"}</Btn>
     </div>}
@@ -822,7 +839,7 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
                 {cs>0&&existencia>0&&<span className="ml-1">→ quedarían {fmtQ(Math.max(0,existencia-cs),cat.unidad_clave)}</span>}
               </div>
               {prodLotes.length>0&&<div className="text-xs text-teal-600">
-                {prodLotes.length} lote{prodLotes.length>1?"s":""}: {prodLotes.map((l,i)=>{const rest=l.existencia_restante||0;const cu=parseFloat(l.costo_unitario)+(parseFloat(l.iva)||0);return<span key={l.id} className={`inline-block mr-1 ${i===0?"font-bold":""}`}>{fmtQ(rest,cat.unidad_clave)} @{fmt(cu)}{i<prodLotes.length-1?",":""}</span>;})}
+                {prodLotes.length} lote{prodLotes.length>1?"s":""}: {prodLotes.map((l,i)=>{const rest=l.existencia_restante||0;const cu=parseFloat(l.costo_unitario)||0;return<span key={l.id} className={`inline-block mr-1 ${i===0?"font-bold":""}`}>{fmtQ(rest,cat.unidad_clave)} @{fmt(cu)}{i<prodLotes.length-1?",":""}</span>;})}
               </div>}
               {!inv&&<span className="text-xs text-red-600 font-medium">No vinculado a inventario</span>}
             </div>
@@ -1954,7 +1971,7 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
           <td className="px-2 py-1 text-right"><input type="number" min="0" step="0.001" className="w-20 text-right border border-gray-200 rounded px-1 py-0.5" defaultValue={r.cantidad} onBlur={e=>{const v=parseFloat(e.target.value)||0;if(v!==parseFloat(r.cantidad))updLinea(r.id,"cantidad",v);}}/></td>
           <td className="px-2 py-1 text-gray-500">{esPrep?(prep?.unidad||"u"):ins.unidad_base}</td>
           <td className="px-2 py-1 text-right"><input type="number" min="0" step="1" className="w-14 text-right border border-gray-200 rounded px-1 py-0.5" defaultValue={r.merma_pct} onBlur={e=>{const v=parseFloat(e.target.value)||0;if(v!==parseFloat(r.merma_pct))updLinea(r.id,"merma_pct",v);}}/></td>
-          <td className="px-2 py-1 text-right text-gray-600">{fmt(cU)}</td>
+          <td className="px-2 py-1 text-right text-gray-600">{fmt(cU)}{!esPrep&&(()=>{const o=origenCosto(r.insumo_id,invSucursal,catalogo);return o?<span className="text-amber-600 font-bold cursor-help ml-1" title={`Este costo viene del costo promedio de compra (${fmt(o.promedio)}/${ins.unidad_base||"u"}), que tiene prioridad sobre el catálogo. La presentación de compra da ${fmt(o.catalogo)}/${ins.unidad_base||"u"}. Si acabas de corregir la presentación, actualiza también el costo promedio en Inventario de sucursal.`}>⚠</span>:null;})()}</td>
           <td className="px-2 py-1 text-right font-semibold text-teal-700">{fmt(cL)}</td>
           <td className="px-2 py-1 text-right"><button onClick={()=>delLinea(r.id)} className="text-red-400 hover:text-red-600 px-1">✕</button></td>
         </tr>);})}
@@ -2215,7 +2232,17 @@ function VentasDashboardView({ventas,ventaDetalle,productosVenta,gastosOp}){
   const pct=(x,t)=>t>0?`${Math.round((x/t)*100)}%`:"0%";
   const Kpi=({titulo,valor,sub,color})=><div className="bg-white border border-gray-200 rounded-xl p-4"><p className="text-xs text-gray-500">{titulo}</p><p className="text-2xl font-bold mt-1" style={color?{color}:{color:"#0b0b0b"}}>{valor}</p>{sub&&<p className="text-xs text-gray-400 mt-1">{sub}</p>}</div>;
   const rangoTxt=desde===hasta?etiquetaDia(desde):`${etiquetaDia(desde)} — ${etiquetaDia(hasta)}`;
+  // v7.14: el conector se cayó el 29-jul y nadie lo notó en 3 días porque su
+  // única señal de vida es una consola en la PC del POS. Este aviso vigila la
+  // última venta recibida por el conector y grita cuando se queda callado.
+  const ultimaApi=ventas.filter(v=>v.origen==="api").reduce((m,v)=>(v.created_at&&v.created_at>m?v.created_at:m),"");
+  const horasSinConector=ultimaApi?(Date.now()-new Date(ultimaApi).getTime())/3600000:null;
+  const conectorMudo=horasSinConector!=null&&horasSinConector>=6;
   return(<div>
+    {conectorMudo&&<div className="bg-red-50 border border-red-300 rounded-xl p-4 mb-4">
+      <p className="text-sm font-bold text-red-800">⚠️ El conector de SoftRestaurant no ha subido ventas en {horasSinConector>=48?`${Math.floor(horasSinConector/24)} días`:`${Math.floor(horasSinConector)} horas`}</p>
+      <p className="text-xs text-red-700 mt-1">Última venta recibida: {new Date(ultimaApi).toLocaleString("es-MX")}. Revisa que la ventana del Conector FitTaste siga abierta en la computadora del punto de venta. Los tickets no se pierden: al reiniciarlo recupera todo lo pendiente desde el último corte.</p>
+    </div>}
     <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
       <div><h2 className="text-lg font-bold text-gray-800">Dashboard de ventas</h2><p className="text-xs text-gray-400">{rangoTxt} · {vSel.length} tickets</p></div>
       <div className="flex gap-1 flex-wrap">{PERIODOS.map(p=><button key={p.id} onClick={()=>setPeriodo(p.id)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${periodo===p.id?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={periodo===p.id?{background:"#2D2D2D"}:{}}>{p.l}</button>)}</div>
@@ -3112,7 +3139,7 @@ function App(){
         if(remaining<=0)break;
         const available=lote.existencia_restante||0;
         const take=Math.min(remaining,available);
-        const costoU=parseFloat(lote.costo_unitario)+(parseFloat(lote.iva)||0);
+        const costoU=parseFloat(lote.costo_unitario)||0; // v7.13: costeo sin IVA
         costoPeps+=take*costoU;
         if(!consumoPorInv[lote.inventario_id])consumoPorInv[lote.inventario_id]={qty:0,lotes:[]};
         consumoPorInv[lote.inventario_id].qty+=take;

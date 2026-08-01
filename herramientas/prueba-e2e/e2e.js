@@ -30,7 +30,12 @@ const DB={
   inventario_almacen:[],lotes_almacen:[],movimientos_almacen:[],pedidos:[],pedido_detalle:[],
   pedido_proveedor_estatus:[],pedido_reasignaciones:[],recepciones:[],recepcion_detalle:[],
   cuentas_por_pagar:[],pagos:[],compras_directas:[],gastos_operativos:[],
-  productos_venta:[],recetas:[],inventario_sucursal:[],ventas:[],venta_detalle:[],mermas:[],movimientos_sucursal:[],
+  productos_venta:[],recetas:[],inventario_sucursal:[],
+  // v7.14: venta vieja del conector (origen 'api') para verificar el aviso de
+  // "conector callado". Va en 2020 a propósito: queda fuera de todos los
+  // periodos del dashboard, así que no altera los KPIs del día ni del mes.
+  ventas:[{id:"v-api-vieja",sucursal_id:"suc-1",fecha:"2020-01-01",folio:"TKT-VIEJO",origen:"api",canal:"mostrador",subtotal:0,iva:0,total:0,total_efectivo:0,total_tarjeta:0,total_plataforma:0,total_otros:0,costo_teorico:0,created_at:"2020-01-01T12:00:00.000Z"}],
+  venta_detalle:[],mermas:[],movimientos_sucursal:[],
 };
 const DEFAULTS={
   productos_venta:{precio_venta:0,aplica_iva:true,activo:true,es_preparacion:false,rendimiento:1,unidad:null,categoria:null,codigo_sr:null},
@@ -243,7 +248,9 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   await page.getByRole("button",{name:/Importar 2 productos/}).click();
   await page.waitForTimeout(1200);
   check("5.2 alerta de venta importada",dialogs.some(d=>d.includes("importada")),dialogs.slice(-2));
-  const venta=DB.ventas[0];
+  // La importación manual guarda origen 'importado_sr'; el fixture trae además
+  // una venta vieja del conector ('api'), así que hay que elegir la correcta.
+  const venta=DB.ventas.find(v=>v.origen==="importado_sr");
   check("5.2 venta guardada: total $1,510",venta&&approx(parseFloat(venta.total),1510),venta?.total);
   check("5.2 subtotal sin IVA $1,301.72",venta&&approx(parseFloat(venta.subtotal),1301.72),venta?.subtotal);
   check("5.2 formas de pago 710/800",venta&&venta.total_efectivo===710&&venta.total_tarjeta===800,[venta?.total_efectivo,venta?.total_tarjeta]);
@@ -309,6 +316,10 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   check("6b.4 utilidad bruta ≈ $1,219.38 (venta − costo MP)",approx(utilDash,1219.38,0.05),utilDash);
   check("6b.5 mix y formas de pago visibles",dashTxt.includes("Mix de venta")&&dashTxt.includes("Formas de pago"),null);
   check("6b.6 top productos: BOWL DE PRUEBA listado",dashTxt.includes("Top 10 productos")&&dashTxt.includes("BOWL DE PRUEBA"),null);
+  // v7.14: la última venta del conector es de 2020 → el aviso debe salir y decir "días"
+  check("6b.7 avisa que el conector no sube ventas",dashTxt.includes("El conector de SoftRestaurant no ha subido ventas"),null);
+  check("6b.8 el aviso cuantifica la antigüedad en días",/no ha subido ventas en \d+ días/.test(dashTxt),dashTxt.match(/no ha subido ventas en [^\n]*/)?.[0]);
+  check("6b.9 el aviso dice que los tickets no se pierden",dashTxt.includes("no se pierden"),null);
   if(process.env.E2E_SHOT)await page.screenshot({path:process.env.E2E_SHOT,fullPage:true});
 
   console.log("\n== Parte 7: Estados financieros ==");
