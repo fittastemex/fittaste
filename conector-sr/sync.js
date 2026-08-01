@@ -285,7 +285,26 @@ async function sincronizar() {
   // El estado solo avanza con tickets del HISTÓRICO (los del turno abierto se
   // re-revisan cada ciclo hasta que el corte los mueva; la dedup evita dobles).
   let subidos = 0;
-  const avanzar = (t) => { if (t.tabla !== "temp" && t.cierre) { estado.ultimoCierre = new Date(t.cierre).toISOString(); guardarEstado(estado); } };
+  // v7.14: si un ticket falla al subir, el estado NO puede rebasarlo. Antes se
+  // hacía `continue` sin avanzar, pero el SIGUIENTE ticket bueno sí avanzaba
+  // ultimoCierre más allá del que falló, y ese ticket se perdía para siempre
+  // sin dejar rastro. Ahora el primer fallo del ciclo pone un techo: el estado
+  // se queda justo antes y el próximo ciclo lo vuelve a intentar (la dedup por
+  // folio evita duplicar los que sí entraron).
+  let techoFallo = null;
+  const fallidos = [];
+  const marcarFallido = (t) => {
+    if (t.tabla === "temp" || !t.cierre) return;
+    const c = new Date(t.cierre);
+    if (!techoFallo || c < techoFallo) techoFallo = c;
+  };
+  const avanzar = (t) => {
+    if (t.tabla === "temp" || !t.cierre) return;
+    const c = new Date(t.cierre);
+    if (techoFallo && c >= techoFallo) return;
+    estado.ultimoCierre = c.toISOString();
+    guardarEstado(estado);
+  };
 
   // Datos de FitTaste necesarios para explotar recetas
   const [sucursales, recetas, catalogo] = await Promise.all([
@@ -344,12 +363,13 @@ async function sincronizar() {
       total_plataforma: r2(fp.plataforma), total_otros: r2(fp.otros),
       costo_teorico: r2(costoTotal), registrado_por: "conector-sr",
     });
-    if (!(vRes && vRes[0])) { console.error(`  ✗ No se pudo subir ${folio}`); continue; }
+    if (!(vRes && vRes[0])) { console.error(`  ✗ No se pudo subir ${folio} — se reintenta en el próximo ciclo`); marcarFallido(t); fallidos.push(folio); continue; }
     const ventaId = vRes[0].id;
     const dRes = await sbPost("venta_detalle", detRows.map((d) => ({ ...d, venta_id: ventaId })));
     if (!Array.isArray(dRes) || dRes.length !== detRows.length) {
       await fetch(`${SB}/ventas?id=eq.${ventaId}`, { method: "DELETE", headers: H });
-      console.error(`  ✗ Falló el detalle de ${folio}; venta revertida.`);
+      console.error(`  ✗ Falló el detalle de ${folio}; venta revertida — se reintenta en el próximo ciclo`);
+      marcarFallido(t); fallidos.push(folio);
       continue;
     }
 
@@ -380,6 +400,15 @@ async function sincronizar() {
 
   if (subidos > 0) console.log(`  ${subidos} ticket(s) nuevo(s) subido(s).`);
   else console.log("  Sin tickets nuevos.");
+  if (fallidos.length > 0) {
+    console.error(`\n  ⚠️  ${fallidos.length} ticket(s) NO subieron: ${fallidos.join(", ")}`);
+    console.error(`  El conector no avanzará más allá de ${new Date(techoFallo).toLocaleString("es-MX")} hasta lograrlo.`);
+    console.error(`  Si el mismo folio falla ciclo tras ciclo, avisa a dirección: hay algo que revisar.\n`);
+  }
+  // v7.14: latido. Deja constancia de la última corrida para poder distinguir
+  // "el conector está vivo y no hubo venta" de "el conector está muerto".
+  estado.ultimaCorrida = new Date().toISOString();
+  estado.ultimoResultado = { subidos, fallidos: fallidos.length, revisados: tickets.length };
   guardarEstado(estado);
   await pool.close();
 }

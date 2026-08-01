@@ -14,7 +14,8 @@ const DB={
   insumos:[{id:"ins-cafe",nombre:"CAFE",unidad_base:"pz",tipo_control:"inventariable",categoria_gasto:null,activo:true}],
   catalogo:[{id:"cat-cafe",sku:"SUP-100",articulo:"CAFE 100",tipo_producto:"SUPLEMENTO",unidad_id:"u-pz",costo_referencia:50,proveedor_id:"prov-alm",aplica_iva:true,activo:true,insumo_id:"ins-cafe",contenido:1,inventario_almacen_id:"ia-cafe",notas:null}],
   inventario_almacen:[{id:"ia-cafe",sku:"SUP-100",descripcion:"CAFE",unidad_id:"u-pz",existencia:100,costo_unitario_actual:50,lead_time:null}],
-  lotes_almacen:[{id:"lote-cafe",inventario_id:"ia-cafe",fecha_entrada:"2026-01-01",cantidad:100,existencia_restante:100,costo_unitario:50,iva:0,existencia_restante_num:100}],
+  // v7.13: el lote trae IVA para verificar que el costeo lo IGNORA (costo sin IVA).
+  lotes_almacen:[{id:"lote-cafe",inventario_id:"ia-cafe",fecha_entrada:"2026-01-01",cantidad:100,existencia_restante:100,costo_unitario:50,iva:8,existencia_restante_num:100}],
   pedidos:[{id:"ped-alm",numero_pedido:"PED-ALM-001",fecha:"2026-07-25",sucursal_id:"suc-1",estatus:"en_proceso",total_teorico:500}],
   pedido_detalle:[{id:"det-cafe",pedido_id:"ped-alm",catalogo_id:"cat-cafe",proveedor_id:"prov-alm",cantidad:10,costo_referencia:50,costo_real:null}],
   pedido_proveedor_estatus:[{id:"pe-alm",pedido_id:"ped-alm",proveedor_id:"prov-alm",estatus:"enviado",token_activo:false}],
@@ -101,6 +102,15 @@ const approx=(a,b,t=0.01)=>Math.abs(a-b)<=t;
   check("5. se registró la salida PEPS por lote",DB.salidas_peps.length===1,DB.salidas_peps.length);
   check("6. entró al inventario de sucursal (10 pz)",DB.inventario_sucursal.some(i=>i.insumo_id==="ins-cafe"&&approx(parseFloat(i.existencia),10)),DB.inventario_sucursal.map(i=>i.existencia));
   check("7. sin doble descuento (una sola salida)",DB.movimientos_almacen.filter(x=>x.tipo==="salida").length===1);
+
+  // v7.13: el costeo va SIN IVA. El lote es 50 + 8 de IVA: el costo que viaja a
+  // la sucursal y a las recetas debe ser 50, no 58.
+  const invS=DB.inventario_sucursal.find(i=>i.insumo_id==="ins-cafe");
+  check("8. el costo a sucursal es SIN IVA (50, no 58)",invS&&approx(parseFloat(invS.costo_promedio),50),invS?.costo_promedio);
+  const movS=DB.movimientos_sucursal.filter(m=>m.insumo_id==="ins-cafe");
+  check("9. el movimiento de sucursal registra el costo sin IVA",movS.length>0&&approx(parseFloat(movS[0].costo_unitario),50),movS.map(m=>m.costo_unitario));
+  const sp=DB.salidas_peps[0];
+  check("10. la salida PEPS costea sin IVA (50/u, 500 el total)",sp&&approx(parseFloat(sp.costo_unitario_lote),50)&&approx(parseFloat(sp.costo_total),500),sp);
 
   await browser.close();
   const fails=results.filter(r=>!r.ok);
