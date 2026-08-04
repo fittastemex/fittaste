@@ -120,6 +120,25 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   console.log("\n== P: Carga y login admin ==");
   await page.goto("http://fittaste.local/index.html");
   await page.getByText("Selecciona tu rol").waitFor({timeout:20000});
+
+  // v7.15: el acceso de Fernanda ya existe en PRODUCCIÓN (esta suite corre sin
+  // ?env=dev, o sea como prod). Entra con su propia contraseña y ve el módulo
+  // de Catálogo e insumos, que es solo de admin.
+  check("P0.1 el acceso de Fernanda aparece en producción",await page.getByText("Fernanda").isVisible());
+  await page.getByText("Fernanda").click();
+  await page.locator("input[type=password]").fill("fittaste2026");
+  await page.getByRole("button",{name:"Ingresar"}).click();
+  await page.waitForTimeout(400);
+  check("P0.2 la contraseña de admin NO sirve para el acceso de Fernanda",
+    await page.getByText("Contraseña incorrecta").isVisible());
+  await page.locator("input[type=password]").fill("fer2026fit");
+  await page.getByRole("button",{name:"Ingresar"}).click();
+  await page.getByText("Fit Taste Roma").waitFor({timeout:20000});
+  check("P0.3 Fernanda entra y ve Catálogo e insumos (módulo de admin)",
+    (await page.locator("body").innerText()).includes("Catálogos"));
+  await page.getByRole("button",{name:"Salir"}).click();
+  await page.getByText("Selecciona tu rol").waitFor();
+
   await page.getByText("Admin / Dueño").click();
   await page.locator("input[type=password]").fill("fittaste2026");
   await page.getByRole("button",{name:"Ingresar"}).click();
