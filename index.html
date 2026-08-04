@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.15";
+const V="7.16";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -1856,7 +1856,7 @@ function GastosView({gastosOp,setGastosOp,catGastos,setCatGastos,rol}){
 // FitTaste importa su reporte de "Ventas por producto" (copiado desde Excel/CSV),
 // explota recetas y descuenta el inventario de sucursal. El campo ventas.origen
 // deja listo el terreno para un conector automático (agente SQL Server o API).
-function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,ventas,ventaDetalle,catalogo,insumos,invSucursal,onImport,rol,tabInicial}){
+function VentasSRView({productosVenta,setProductosVenta,productosInactivos,setProductosInactivos,recetas,setRecetas,ventas,ventaDetalle,catalogo,insumos,invSucursal,onImport,rol,tabInicial}){
   const [tab,setTab]=useState(tabInicial||"importar");
   const [fecha,setFecha]=useState(new Date().toISOString().split("T")[0]);
   const [canal,setCanal]=useState("mostrador");
@@ -2006,6 +2006,20 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
     setProductosVenta(productosVenta.map(x=>x.id===p.id?{...x,sin_insumos:v}:x));
   };
 
+  // v7.16: aviso de productos DESACTIVADOS. Desactivar un producto no lo quita
+  // de SoftRestaurant: el POS lo sigue teniendo y se puede cobrar. Si eso pasa,
+  // la venta entra y NO descuenta inventario, así que ese caso va en rojo.
+  const inactivos=(productosInactivos||[]).filter(p=>!p.es_preparacion);
+  const inactivosConVenta=inactivos.filter(p=>ventaDetalle.some(d=>d.producto_venta_id===p.id));
+  const inactivosSinVenta=inactivos.filter(p=>!ventaDetalle.some(d=>d.producto_venta_id===p.id));
+  const reactivar=async(p)=>{
+    if(!confirm(`¿Reactivar "${p.nombre}"?\n\nVolverá a aparecer en la lista de productos y a costear sus ventas.`))return;
+    const r=await sbPatchE("productos_venta",p.id,{activo:true,updated_at:new Date().toISOString()});
+    if(r.error){alert("No se pudo reactivar: "+(r.error.message||JSON.stringify(r.error)));return;}
+    setProductosInactivos((productosInactivos||[]).filter(x=>x.id!==p.id));
+    setProductosVenta([...productosVenta,{...p,activo:true}]);
+  };
+
   return(<div>
     <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
       <div><h2 className="text-lg font-bold text-gray-900">Ventas — SoftRestaurant</h2><p className="text-sm text-gray-500">SR es el punto de venta; aquí se importan sus ventas para costeo e inventario</p></div>
@@ -2014,6 +2028,31 @@ function VentasSRView({productosVenta,setProductosVenta,recetas,setRecetas,venta
       <p className="text-sm font-bold text-red-800">⚠ {vendidosSinReceta.length} producto{vendidosSinReceta.length>1?"s":""} con ventas SIN receta — su consumo no está descontando inventario</p>
       <p className="text-xs text-red-700 mt-1">{vendidosSinReceta.slice(0,10).map(p=>p.nombre).join(" · ")}{vendidosSinReceta.length>10?` · y ${vendidosSinReceta.length-10} más…`:""}</p>
       <button onClick={()=>{setTab("productos");setVerTipo("platillos");setFiltroEst("falta");setBusqProd("");}} className="text-xs font-semibold text-red-800 underline mt-1">Ir a capturar recetas →</button>
+    </div>}
+    {inactivosConVenta.length>0&&<div className="bg-red-50 border-2 border-red-300 rounded-xl p-3 mb-4">
+      <p className="text-sm font-bold text-red-800">⚠ {inactivosConVenta.length} producto{inactivosConVenta.length>1?"s":""} DESACTIVADO{inactivosConVenta.length>1?"S":""} con ventas — se está cobrando en SoftRestaurant y no descuenta inventario</p>
+      <div className="mt-2 space-y-1">{inactivosConVenta.map(p=>{
+        const u=ventaDetalle.filter(d=>d.producto_venta_id===p.id).reduce((s,d)=>s+(parseFloat(d.cantidad)||0),0);
+        return(<div key={p.id} className="flex items-center gap-2 text-xs text-red-800 flex-wrap">
+          <Badge v="danger">Desactivado</Badge>
+          <span className="font-semibold">{p.nombre}</span>
+          {p.codigo_sr&&<span className="text-red-600">clave SR {p.codigo_sr}</span>}
+          <span>· {fmtQ(u,"u")} vendidas</span>
+          <button onClick={()=>reactivar(p)} className="font-semibold underline">Reactivar</button>
+        </div>);})}</div>
+      <p className="text-xs text-red-700 mt-2">Desactivarlo aquí no lo quita del POS. Para que deje de venderse hay que borrar su clave en SoftRestaurant; si sí se vende, reactívalo y captura su receta.</p>
+    </div>}
+    {inactivosSinVenta.length>0&&<div className="bg-amber-50 border border-amber-300 rounded-xl p-3 mb-4">
+      <p className="text-sm font-bold text-amber-900">{inactivosSinVenta.length} producto{inactivosSinVenta.length>1?"s":""} desactivado{inactivosSinVenta.length>1?"s":""} · sin ventas</p>
+      <div className="mt-2 space-y-1">{inactivosSinVenta.map(p=>(
+        <div key={p.id} className="flex items-center gap-2 text-xs text-amber-900 flex-wrap">
+          <Badge v="default">Desactivado</Badge>
+          <span className="font-semibold">{p.nombre}</span>
+          {p.codigo_sr&&<span className="text-amber-700">clave SR {p.codigo_sr}</span>}
+          {p.grupo_sr&&<span className="text-amber-700">· {p.grupo_sr}</span>}
+          <button onClick={()=>reactivar(p)} className="font-semibold underline">Reactivar</button>
+        </div>))}</div>
+      <p className="text-xs text-amber-800 mt-2">No aparecen en la lista de productos ni cuentan para la cobertura de recetas. Siguen existiendo en SoftRestaurant.</p>
     </div>}
     <div className="flex gap-1 mb-4">{tabsV.map(t=><button key={t.id} onClick={()=>setTab(t.id)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${tab===t.id?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={tab===t.id?{background:"#bfcd3b",color:"#2D2D2D"}:{}}>{t.l}</button>)}</div>
 
@@ -2809,6 +2848,11 @@ function App(){
   // v7.0: ventas SR, inventario de sucursal, recetas, merma
   const [sucursales,setSucursales]=useState([]);
   const [productosVenta,setProductosVenta]=useState([]);
+  // v7.16: los desactivados se cargan APARTE. La app los descartaba al cargar y
+  // "desactivar" equivalía a "desaparecer" — el mismo patrón que dejó 115 recetas
+  // con "?" y 21 presentaciones de compra invisibles. En su propia lista no
+  // contaminan ningún contador y sí se pueden avisar.
+  const [productosInactivos,setProductosInactivos]=useState([]);
   const [recetas,setRecetas]=useState([]);
   const [invSucursal,setInvSucursal]=useState([]);
   const [ventas,setVentas]=useState([]);
@@ -2888,6 +2932,7 @@ function App(){
       // v7.0
       setSucursales((results.sucursales||[]).filter(s=>s.activa!==false));
       setProductosVenta((results.productos_venta||[]).filter(p=>p.activo!==false));
+      setProductosInactivos((results.productos_venta||[]).filter(p=>p.activo===false));
       setRecetas(results.recetas||[]);
       setInvSucursal(results.inventario_sucursal||[]);
       setVentas(results.ventas||[]);
@@ -3404,8 +3449,8 @@ function App(){
         const r=await entradaSucursalDB(invSucursal,sucId,cat.insumo_id,cant*contenido,costoU/contenido,"entrada_compra_directa",{nota:`Compra directa: ${cant} × ${cat.articulo}`,registrado_por:rol});
         setInvSucursal(r.invList);if(r.mov)setMovSucursal(prev=>[...prev,r.mov]);
       }}/>}
-      {view==="ventas"&&["admin","compras","sucursal","finanzas"].includes(rol)&&<VentasSRView productosVenta={productosVenta} setProductosVenta={setProductosVenta} recetas={recetas} setRecetas={setRecetas} ventas={ventas} ventaDetalle={ventaDetalle} catalogo={catalogo} insumos={insumos} invSucursal={invSucursal} onImport={handleImportVentas} rol={rol}/>}
-      {view==="recetario"&&["admin","compras","sucursal","finanzas"].includes(rol)&&<VentasSRView key="recetario" tabInicial="productos" productosVenta={productosVenta} setProductosVenta={setProductosVenta} recetas={recetas} setRecetas={setRecetas} ventas={ventas} ventaDetalle={ventaDetalle} catalogo={catalogo} insumos={insumos} invSucursal={invSucursal} onImport={handleImportVentas} rol={rol}/>}
+      {view==="ventas"&&["admin","compras","sucursal","finanzas"].includes(rol)&&<VentasSRView productosVenta={productosVenta} setProductosVenta={setProductosVenta} productosInactivos={productosInactivos} setProductosInactivos={setProductosInactivos} recetas={recetas} setRecetas={setRecetas} ventas={ventas} ventaDetalle={ventaDetalle} catalogo={catalogo} insumos={insumos} invSucursal={invSucursal} onImport={handleImportVentas} rol={rol}/>}
+      {view==="recetario"&&["admin","compras","sucursal","finanzas"].includes(rol)&&<VentasSRView key="recetario" tabInicial="productos" productosVenta={productosVenta} setProductosVenta={setProductosVenta} productosInactivos={productosInactivos} setProductosInactivos={setProductosInactivos} recetas={recetas} setRecetas={setRecetas} ventas={ventas} ventaDetalle={ventaDetalle} catalogo={catalogo} insumos={insumos} invSucursal={invSucursal} onImport={handleImportVentas} rol={rol}/>}
       {view==="inv_sucursal"&&["admin","compras","sucursal"].includes(rol)&&<SucursalInvView invSucursal={invSucursal} setInvSucursal={setInvSucursal} movSucursal={movSucursal} setMovSucursal={setMovSucursal} mermas={mermas} setMermas={setMermas} catalogo={catalogo} insumos={insumos} sucursales={sucursales} rol={rol}/>}
       {view==="estados"&&["admin","compras","finanzas"].includes(rol)&&<EstadosView ventas={ventas} mermas={mermas} gastosOp={gastosOp} comprasDirectas={comprasDirectas} cxp={cxp} pagos={pagos} inventario={inventario} invSucursal={invSucursal} movSucursal={movSucursal} catalogo={catalogo}/>}
       {view==="gastos"&&["sucursal","admin","compras","finanzas"].includes(rol)&&<GastosView gastosOp={gastosOp} setGastosOp={setGastosOp} catGastos={catGastos} setCatGastos={setCatGastos} rol={rol}/>}
