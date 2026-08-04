@@ -30,12 +30,20 @@ const DB={
   inventario_almacen:[],lotes_almacen:[],movimientos_almacen:[],pedidos:[],pedido_detalle:[],
   pedido_proveedor_estatus:[],pedido_reasignaciones:[],recepciones:[],recepcion_detalle:[],
   cuentas_por_pagar:[],pagos:[],compras_directas:[],gastos_operativos:[],
-  productos_venta:[],recetas:[],inventario_sucursal:[],
+  // v7.16: dos productos DESACTIVADOS para probar los avisos. Uno tiene venta
+  // (aviso rojo: se sigue cobrando en el POS y no descuenta) y el otro no (aviso
+  // ámbar informativo).
+  productos_venta:[
+    {id:"pv-off-venta",codigo_sr:"24012",nombre:"WRAP BONELESS GRANDE",precio_venta:0,aplica_iva:true,activo:false,es_preparacion:false,rendimiento:1,grupo_sr:"PROD MENUS",sin_insumos:false},
+    {id:"pv-off-sinventa",codigo_sr:"24017",nombre:"WRAP BONELESS GRANDE",precio_venta:0,aplica_iva:true,activo:false,es_preparacion:false,rendimiento:1,grupo_sr:"PROD MENUS",sin_insumos:false},
+  ],
+  recetas:[],inventario_sucursal:[],
   // v7.14: venta vieja del conector (origen 'api') para verificar el aviso de
   // "conector callado". Va en 2020 a propósito: queda fuera de todos los
   // periodos del dashboard, así que no altera los KPIs del día ni del mes.
   ventas:[{id:"v-api-vieja",sucursal_id:"suc-1",fecha:"2020-01-01",folio:"TKT-VIEJO",origen:"api",canal:"mostrador",subtotal:0,iva:0,total:0,total_efectivo:0,total_tarjeta:0,total_plataforma:0,total_otros:0,costo_teorico:0,created_at:"2020-01-01T12:00:00.000Z"}],
-  venta_detalle:[],mermas:[],movimientos_sucursal:[],
+  venta_detalle:[{id:"vd-off",venta_id:"v-api-vieja",producto_venta_id:"pv-off-venta",cantidad:3,precio_unitario:0,importe:0,costo_teorico:0}],
+  mermas:[],movimientos_sucursal:[],
 };
 const DEFAULTS={
   productos_venta:{precio_venta:0,aplica_iva:true,activo:true,es_preparacion:false,rendimiento:1,unidad:null,categoria:null,codigo_sr:null},
@@ -274,7 +282,7 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   check("5.2 subtotal sin IVA $1,301.72",venta&&approx(parseFloat(venta.subtotal),1301.72),venta?.subtotal);
   check("5.2 formas de pago 710/800",venta&&venta.total_efectivo===710&&venta.total_tarjeta===800,[venta?.total_efectivo,venta?.total_tarjeta]);
   check("5.2 costo teórico $290.62 (incluye sub-receta)",venta&&approx(parseFloat(venta.costo_teorico),290.62,0.05),venta?.costo_teorico);
-  check("5.2 detalle: 2 líneas y JUGO99 auto-creado",DB.venta_detalle.length===2&&DB.productos_venta.some(p=>p.codigo_sr==="JUGO99"));
+  check("5.2 detalle: 2 líneas y JUGO99 auto-creado",DB.venta_detalle.filter(d=>d.venta_id===venta?.id).length===2&&DB.productos_venta.some(p=>p.codigo_sr==="JUGO99"));
   const exCrema=DB.inventario_sucursal.find(i=>i.insumo_id==="ins-crema")?.existencia;
   const exPollo=DB.inventario_sucursal.find(i=>i.insumo_id==="ins-pollo")?.existencia;
   const exJit=DB.inventario_sucursal.find(i=>i.insumo_id==="ins-jitomate")?.existencia;
@@ -285,6 +293,12 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
 
   console.log("\n== Parte 5b: marca 'no consume insumos' (v7.5) ==");
   check("5b.1 alarma roja: JUGO vendido sin receta",await page.getByText(/con ventas SIN receta/).isVisible());
+  // v7.16: avisos de producto desactivado
+  check("5b.1a aviso rojo: producto DESACTIVADO con ventas",await page.getByText(/DESACTIVADO con ventas/).isVisible());
+  check("5b.1b el aviso rojo trae la clave de SR",(await page.locator("body").innerText()).includes("clave SR 24012"));
+  check("5b.1c aviso ámbar: desactivado sin ventas",await page.getByText(/desactivado · sin ventas/).isVisible());
+  check("5b.1d el ámbar trae la otra clave de SR",(await page.locator("body").innerText()).includes("clave SR 24017"));
+  check("5b.1e aclara que desactivar no lo quita del POS",(await page.locator("body").innerText()).includes("no lo quita del POS"));
   await page.getByRole("button",{name:/Productos y recetas/}).click();
   await page.locator("tr",{hasText:"JUGO DE PRUEBA"}).getByRole("button",{name:"no consume",exact:true}).click();
   await page.waitForTimeout(500);
