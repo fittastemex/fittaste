@@ -160,3 +160,113 @@ Conviene saberlo antes para no perseguir fantasmas:
 
 Ninguno impide arrancar. Los puntos 3 y 4 son decisiones de cocina ya
 identificadas; el 5 es una mejora de reporte.
+
+---
+
+# Ejecución real — 2026-08-01 al 03
+
+## Lo que se hizo
+
+**Código.** PR #15 (v7.11 → v7.14) mergeado a `main`. Traía conflicto porque
+`main` ya tenía el squash de v7.10; se rebasó la rama sobre `main`. Los 3 checks
+pasaron y Vercel desplegó.
+
+**Esquema.** `v7_13_costeo_sin_iva` aplicada. Capital de almacén: $143,326.94 →
+**$127,108.77** (los $16,218.17 eran IVA acreditable contado como costo).
+
+**Recetario DEV → PROD.** Se usó la extensión `http` de Postgres para que
+producción leyera la API de DEV directamente, en lugar de relayar los datos por
+el chat: menos pasos y cero riesgo de transcripción. **La extensión se
+desinstaló al terminar** (verificado: `pg_extension` = 0).
+
+| | Antes | Después |
+|---|---:|---:|
+| `productos_venta` | 0 | 233 |
+| `recetas` | 0 | 890 |
+| `catalogo` | 225 | 230 |
+| `insumos` | 225 | 228 |
+| Recetas huérfanas | — | 0 |
+
+`costo_referencia` **no** se sincronizó desde DEV: producción tiene los precios
+de compra reales (p. ej. POLLO a $89/kg contra $130 de referencia). Sólo se
+sincronizó `contenido`, que es la conversión de unidad.
+
+**Conector.** Apuntado a producción el 01-ago. Recuperó del 7-jul al 3-ago:
+**1,497 tickets, $446,753.03**, 7,121 líneas y 33,968 movimientos de inventario.
+**0 productos creados por el conector** — encontró los 207 por `codigo_sr`, que
+era justo el riesgo de prenderlo antes de cargar el recetario.
+
+Sólo 2 huecos de folio (TKT-7114 y TKT-8077), uno suelto cada uno a media
+jornada: son cancelados o no pagados que SR excluye por su propio filtro, no
+fallos. Se sabe con certeza porque el `sync.js` de v7.14 **no puede** rebasar un
+ticket que falla, y avanzó hasta el 3-ago sin detenerse.
+
+## Tres defectos que aparecieron y se corrigieron
+
+**1. Costo de presentación guardado como costo por unidad base (sólo PROD).**
+`WHEY PROTEIN VAINILLA` a $344 el **gramo**, `BASE WAFFLE Y HOT CAKE` a
+$176.74/g y `TOTOPOS HORNEADOS` a $31/g. Por eso PROTEIN WAFFLES costaba $9,733
+y CHILAQUILES FIT $1,901 en el primer cálculo. Se dividieron entre su
+`contenido` para conservar el precio real de compra ($344/kg, no los $307 de
+referencia).
+
+**2. Insumos, nombres y unidades sin sincronizar.** La migración copió los 3
+insumos que faltaban pero no los campos de los que ya existían:
+
+- **19 insumos marcados inactivos** que las recetas usan → la app los pintaba
+  como `?` y el conector los dejaba en negativo sin nombre.
+- **`ENVACE 2 OZ`** seguía con el nombre viejo, usado por **24 recetas**; en DEV
+  se renombró a `VASO 2 OZ` en julio.
+- **26 insumos con la unidad equivocada**: `BROCOLI` en kg en vez de g,
+  `CHOCOLATE LÍQUIDO LIGHT` en galones en vez de ml, `PAPA CAMOTE` en piezas en
+  vez de gramos, `SALMON`, `ESPARRAGOS`, `JITOMATE CHERRY`. Como `contenido` ya
+  venía de DEV, producción quedó incoherente: "brócoli en kg, contenido 1000 kg
+  por presentación".
+
+Se sincronizó nombre y unidad desde DEV. `activo` se sincronizó **sólo en un
+sentido** (inactivo → activo): desactivar en producción podría esconder un
+insumo con existencia en almacén, y esa no es una decisión automatizable.
+
+**3. Presentaciones apagadas de insumos activos (los DOS entornos).** 21
+insumos activos cuya única presentación estaba desactivada — herencia de la
+limpieza de julio, que apagó el insumo *y* su presentación juntos; en julio se
+reactivaron los insumos y no las presentaciones.
+
+Consecuencia: no se podían **pedir** (la app filtra `catalogo` por `activo` al
+cargar) y el fallback de costo del catálogo no las veía. Costeaban bien sólo
+porque el `costo_promedio` de sucursal los cubría; al llegar uno a cero habría
+costeado $0 en silencio. El peor caso era `VASO 2 OZ`, en 24 recetas.
+
+Se reactivaron las 18 que alguna receta usa, en producción y en pruebas.
+Presentaciones activas: 153 → **171**. Insumos activos usados en recetas sin
+presentación activa: **0**.
+
+Quedaron apagadas 3 a propósito, ninguna usada en recetas:
+`AMINO (BCAA) PEPINO LIMON` (kg) porque es el duplicado pendiente de fusionar, y
+`PROTEIN COOKIE` y `COLAGENO FRUTOS ROJOS` porque son reventa y toca a dirección
+decidir si se van a pedir.
+
+## Estado del food cost
+
+Sobre los tickets donde **todas** las líneas son confiables: **28.0%** (78
+tickets, $15,943). En pruebas la misma medición daba 28.8%.
+
+El costo guardado suma $3,727,007 sobre $446,753 de venta, pero **el 96.4% de
+ese disparate viene de los 9 insumos bloqueados**. Reparto de la venta:
+confiable $141,944 · bloqueado $237,978 · sin receta $109,968.
+
+Cuando lleguen los tamaños de paquete hay que **recostear los 1,497 tickets**:
+el `costo_teorico` que se guardó en cada uno quedó con el costo malo, igual que
+pasó con julio en DEV.
+
+## Pendiente
+
+1. **Conteo físico de sucursal** — 92 insumos (`Conteo_Sucursal_PROD.xlsx`).
+   Sin él, esos insumos siguen en negativo.
+2. **Los 8 tamaños de paquete.** Con `SALSA WING` (ml de la botella de $500) y
+   `PULPA AGUACATE` (contenido del envase de $76) se desbloquea la mayor parte.
+3. **Recostear el histórico** una vez cerrado el punto 2.
+4. Cubiertos y empaque de bowls contados doble (decisión de cocina).
+5. El descuento de plataforma (~10% de Uber) no se muestra como descuento.
+6. El orden de presentaciones en pedidos ignora el IVA — hoy inocuo porque el
+   único insumo con dos presentaciones (`MIEL`) las tiene ambas gravadas.

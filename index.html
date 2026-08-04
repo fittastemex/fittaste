@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.14";
+const V="7.15";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -202,7 +202,7 @@ const PASSWORDS={
   proveedor:"prov2026",
   almacen:"almacen2026",
   finanzas:"finanzas2026",
-  fernanda:"fer2026fit" // acceso individual con permisos de admin (solo visible en DEV)
+  fernanda:"fer2026fit" // acceso individual con permisos de admin (v7.15: también en producción)
 };
 
 // ======================== LOGIN ========================
@@ -212,9 +212,11 @@ function LoginScreen({onLogin,provToken}){
   const [pass,setPass]=useState("");
   const [error,setError]=useState("");
   const roles=[{rol:"admin",label:"Admin / Dueño",desc:"Acceso total",icon:"★",color:"#e2a52a"},{rol:"compras",label:"Compras",desc:"Gestiona pedidos",icon:"◈",color:"#e2a52a"},{rol:"sucursal",label:"Sucursal",desc:"Crea pedidos",icon:"◉",color:"#bfcd3b"},{rol:"proveedor",label:"Proveedor",desc:"Captura precios",icon:"◇",color:"#d6816c"},{rol:"almacen",label:"Almacén",desc:"Inventario",icon:"◫",color:"#77b7b4"},{rol:"finanzas",label:"Finanzas",desc:"Cuentas por pagar",icon:"◎",color:"#d6816c"},
-    // v7.6: acceso individual para la implementación — solo aparece en DEV;
-    // entra con contraseña propia y permisos de admin
-    ...(ENV_ID==="dev"?[{rol:"fernanda",label:"Fernanda",desc:"Implementación — acceso total",icon:"✦",color:"#77b7b4"}]:[])];
+    // v7.6: acceso individual para la implementación, con contraseña propia y
+    // permisos de admin. v7.15: habilitado también en PRODUCCIÓN — Fernanda
+    // configura catálogo e insumos, que es un módulo solo de admin, y así no
+    // hace falta compartirle la contraseña de dirección.
+    {rol:"fernanda",label:"Fernanda",desc:"Configuración — acceso total",icon:"✦",color:"#77b7b4"}];
 
   const handleLogin=()=>{
     if(PASSWORDS[selected]===pass){setError("");onLogin(selected==="fernanda"?"admin":selected);}
