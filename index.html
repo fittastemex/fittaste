@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.16";
+const V="7.17";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -1111,6 +1111,11 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
   const [nIns,setNIns]=useState({nombre:"",unidad_base:"g",tipo_control:"inventariable",categoria_gasto:""});
   const [nInsExist,setNInsExist]=useState(null); // {id,nombre,unidad_base}
   const [nPres,setNPres]=useState({tipo_producto:"ABARROTES",articulo:"",unidad_clave:"pz",contenido:1,costo_referencia:0,proveedor_id:"",aplica_iva:true,notas:""});
+  // v7.17: el aviso del popup vive DENTRO del popup. Antes los errores del alta
+  // (falta proveedor, falta nombre, error del servidor) se escribían en el
+  // banner de la página, que queda TAPADO por el overlay del popup: se
+  // apretaba "Guardar", no pasaba nada visible y parecía que sí había guardado.
+  const [modalMsg,setModalMsg]=useState(null);
 
   const saveIns=async(x)=>{
     setSaving(true);
@@ -1283,25 +1288,29 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
     setNIns({nombre:"",unidad_base:"g",tipo_control:"inventariable",categoria_gasto:""});
     setNInsExist(null);
     setNPres({tipo_producto:"ABARROTES",articulo:"",unidad_clave:"pz",contenido:1,costo_referencia:0,proveedor_id:"",aplica_iva:true,notas:""});
+    setModalMsg(null);
     setModalOpen(true);
   };
   // v7.8: crea (insumo nuevo + presentación) o (solo presentación de un insumo existente)
   const guardarNuevo=async()=>{
-    if(nModo==="nuevo"&&!nIns.nombre.trim()){setMsg("Escribe el nombre del insumo");return;}
-    if(nModo==="existente"&&!nInsExist){setMsg("Elige el insumo existente");return;}
-    if(!nPres.articulo.trim()){setMsg("Escribe el nombre de la presentación de compra");return;}
-    if(!nPres.proveedor_id){setMsg("Elige el proveedor");return;}
+    if(nModo==="nuevo"&&!nIns.nombre.trim()){setModalMsg("Falta el nombre del insumo (paso 1).");return;}
+    if(nModo==="existente"&&!nInsExist){setModalMsg("Falta elegir el insumo existente (paso 1).");return;}
+    if(!nPres.articulo.trim()){setModalMsg("Falta el nombre de la presentación de compra (paso 2).");return;}
+    if(!nPres.proveedor_id){setModalMsg("Falta elegir el proveedor (paso 2). Sin proveedor no se puede guardar la presentación.");return;}
     const cont=parseFloat(nPres.contenido);
-    if(!(cont>0)){setMsg("El contenido debe ser mayor a 0");return;}
+    if(!(cont>0)){setModalMsg("El contenido debe ser mayor a 0 (paso 2): cuántos "+(nModo==="existente"?(nInsExist?.unidad_base||"unidades base"):nIns.unidad_base)+" trae el paquete.");return;}
     const unid=unidades.find(u=>u.clave===nPres.unidad_clave);
-    if(!unid){setMsg("Unidad de compra inválida");return;}
-    setSaving(true);setMsg(null);
+    if(!unid){setModalMsg("Unidad de compra inválida.");return;}
+    setSaving(true);setModalMsg(null);
     let insumoId,insumoObj,createdIns=false;
     if(nModo==="existente"){insumoId=nInsExist.id;insumoObj=insumos.find(i=>i.id===insumoId)||nInsExist;}
     else{
       const esGasto=nIns.tipo_control==="gasto";
-      const ins=await sbPost("insumos",{nombre:nIns.nombre.toUpperCase().trim(),unidad_base:nIns.unidad_base,tipo_control:nIns.tipo_control,categoria_gasto:esGasto?(nIns.categoria_gasto.trim()||"Insumos generales"):null});
-      if(!(ins&&ins[0])){setMsg("Error al crear el insumo (¿nombre repetido?)");setSaving(false);return;}
+      // v7.17: sbPostE en vez de sbPost para poder decir POR QUÉ falló en lugar
+      // de adivinar "¿nombre repetido?".
+      const insR=await sbPostE("insumos",{nombre:nIns.nombre.toUpperCase().trim(),unidad_base:nIns.unidad_base,tipo_control:nIns.tipo_control,categoria_gasto:esGasto?(nIns.categoria_gasto.trim()||"Insumos generales"):null,activo:true});
+      const ins=insR.data;
+      if(!(ins&&ins[0])){setModalMsg("No se pudo crear el insumo: "+(insR.error?.message||insR.error?.details||"causa desconocida"));setSaving(false);return;}
       insumoId=ins[0].id;insumoObj=ins[0];createdIns=true;
     }
     const{prefix,n}=await siguienteSkuReal(nPres.tipo_producto);
@@ -1320,11 +1329,12 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
       if(createdIns)setInsumos(prev=>[...prev,insumoObj]);
       setCatalogo([...catalogo,{id:res[0].id,sku,articulo:nPres.articulo.toUpperCase().trim(),tipo_producto:nPres.tipo_producto,unidad_clave:nPres.unidad_clave,costo_referencia:parseFloat(nPres.costo_referencia)||0,proveedor_id:nPres.proveedor_id,proveedor_nombre:prov?.nombre||"?",notas:nPres.notas,aplica_iva:nPres.aplica_iva,inv_id:res[0].inventario_almacen_id||null,insumo_id:insumoId,contenido:cont}]);
       setMsg(`${nPres.articulo.toUpperCase().trim()} agregada como ${sku} — insumo: ${insumoObj.nombre}`);
+      setModalMsg(null);
       setModalOpen(false);
     }else{
       if(createdIns)await sbDelete("insumos",insumoId);
       const det=lastErr?(lastErr.message||lastErr.details||JSON.stringify(lastErr)):"causa desconocida";
-      setMsg(`Error al agregar: ${det}`);
+      setModalMsg(`No se guardó nada. Error al agregar la presentación: ${det}`);
     }
     setSaving(false);
     setTimeout(()=>setMsg(null),6000);
@@ -1457,7 +1467,7 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
                 <button onClick={()=>setNModo("existente")} className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium border ${nModo==="existente"?"text-white border-transparent":"text-gray-600 border-gray-200 bg-white"}`} style={nModo==="existente"?{background:"#77b7b4"}:{}}>Insumo que ya existe</button>
               </div>
               {nModo==="nuevo"?<div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div className="col-span-2"><label className="text-xs text-gray-500 block mb-1">Nombre del insumo</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-teal-300 focus:outline-none" placeholder="EJ. MIEL DE AGAVE" value={nIns.nombre} onChange={e=>setNIns({...nIns,nombre:e.target.value})}/></div>
+                <div className="col-span-2"><label className="text-xs text-gray-500 block mb-1">Nombre del insumo <span className="text-red-500" title="Obligatorio">*</span></label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-teal-300 focus:outline-none" placeholder="EJ. MIEL DE AGAVE" value={nIns.nombre} onChange={e=>setNIns({...nIns,nombre:e.target.value})}/></div>
                 <div><label className="text-xs text-gray-500 block mb-1">Unidad base</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={nIns.unidad_base} onChange={e=>setNIns({...nIns,unidad_base:e.target.value})}>{["g","ml","pz","rebanada","kg","lt","paq","porcion"].map(u=><option key={u} value={u}>{u}</option>)}</select></div>
                 <div><label className="text-xs text-gray-500 block mb-1">Control</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={nIns.tipo_control} onChange={e=>setNIns({...nIns,tipo_control:e.target.value})}><option value="inventariable">Inventariable</option><option value="gasto">Gasto directo</option></select></div>
                 {nIns.tipo_control==="gasto"&&<div className="col-span-2"><label className="text-xs text-gray-500 block mb-1">Categoría de gasto</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Ej. Limpieza" value={nIns.categoria_gasto} onChange={e=>setNIns({...nIns,categoria_gasto:e.target.value})}/></div>}
@@ -1472,20 +1482,25 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
               <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">2 · La presentación de compra (cómo lo compras)</p>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div><label className="text-xs text-gray-500 block mb-1">Tipo <span className="text-amber-600">(define el SKU)</span></label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={nPres.tipo_producto} onChange={e=>setNPres({...nPres,tipo_producto:e.target.value})}>{Object.keys(prefixMap).map(t=><option key={t} value={t}>{t}</option>)}</select><p className="text-[11px] text-gray-400 mt-0.5">SKU: <b>{prefixMap[nPres.tipo_producto]}-…</b></p></div>
-                <div className="col-span-2"><label className="text-xs text-gray-500 block mb-1">Nombre de la presentación</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-amber-400 focus:outline-none" placeholder="EJ. MIEL DE AGAVE 25 KG" value={nPres.articulo} onChange={e=>setNPres({...nPres,articulo:e.target.value})}/></div>
+                <div className="col-span-2"><label className="text-xs text-gray-500 block mb-1">Nombre de la presentación <span className="text-red-500" title="Obligatorio">*</span></label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-amber-400 focus:outline-none" placeholder="EJ. MIEL DE AGAVE 25 KG" value={nPres.articulo} onChange={e=>setNPres({...nPres,articulo:e.target.value})}/></div>
                 <div><label className="text-xs text-gray-500 block mb-1">Unidad de compra</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={nPres.unidad_clave} onChange={e=>setNPres({...nPres,unidad_clave:e.target.value})}>{unidades.map(u=><option key={u.clave} value={u.clave}>{u.nombre} ({u.clave})</option>)}</select></div>
                 <div><label className="text-xs text-gray-500 block mb-1">Contenido <span className="text-gray-400">({baseU} por paquete)</span></label><input type="number" min="0" step="0.01" inputMode="decimal" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-amber-400 focus:outline-none" placeholder={`Ej. 25000`} value={nPres.contenido||""} onChange={e=>setNPres({...nPres,contenido:e.target.value})}/></div>
                 <div><label className="text-xs text-gray-500 block mb-1">Costo del paquete</label><input type="number" min="0" step="0.01" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-amber-400 focus:outline-none" value={nPres.costo_referencia||""} onChange={e=>setNPres({...nPres,costo_referencia:e.target.value})}/></div>
-                <div><label className="text-xs text-gray-500 block mb-1">Proveedor</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={nPres.proveedor_id} onChange={e=>setNPres({...nPres,proveedor_id:e.target.value})}><option value="">Seleccionar...</option>{proveedores.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}</select></div>
+                <div><label className="text-xs text-gray-500 block mb-1">Proveedor <span className="text-red-500" title="Obligatorio">*</span></label><select className={`w-full border rounded-lg px-3 py-1.5 text-sm ${nPres.proveedor_id?"border-gray-200":"border-red-300 bg-red-50"}`} value={nPres.proveedor_id} onChange={e=>setNPres({...nPres,proveedor_id:e.target.value})}><option value="">Seleccionar...</option>{proveedores.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}</select></div>
                 <div className="flex items-end"><label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none pb-1.5"><input type="checkbox" checked={nPres.aplica_iva} onChange={e=>setNPres({...nPres,aplica_iva:e.target.checked})} className="w-4 h-4"/> Aplica IVA (16%)</label></div>
                 <div className="col-span-2 md:col-span-4"><label className="text-xs text-gray-500 block mb-1">Notas (opcional)</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Opcional" value={nPres.notas} onChange={e=>setNPres({...nPres,notas:e.target.value})}/></div>
               </div>
               {cont>0&&(parseFloat(nPres.costo_referencia)||0)>0&&<div className="mt-3 rounded-lg px-3 py-2 text-sm" style={{background:"#e6f4f3",color:"#0e918b"}}>Costo por <b>{baseU}</b>: <b>{fmt(costoBase)}</b> · Al recibir 1 {nPres.unidad_clave} entran <b>{fmtQ(cont,baseU)}</b> al inventario.</div>}
             </div>
           </div>
-          <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-100">
-            <button onClick={()=>setModalOpen(false)} className="text-sm text-gray-500 hover:text-gray-700 px-4 py-2">Cancelar</button>
-            <Btn onClick={guardarNuevo} disabled={saving} color="purple">{saving?"Guardando...":"Guardar insumo + presentación"}</Btn>
+          <div className="border-t border-gray-100">
+            {/* v7.17: el aviso va AQUÍ, dentro del popup. El banner de la página
+                queda tapado por el overlay y los errores pasaban desapercibidos. */}
+            {modalMsg&&<div className="mx-5 mt-3 rounded-xl px-3 py-2.5 text-sm font-medium bg-red-50 text-red-800 border border-red-200">⚠ {modalMsg}</div>}
+            <div className="flex items-center justify-end gap-2 px-5 py-3">
+              <button onClick={()=>setModalOpen(false)} className="text-sm text-gray-500 hover:text-gray-700 px-4 py-2">Cancelar</button>
+              <Btn onClick={guardarNuevo} disabled={saving} color="purple">{saving?"Guardando...":"Guardar insumo + presentación"}</Btn>
+            </div>
           </div>
         </div>
       </div>);
