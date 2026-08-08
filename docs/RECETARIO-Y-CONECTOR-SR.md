@@ -617,3 +617,61 @@ $0.0254/ml).
 
 Entregable: `Ventas_Julio2026_FitTaste_DEV.xlsx` (6 hojas: resumen, día por día,
 top 25 productos, grupos, diagnóstico del food cost y los 8 bloqueadores).
+
+## 9. Alta de insumo que "no aparece" — 8-ago-2026 (v7.17)
+
+**Reporte:** Fernanda dio de alta el insumo `ALBUMINA DE HUEVO` con su
+presentación de compra y no le aparecía en el sistema.
+
+**Verificación:** el registro **no existe en ninguno de los dos entornos**. No
+es un problema de visibilidad ni de `activo=false` (que ya nos había mordido tres
+veces): nunca se escribió.
+
+```
+insumos  ilike '%albumin%'   → 0 filas en PROD y en DEV
+insumos  más recientes       → COMINO, 2026-08-01 18:50 (nada nuevo desde
+                               la migración del 1-ago)
+catalogo más reciente        → INS-COMINO / ABA-085, 2026-08-01 19:19
+```
+
+Descartado además: RLS está apagada en `insumos`, `catalogo` y `proveedores`
+(los INSERT del anon sí pasan); `insumos` no tiene UNIQUE en `nombre`; las
+columnas NOT NULL de las dos tablas son exactamente las que manda la app; y
+sólo existen dos proyectos Supabase, así que no se guardó "en otro lado".
+
+**Causa raíz — el aviso quedaba detrás del popup.** El popup de alta es
+`fixed inset-0 z-50` con un overlay negro al 45 %. Todos sus avisos se
+escribían con `setMsg(...)`, y ese banner se renderiza **en el cuerpo de la
+vista de Catálogo**, o sea *debajo* del overlay. Resultado:
+
+1. Faltaba el proveedor (es el único campo obligatorio sin valor por omisión:
+   arranca en `Seleccionar...`).
+2. `guardarNuevo` hacía `setMsg("Elige el proveedor"); return;` — antes incluso
+   de `setSaving(true)`, así que el botón no cambiaba a "Guardando...".
+3. El popup se quedaba abierto y **nada visible cambiaba**. Se interpreta como
+   guardado y se cierra con la ✕.
+
+El mismo camino silencioso aplicaba a los errores del servidor. Y como
+`guardarNuevo` borra el insumo cuando falla la presentación
+(`if(createdIns) await sbDelete("insumos", insumoId)`), un fallo en el segundo
+INSERT dejaba cero rastro — coherente con lo que se observó.
+
+**Corregido en v7.17:**
+
+* Aviso propio del popup (`modalMsg`), renderizado **dentro** del popup, arriba
+  de los botones, siempre en rojo. Los textos ahora dicen qué falta y en qué
+  paso: *"Falta elegir el proveedor (paso 2). Sin proveedor no se puede guardar
+  la presentación."*
+* El error del servidor ya no se adivina: el alta del insumo pasó de `sbPost` a
+  `sbPostE`, así que en lugar de `"Error al crear el insumo (¿nombre
+  repetido?)"` se ve el mensaje real de Postgres.
+* Cuando el alta falla se dice explícitamente **"No se guardó nada."**, porque
+  el rollback del insumo lo hace verdad.
+* Los tres campos obligatorios llevan `*` y el selector de proveedor se pinta
+  con borde rojo mientras esté vacío.
+
+**Regresión cubierta:** `herramientas/prueba-e2e/e2e-alta-insumo.js` (12
+verificaciones). La clave es la 5, que comprueba que el aviso esté dentro de
+`.fixed.inset-0.z-50`; con el código anterior falla. Ojo: la 4 (`isVisible`) no
+alcanza por sí sola — para Playwright un banner tapado por un overlay sigue
+siendo "visible".
