@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.17";
+const V="7.18";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -84,8 +84,18 @@ function origenCosto(insumoId,invSucursal,catalogo){
   if(!(cat>0)||(cp<=cat*1.2&&cp>=cat*0.8))return null;
   return {promedio:cp,catalogo:cat};
 }
-// v7.2: presentaciones de compra de un insumo, la más barata por unidad base primero
-function presentacionesDe(insumoId,catalogo){return (catalogo||[]).filter(c=>c.insumo_id===insumoId).sort((a,b)=>(parseFloat(a.costo_referencia)/(parseFloat(a.contenido)||1))-(parseFloat(b.costo_referencia)/(parseFloat(b.contenido)||1)));}
+// v7.2: presentaciones de compra de un insumo.
+// v7.18: la PREFERIDA va primero; el resto sigue ordenado por costo por unidad
+// base. Antes ganaba siempre la más barata por unidad base, y en los dos únicos
+// insumos con varias presentaciones ésa resultó ser justo la que nunca se
+// compra (claras litro: 0 pedidos vs galón: 35; miel 25 kg: 0 vs 1 kg: 4).
+// El tambo de miel de 25 kg sí es 14% más barato por gramo — pero nadie quiere
+// 25 kg de miel en una sucursal. Es criterio humano, no cálculo.
+function presentacionesDe(insumoId,catalogo){
+  const cu=(c)=>parseFloat(c.costo_referencia)/(parseFloat(c.contenido)||1);
+  return (catalogo||[]).filter(c=>c.insumo_id===insumoId)
+    .sort((a,b)=>(b.preferida?1:0)-(a.preferida?1:0)||cu(a)-cu(b));
+}
 // v7.1: costo teórico de un producto de venta (platillo SR) explotando su receta.
 // Una línea puede ser un insumo del catálogo o una PREPARACIÓN (sub-receta): en
 // ese caso el costo unitario es el costo de su tanda entre su rendimiento.
@@ -324,7 +334,7 @@ function CrearPedido({catalogo,proveedores,insumos,invSucursal,onSave,onCancel})
     if(!p)return null;
     const cont=parseFloat(p.contenido)||1;
     const unidades=cont===1?row.qty:Math.ceil(row.qty/cont);
-    return{pres:p,unidades,base:unidades*cont,subtotal:unidades*p.costo_referencia};
+    return{pres:p,unidades,base:unidades*cont,subtotal:unidades*p.costo_referencia,qtyBase:row.qty};
   };
   const lineas=pedibles.map(i=>({ins:i,calc:lineaCalc(i)})).filter(l=>l.calc);
   const totalTeo=lineas.reduce((s,l)=>s+l.calc.subtotal,0);
@@ -333,7 +343,10 @@ function CrearPedido({catalogo,proveedores,insumos,invSucursal,onSave,onCancel})
   const handleSave=async()=>{
     if(count===0||saving)return;
     setSaving(true);
-    const items=lineas.map(l=>({catalogo_id:l.calc.pres.id,proveedor_id:l.calc.pres.proveedor_id,cantidad:l.calc.unidades,costo_referencia:l.calc.pres.costo_referencia}));
+    // v7.18: se guarda TAMBIÉN la cantidad en unidad base (la necesidad real).
+    // Sin ella, compras no tiene desde dónde recalcular si cambia el envase:
+    // sólo vería "2 galones" y no sabría si se pedían 4,000 o 7,600 ml.
+    const items=lineas.map(l=>({catalogo_id:l.calc.pres.id,proveedor_id:l.calc.pres.proveedor_id,cantidad:l.calc.unidades,costo_referencia:l.calc.pres.costo_referencia,cantidad_base:l.calc.qtyBase}));
     await onSave(items,totalTeo);
     setPedido({});
     setSaving(false);
@@ -372,7 +385,7 @@ function CrearPedido({catalogo,proveedores,insumos,invSucursal,onSave,onCancel})
 }
 
 // ======================== DETALLE PEDIDO (COMPRAS) ========================
-function DetallePedido({pedido:ped,detalle,catalogo,proveedores,provEstatus,onBack,onAction,onReasignar,onUpdatePrecio,onUpdateCantidad,onAddItem,rol,recepciones}){
+function DetallePedido({pedido:ped,detalle,catalogo,proveedores,provEstatus,onBack,onAction,onReasignar,onUpdatePrecio,onUpdateCantidad,onAddItem,onCambiarPresentacion,insumos,rol,recepciones}){
   const [addingTo,setAddingTo]=useState(null);
   const [addProduct,setAddProduct]=useState("");
   const [addQty,setAddQty]=useState(0);
@@ -443,12 +456,35 @@ function DetallePedido({pedido:ped,detalle,catalogo,proveedores,provEstatus,onBa
         </div>
         {flujo==="Commodity"&&est==="enviado"&&linkProv&&<div className="px-4 py-2 bg-amber-50 border-b border-amber-100 text-xs text-amber-800">Link: <span className="font-mono text-amber-900 select-all">{linkProv}</span></div>}
         <table className="w-full text-sm"><thead><tr className="border-b border-gray-100">
-          {["Artículo","Cant",isCompras?"Proveedor":"","Ref","Real","Desv.","Total"].filter(Boolean).map(h=><th key={h} className={`px-3 py-2 font-medium text-gray-500 text-xs ${h==="Cant"?"text-center":h==="Proveedor"?"text-left":h!=="Artículo"?"text-right":"text-left"}`}>{h}</th>)}
+          {["Artículo",isCompras?"Presentación":"","Cant",isCompras?"Proveedor":"","Ref","Real","Desv.","Total"].filter(Boolean).map(h=><th key={h} className={`px-3 py-2 font-medium text-gray-500 text-xs ${h==="Cant"?"text-center":(h==="Proveedor"||h==="Presentación")?"text-left":h!=="Artículo"?"text-right":"text-left"}`}>{h}</th>)}
         </tr></thead><tbody>{items.map(d=>{
           const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};
           const diff=d.costo_real?((d.costo_real-d.costo_referencia)/d.costo_referencia*100):null;
+          // v7.18: otras presentaciones del MISMO insumo, sin importar el proveedor.
+          const ins=(insumos||[]).find(x=>x.id===cat.insumo_id);
+          const opciones=cat.insumo_id?presentacionesDe(cat.insumo_id,catalogo):[];
+          const baseEstimada=!(parseFloat(d.cantidad_base)>0);
+          const base=baseEstimada?(parseFloat(d.cantidad)||0)*(parseFloat(cat.contenido)||1):parseFloat(d.cantidad_base);
           return(<tr key={d.id} className="border-t border-gray-50">
-            <td className="px-3 py-2 font-medium text-gray-800">{cat.articulo||"?"} <span className="text-gray-400 text-xs">{cat.unidad_clave}</span></td>
+            <td className="px-3 py-2 font-medium text-gray-800">{cat.articulo||"?"} <span className="text-gray-400 text-xs">{cat.unidad_clave}</span>
+              {isCompras&&ins&&<div className={`text-xs mt-0.5 ${baseEstimada?"text-amber-600":"text-gray-400"}`}>Sucursal pidió {fmtQ(base,ins.unidad_base)}{baseEstimada?" (estimado — pedido anterior a v7.18)":""}</div>}</td>
+            {isCompras&&<td className="px-3 py-2">
+              {opciones.length>1?<select className="text-xs border border-gray-200 rounded px-1 py-0.5 max-w-52" value={d.catalogo_id} onChange={e=>{
+                const nueva=catalogo.find(c=>c.id===e.target.value);
+                if(!nueva)return;
+                const cambiaProv=nueva.proveedor_id&&nueva.proveedor_id!==d.proveedor_id;
+                const yaVisto=est==="enviado"||est==="completo";
+                const avisos=[];
+                if(yaVisto)avisos.push(`${nombre} ya recibió este pedido y pudo haberlo cotizado o surtido.`);
+                if(cambiaProv)avisos.push(`Esto también mueve la línea de ${nombre} a ${nueva.proveedor_nombre}.`);
+                const cont=parseFloat(nueva.contenido)||1;
+                const uds=cont===1?base:Math.ceil(base/cont);
+                avisos.push(`Quedaría en ${uds} × ${nueva.articulo}${ins?` = ${fmtQ(uds*cont,ins.unidad_base)}`:""}.`);
+                if(!confirm(avisos.join("\n\n")))return;
+                onCambiarPresentacion(d.id,e.target.value);
+              }}>{opciones.map(o=><option key={o.id} value={o.id}>{o.preferida?"★ ":""}{o.articulo} · {o.proveedor_nombre}</option>)}</select>
+              :<span className="text-xs text-gray-400">única</span>}
+            </td>}
             <td className="px-3 py-2 text-center">{isCompras?<input type="number" min="0" step={cat.unidad_clave==="kg"?"0.25":"1"} className="w-20 text-center border border-gray-200 rounded px-1 py-0.5 text-sm focus:ring-2 focus:ring-amber-400" value={d.cantidad} onChange={e=>onUpdateCantidad(d.id,parseFloat(e.target.value)||0)}/>:<span className="text-gray-600">{cat.unidad_clave==="kg"?fmtQ(d.cantidad,"kg"):d.cantidad}</span>}</td>
             {isCompras&&<td className="px-3 py-2"><select className="text-xs border border-gray-200 rounded px-1 py-0.5" value={d.proveedor_id} onChange={e=>onReasignar(d.id,e.target.value)}>{proveedores.map(pr=><option key={pr.id} value={pr.id}>{pr.nombre}</option>)}</select></td>}
             <td className="px-3 py-2 text-right text-gray-400">{fmt(d.costo_referencia)}</td>
@@ -1126,6 +1162,25 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
     setEditingIns(null);setSaving(false);
     setTimeout(()=>setMsg(null),3000);
   };
+  // v7.18: marca esta presentación como la preferida del insumo — la que se
+  // sugiere a sucursal por omisión. Hay un índice único de una preferida por
+  // insumo, así que primero se apaga la anterior y luego se prende la nueva.
+  const togglePreferida=async(p)=>{
+    if(!p.insumo_id||p.preferida)return;
+    setSaving(true);
+    const hermanas=catalogo.filter(c=>c.insumo_id===p.insumo_id&&c.preferida&&c.id!==p.id);
+    for(const h of hermanas)await sbPatch("catalogo",h.id,{preferida:false});
+    const r=await sbPatchE("catalogo",p.id,{preferida:true});
+    if(r.error){
+      setMsg("No se pudo marcar como preferida: "+(r.error.message||"error desconocido"));
+      for(const h of hermanas)await sbPatch("catalogo",h.id,{preferida:true});
+    }else{
+      setCatalogo(catalogo.map(c=>c.insumo_id===p.insumo_id?{...c,preferida:c.id===p.id}:c));
+      setMsg(`${p.articulo} es ahora la presentación sugerida a sucursal`);
+    }
+    setSaving(false);
+    setTimeout(()=>setMsg(null),4000);
+  };
   const delIns=async(x)=>{
     const nPres=catalogo.filter(c=>c.insumo_id===x.id).length;
     if(nPres>0){alert(`"${x.nombre}" tiene ${nPres} presentación(es) en el catálogo — apunta esos productos a otro insumo primero.`);return;}
@@ -1158,7 +1213,15 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
       await sbDeleteWhere("lotes_almacen",`inventario_id=eq.${hasInv}`);
       await sbDelete("inventario_almacen",hasInv);
     }
-    setCatalogo(catalogo.filter(c=>c.id!==p.id));
+    // v7.18: si la que se va era la preferida, se hereda a otra hermana. Si no,
+    // el insumo se queda sin default y vuelve callado a "la más barata por
+    // unidad base", que es justo el criterio que estamos corrigiendo.
+    let resto=catalogo.filter(c=>c.id!==p.id);
+    if(p.preferida&&p.insumo_id){
+      const heredera=resto.find(c=>c.insumo_id===p.insumo_id);
+      if(heredera){await sbPatch("catalogo",heredera.id,{preferida:true});resto=resto.map(c=>c.id===heredera.id?{...c,preferida:true}:c);}
+    }
+    setCatalogo(resto);
     setMsg(`${p.articulo} eliminado${hasInv?" (catálogo + almacén)":""}`);
     setSaving(false);
     setTimeout(()=>setMsg(null),3000);
@@ -1317,7 +1380,10 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
     let sku=`${prefix}-${String(n).padStart(3,"0")}`;
     let res=null,lastErr=null;
     for(let i=0;i<25;i++){
-      const data={sku,articulo:nPres.articulo.toUpperCase().trim(),tipo_producto:nPres.tipo_producto,unidad_id:unid.id,costo_referencia:parseFloat(nPres.costo_referencia)||0,proveedor_id:nPres.proveedor_id,notas:nPres.notas||null,activo:true,insumo_id:insumoId,contenido:cont,aplica_iva:nPres.aplica_iva};
+      // v7.18: la primera presentación de un insumo nace preferida. Las
+      // siguientes no, para no robarle el default a la que ya se compra.
+      const esPrimera=!catalogo.some(c=>c.insumo_id===insumoId);
+      const data={sku,articulo:nPres.articulo.toUpperCase().trim(),tipo_producto:nPres.tipo_producto,unidad_id:unid.id,costo_referencia:parseFloat(nPres.costo_referencia)||0,proveedor_id:nPres.proveedor_id,notas:nPres.notas||null,activo:true,insumo_id:insumoId,contenido:cont,aplica_iva:nPres.aplica_iva,preferida:esPrimera};
       const r=await sbPostE("catalogo",data);
       if(r.data&&r.data[0]){res=r.data;break;}
       lastErr=r.error;
@@ -1327,7 +1393,7 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
     if(res&&res[0]){
       const prov=proveedores.find(pr=>pr.id===nPres.proveedor_id);
       if(createdIns)setInsumos(prev=>[...prev,insumoObj]);
-      setCatalogo([...catalogo,{id:res[0].id,sku,articulo:nPres.articulo.toUpperCase().trim(),tipo_producto:nPres.tipo_producto,unidad_clave:nPres.unidad_clave,costo_referencia:parseFloat(nPres.costo_referencia)||0,proveedor_id:nPres.proveedor_id,proveedor_nombre:prov?.nombre||"?",notas:nPres.notas,aplica_iva:nPres.aplica_iva,inv_id:res[0].inventario_almacen_id||null,insumo_id:insumoId,contenido:cont}]);
+      setCatalogo([...catalogo,{id:res[0].id,sku,articulo:nPres.articulo.toUpperCase().trim(),tipo_producto:nPres.tipo_producto,unidad_clave:nPres.unidad_clave,costo_referencia:parseFloat(nPres.costo_referencia)||0,proveedor_id:nPres.proveedor_id,proveedor_nombre:prov?.nombre||"?",notas:nPres.notas,aplica_iva:nPres.aplica_iva,inv_id:res[0].inventario_almacen_id||null,insumo_id:insumoId,contenido:cont,preferida:res[0].preferida===true}]);
       setMsg(`${nPres.articulo.toUpperCase().trim()} agregada como ${sku} — insumo: ${insumoObj.nombre}`);
       setModalMsg(null);
       setModalOpen(false);
@@ -1378,7 +1444,14 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
           <td className="px-3 py-2">{isEditing?<select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.unidad_clave} onChange={e=>setEditData({...editData,unidad_clave:e.target.value})}>{unidades.map(u=><option key={u.clave} value={u.clave}>{u.clave}</option>)}</select>:<span className="text-gray-600">{p.unidad_clave}</span>}</td>
           <td className="px-3 py-2 text-right">{isEditing?<input type="number" step="0.01" className="w-24 text-right border border-amber-300 rounded px-1 py-0.5 text-sm bg-amber-50 focus:ring-2 focus:ring-amber-400" value={editData.costo_referencia} onChange={e=>setEditData({...editData,costo_referencia:parseFloat(e.target.value)||0})}/>:<span className="font-semibold text-gray-800">{fmt(p.costo_referencia)}</span>}</td>
           <td className="px-3 py-2 text-center">{isEditing?<label className="flex items-center justify-center gap-1 cursor-pointer"><input type="checkbox" checked={editData.aplica_iva} onChange={e=>setEditData({...editData,aplica_iva:e.target.checked})} className="w-4 h-4 rounded border-amber-300 text-amber-500 focus:ring-amber-400"/><span className="text-xs">{editData.aplica_iva?"Sí":"No"}</span></label>:p.aplica_iva?<span className="text-xs text-gray-500">16%</span>:<span className="text-xs text-emerald-600 font-semibold">Exento</span>}</td>
-          <td className="px-3 py-2">{isEditing?<div className="flex gap-1 items-center"><select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" style={{maxWidth:"110px"}} value={editData.insumo_id||""} onChange={e=>setEditData({...editData,insumo_id:e.target.value})}><option value="">Sin insumo</option>{insumos.map(x=><option key={x.id} value={x.id}>{x.nombre}</option>)}</select><span className="text-xs text-gray-400">×</span><input type="number" min="0" step="0.01" className="w-16 border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50 text-right" title="Contenido: unidades base por unidad de compra" value={editData.contenido} onChange={e=>setEditData({...editData,contenido:e.target.value})}/></div>:(()=>{const ins=insumos.find(x=>x.id===p.insumo_id);return ins?<span className="text-xs text-gray-600">{ins.nombre} <span className="text-teal-600 font-semibold">×{p.contenido} {ins.unidad_base}</span>{ins.tipo_control==="gasto"&&<Badge v="default">gasto</Badge>}</span>:<span className="text-xs text-red-500 font-medium">sin insumo</span>;})()}</td>
+          <td className="px-3 py-2">{isEditing?<div className="flex gap-1 items-center"><select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" style={{maxWidth:"110px"}} value={editData.insumo_id||""} onChange={e=>setEditData({...editData,insumo_id:e.target.value})}><option value="">Sin insumo</option>{insumos.map(x=><option key={x.id} value={x.id}>{x.nombre}</option>)}</select><span className="text-xs text-gray-400">×</span><input type="number" min="0" step="0.01" className="w-16 border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50 text-right" title="Contenido: unidades base por unidad de compra" value={editData.contenido} onChange={e=>setEditData({...editData,contenido:e.target.value})}/></div>:(()=>{const ins=insumos.find(x=>x.id===p.insumo_id);if(!ins)return<span className="text-xs text-red-500 font-medium">sin insumo</span>;
+            // v7.18: la estrella sólo tiene sentido cuando el insumo tiene varias
+            // presentaciones; con una sola es preferida por definición.
+            const varias=catalogo.filter(c=>c.insumo_id===p.insumo_id).length>1;
+            return<span className="text-xs text-gray-600">{ins.nombre} <span className="text-teal-600 font-semibold">×{p.contenido} {ins.unidad_base}</span>{ins.tipo_control==="gasto"&&<Badge v="default">gasto</Badge>}
+              {varias&&(p.preferida
+                ? <span className="ml-1 text-amber-500 font-bold" title="Presentación sugerida a sucursal por omisión">★</span>
+                : <button onClick={()=>togglePreferida(p)} disabled={saving} className="ml-1 text-gray-300 hover:text-amber-500" title="Marcar como la presentación sugerida a sucursal">☆</button>)}</span>;})()}</td>
           <td className="px-3 py-2">{isEditing?<select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.proveedor_id} onChange={e=>setEditData({...editData,proveedor_id:e.target.value})}>{proveedores.map(pr=><option key={pr.id} value={pr.id}>{pr.nombre}</option>)}</select>:<span className="text-gray-600 text-xs">{p.proveedor_nombre}</span>}</td>
           <td className="px-3 py-2">{isEditing?<select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.inv_id||""} onChange={e=>setEditData({...editData,inv_id:e.target.value||null})}><option value="">Sin vincular</option>{inventario.map(i=><option key={i.id} value={i.id}>{i.descripcion} ({i.unidad_clave})</option>)}</select>:p.inv_id?<span className="text-xs text-teal-600 font-medium">{inventario.find(i=>i.id===p.inv_id)?.descripcion||"Vinculado"}</span>:<span className="text-xs text-gray-400">—</span>}</td>
           <td className="px-3 py-2">{isEditing?<input className="w-full border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.notas} onChange={e=>setEditData({...editData,notas:e.target.value})}/>:<span className="text-gray-400 text-xs">{p.notas||""}</span>}</td>
@@ -2928,7 +3001,7 @@ function App(){
       const pMap={};(results.proveedores||[]).forEach(p=>{pMap[p.id]=p;});
       const fMap={};(results.tipos_flujo_costo||[]).forEach(f=>{fMap[f.id]=f;});
 
-      setCatalogo((results.catalogo||[]).filter(c=>c.activo!==false).map(c=>({id:c.id,sku:c.sku,articulo:c.articulo,tipo_producto:c.tipo_producto,unidad_clave:uMap[c.unidad_id]?.clave||"?",costo_referencia:parseFloat(c.costo_referencia)||0,proveedor_id:c.proveedor_id,proveedor_nombre:pMap[c.proveedor_id]?.nombre||"?",notas:c.notas,aplica_iva:c.aplica_iva!==false,inv_id:c.inventario_almacen_id,insumo_id:c.insumo_id,contenido:parseFloat(c.contenido)||1})));
+      setCatalogo((results.catalogo||[]).filter(c=>c.activo!==false).map(c=>({id:c.id,sku:c.sku,articulo:c.articulo,tipo_producto:c.tipo_producto,unidad_clave:uMap[c.unidad_id]?.clave||"?",costo_referencia:parseFloat(c.costo_referencia)||0,proveedor_id:c.proveedor_id,proveedor_nombre:pMap[c.proveedor_id]?.nombre||"?",notas:c.notas,aplica_iva:c.aplica_iva!==false,inv_id:c.inventario_almacen_id,insumo_id:c.insumo_id,contenido:parseFloat(c.contenido)||1,preferida:c.preferida===true})));
       setProveedores((results.proveedores||[]).filter(p=>p.activo!==false).map(p=>{const fl=fMap[p.tipo_flujo_id]||{};return{id:p.id,nombre:p.nombre,tipo_flujo:fl.nombre||"?",quien_captura:fl.quien_captura_precio||"?"};}));
       setInventario((results.inventario_almacen||[]).map(i=>({id:i.id,sku:i.sku,descripcion:i.descripcion,unidad_clave:uMap[i.unidad_id]?.clave||"?",existencia:parseFloat(i.existencia)||0,costo_unitario_actual:parseFloat(i.costo_unitario_actual)||0,lead_time:i.lead_time,activo:i.activo!==false,variante_de:i.variante_de||null})));
       setPedidos((results.pedidos||[]).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)));
@@ -2972,7 +3045,7 @@ function App(){
     // Insertar TODAS las líneas en una sola operación para poder detectar fallos.
     // Antes se insertaban una por una ignorando errores, lo que dejaba pedidos
     // "fantasma" (con estatus pero sin productos) cuando el guardado fallaba.
-    const detRows=items.map(item=>({pedido_id:pedId,catalogo_id:item.catalogo_id,proveedor_id:item.proveedor_id,cantidad:item.cantidad,costo_referencia:item.costo_referencia}));
+    const detRows=items.map(item=>({pedido_id:pedId,catalogo_id:item.catalogo_id,proveedor_id:item.proveedor_id,cantidad:item.cantidad,costo_referencia:item.costo_referencia,cantidad_base:item.cantidad_base??null}));
     const detRes=await sbPost("pedido_detalle",detRows);
     if(!Array.isArray(detRes)||detRes.length!==detRows.length){
       // Falló el guardado de los productos: revertir el pedido para no dejarlo vacío.
@@ -3058,6 +3131,50 @@ function App(){
     // Ensure new provider has estatus
     const existsPE=provEstatus.find(pe=>pe.pedido_id===det.pedido_id&&pe.proveedor_id===nuevoProvId);
     if(!existsPE){const newPE=await sbPost("pedido_proveedor_estatus",{pedido_id:det.pedido_id,proveedor_id:nuevoProvId,estatus:"pendiente"});if(newPE&&newPE[0])setProvEstatus(prev=>[...prev,newPE[0]]);}
+  };
+
+  // v7.18: compras cambia la presentación de compra de una línea.
+  // Recalcula desde cantidad_base (la NECESIDAD), no desde el volumen que iba a
+  // llegar: el excedente del envase anterior es artefacto del empaque. Si la
+  // presentación nueva es de otro proveedor, mueve la línea reusando la misma
+  // mecánica de handleReasignar (estatus por proveedor + bitácora), porque un
+  // simple PATCH al catalogo_id dejaría estatus huérfanos y el pedido se le
+  // aparecería al proveedor equivocado en su link.
+  const handleCambiarPresentacion=async(detalleId,nuevoCatId)=>{
+    const det=pedidoDetalle.find(d=>d.id===detalleId);
+    const nueva=catalogo.find(c=>c.id===nuevoCatId);
+    if(!det||!nueva||det.catalogo_id===nuevoCatId)return;
+    const vieja=catalogo.find(c=>c.id===det.catalogo_id)||{};
+    // Pedidos anteriores a v7.18 no traen cantidad_base: se estima con lo que
+    // iba a llegar. Es una estimación, y la pantalla lo dice.
+    const base=parseFloat(det.cantidad_base)>0
+      ? parseFloat(det.cantidad_base)
+      : (parseFloat(det.cantidad)||0)*(parseFloat(vieja.contenido)||1);
+    const cont=parseFloat(nueva.contenido)||1;
+    const unidades=cont===1?base:Math.ceil(base/cont);
+    if(!(unidades>0)){alert("No se pudo recalcular la cantidad para esa presentación.");return;}
+    const provNuevo=nueva.proveedor_id;
+    const provViejo=det.proveedor_id;
+    const cambiaProv=provNuevo&&provNuevo!==provViejo;
+    const r=await sbPatchE("pedido_detalle",detalleId,{catalogo_id:nuevoCatId,cantidad:unidades,costo_referencia:nueva.costo_referencia,costo_real:null,proveedor_id:provNuevo||provViejo});
+    if(r.error){alert("No se pudo cambiar la presentación: "+(r.error.message||"error desconocido"));return;}
+    await sbPost("pedido_presentacion_cambios",{pedido_detalle_id:detalleId,pedido_id:det.pedido_id,catalogo_original_id:det.catalogo_id,catalogo_nuevo_id:nuevoCatId,cantidad_original:det.cantidad,cantidad_nueva:unidades,cantidad_base:base,cambio_proveedor:!!cambiaProv,cambiado_por:rol});
+    const upd=pedidoDetalle.map(d=>d.id===detalleId?{...d,catalogo_id:nuevoCatId,cantidad:unidades,costo_referencia:nueva.costo_referencia,costo_real:null,proveedor_id:provNuevo||provViejo}:d);
+    setPedidoDetalle(upd);
+    if(cambiaProv){
+      await sbPost("pedido_reasignaciones",{pedido_detalle_id:detalleId,pedido_id:det.pedido_id,proveedor_original_id:provViejo,proveedor_nuevo_id:provNuevo,motivo:"Cambio de presentación de compra"});
+      const quedan=upd.filter(d=>d.pedido_id===det.pedido_id&&d.proveedor_id===provViejo);
+      if(quedan.length===0){
+        const huerfano=provEstatus.find(pe=>pe.pedido_id===det.pedido_id&&pe.proveedor_id===provViejo);
+        if(huerfano){await sbDelete("pedido_proveedor_estatus",huerfano.id);setProvEstatus(provEstatus.filter(pe=>pe.id!==huerfano.id));}
+      }
+      const existe=provEstatus.find(pe=>pe.pedido_id===det.pedido_id&&pe.proveedor_id===provNuevo);
+      if(!existe){const nuevoPE=await sbPost("pedido_proveedor_estatus",{pedido_id:det.pedido_id,proveedor_id:provNuevo,estatus:"pendiente"});if(nuevoPE&&nuevoPE[0])setProvEstatus(prev=>[...prev,nuevoPE[0]]);}
+    }
+    // El total teórico del pedido se recalcula: si no, el costo teórico miente.
+    const teo=upd.filter(d=>d.pedido_id===det.pedido_id).reduce((s,d)=>s+(parseFloat(d.cantidad)||0)*(parseFloat(d.costo_referencia)||0),0);
+    await sbPatch("pedidos",det.pedido_id,{total_teorico:Math.round(teo*100)/100});
+    setPedidos(prev=>prev.map(p=>p.id===det.pedido_id?{...p,total_teorico:Math.round(teo*100)/100}:p));
   };
 
   const handleUpdatePrecio=async(detalleId,precio)=>{
@@ -3412,8 +3529,8 @@ function App(){
     <div className="max-w-6xl mx-auto px-4 py-6">
       {view==="bandeja"&&!selectedPedido&&subview!=="crear"&&<BandejaPedidos pedidos={pedidos} rol={rol} onSelect={p=>{setSelectedPedido(p);}} onNew={()=>setSubview("crear")} pedidoDetalle={pedidoDetalle} proveedores={proveedores} provEstatus={provEstatus} onDelete={handleDeletePedido} recepciones={recepciones}/>}
       {view==="bandeja"&&subview==="crear"&&<CrearPedido catalogo={catalogo} proveedores={proveedores} insumos={insumos} invSucursal={invSucursal} onSave={handleCreatePedido} onCancel={()=>setSubview(null)}/>}
-      {view==="bandeja"&&selectedPedido&&["admin","compras"].includes(rol)&&<DetallePedido pedido={selectedPedido} detalle={currentDetalle} catalogo={catalogo} proveedores={proveedores} provEstatus={currentProvEst} onBack={()=>setSelectedPedido(null)} onAction={handleAction} onReasignar={handleReasignar} onUpdatePrecio={handleUpdatePrecio} onUpdateCantidad={handleUpdateCantidad} onAddItem={handleAddItem} rol={rol} recepciones={recepciones}/>}
-      {view==="bandeja"&&selectedPedido&&rol==="sucursal"&&<DetallePedido pedido={selectedPedido} detalle={currentDetalle} catalogo={catalogo} proveedores={proveedores} provEstatus={currentProvEst} onBack={()=>setSelectedPedido(null)} onAction={()=>{}} onReasignar={()=>{}} onUpdatePrecio={()=>{}} onUpdateCantidad={()=>{}} onAddItem={()=>{}} rol={rol} recepciones={recepciones}/>}
+      {view==="bandeja"&&selectedPedido&&["admin","compras"].includes(rol)&&<DetallePedido pedido={selectedPedido} detalle={currentDetalle} catalogo={catalogo} proveedores={proveedores} provEstatus={currentProvEst} onBack={()=>setSelectedPedido(null)} onAction={handleAction} onReasignar={handleReasignar} onUpdatePrecio={handleUpdatePrecio} onUpdateCantidad={handleUpdateCantidad} onAddItem={handleAddItem} onCambiarPresentacion={handleCambiarPresentacion} insumos={insumos} rol={rol} recepciones={recepciones}/>}
+      {view==="bandeja"&&selectedPedido&&rol==="sucursal"&&<DetallePedido pedido={selectedPedido} detalle={currentDetalle} catalogo={catalogo} proveedores={proveedores} provEstatus={currentProvEst} onBack={()=>setSelectedPedido(null)} onAction={()=>{}} onReasignar={()=>{}} onUpdatePrecio={()=>{}} onUpdateCantidad={()=>{}} onAddItem={()=>{}} onCambiarPresentacion={()=>{}} insumos={insumos} rol={rol} recepciones={recepciones}/>}
       {view==="bandeja"&&selectedPedido&&rol==="proveedor"&&(()=>{
         const jcProv=proveedores.find(p=>p.nombre==="Juan Carlos Botello");
         const provDet=currentDetalle.filter(d=>d.proveedor_id===jcProv?.id);

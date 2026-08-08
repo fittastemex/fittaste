@@ -675,3 +675,106 @@ verificaciones). La clave es la 5, que comprueba que el aviso esté dentro de
 `.fixed.inset-0.z-50`; con el código anterior falla. Ojo: la 4 (`isVisible`) no
 alcanza por sí sola — para Playwright un banner tapado por un overlay sigue
 siendo "visible".
+
+## 10. Sucursal declara la necesidad, compras decide la presentación (v7.18)
+
+**Decisión de dirección (2026-08-08):** sucursal sigue pidiendo en unidad de
+consumo y viendo una presentación sugerida, pero **compras** debe poder cambiar
+la presentación de compra según convenga — otra presentación del mismo proveedor
+o de un proveedor distinto.
+
+### El default estaba mal en el 100% de los casos donde aplicaba
+
+Al momento del cambio sólo dos insumos tenían más de una presentación activa, y
+en los dos la más barata por unidad base era la que **nunca** se compra:
+
+| Insumo | Presentación | $/unidad base | Veces pedida |
+|---|---|---|---|
+| CLARAS DE HUEVO | litro 1,000 ml — $47 | **$0.0470/ml** | **0** |
+| | galón 3,800 ml — $180 | $0.0474/ml | **35** |
+| MIEL | agave 25 kg — $2,370 | **$0.0948/g** | **0** |
+| | miel 1 kg — $110 | $0.1100/g | **4** |
+
+La miel es la que explica por qué ninguna fórmula lo resuelve: el tambo de 25 kg
+**sí** es 14 % más barato por gramo. No está mal en precio, está mal en
+practicidad — nadie quiere 25 kg de miel en una sucursal. Es criterio humano.
+
+### Vocabulario: "cerrado" es el final, no el principio
+
+La propuesta original era "cuando cierre el pedido queda bloqueado". Pero la
+máquina de estados real es:
+
+```
+sucursal crea  ->  creado
+compras envía  ->  en_proceso      (por proveedor: pendiente -> enviado)
+compras marca  ->  comprado
+todo recibido  ->  cerrado         + se generan las CxP
+```
+
+`cerrado` ocurre **después** de la recepción y de generar la cuenta por pagar.
+Un bloqueo ahí habría dejado editar la presentación después de que el proveedor
+entregó. Y el bloqueo de sucursal **ya existía**: pierde todo control de edición
+al crear el pedido (los handlers se le pasan vacíos). Lo que faltaba era el
+límite de **arriba**, y es por proveedor, no por pedido — un mismo pedido puede
+tener a Botello en `enviado` y a Meli en `pendiente`.
+
+| Momento | Sucursal | Compras |
+|---|---|---|
+| `creado` / proveedor `pendiente` | bloqueado (ya era así) | edita libre |
+| proveedor `enviado` | bloqueado | avisa antes de cambiar |
+| `comprado` en adelante | bloqueado | bloqueado |
+
+### Lo que se construyó
+
+**Esquema** (`20260808_v7_18_presentacion_en_compras.sql`, aplicada en DEV y PROD):
+
+* `pedido_detalle.cantidad_base` — la cantidad que pidió sucursal en unidad base.
+  Antes el pedido sólo guardaba la cantidad ya convertida ("2 galones") y perdía
+  el "4,000 ml" original. **Es el dato que no se recupera después:** cada pedido
+  creado sin él lo pierde para siempre. Los históricos quedan en NULL a
+  propósito — `cantidad × contenido` es el volumen que iba a *llegar*, no lo que
+  se necesitaba, y escribirlo como dato real sería inventar historia. La app lo
+  estima al vuelo y lo etiqueta como estimado.
+* `catalogo.preferida` + índice único parcial `uq_catalogo_preferida_por_insumo`
+  (una por insumo). **Sembrada desde el historial de compras:** gana la más
+  pedida; si ninguna se pidió nunca, gana la más barata por unidad base. En PROD
+  acertó sola en los dos casos (galón 35× y miel de 1 kg 4×). En DEV, donde no
+  hay historial, cayó al tambo de 25 kg — que es el fallback funcionando, pero
+  confirma que **cualquier insumo sin historial de compra necesita revisión
+  humana de su preferida**.
+* `pedido_presentacion_cambios` — bitácora, mismo patrón que
+  `pedido_reasignaciones`: queda constancia de qué eligió sucursal y qué decidió
+  compras.
+
+**App:**
+
+* `presentacionesDe()` ordena la preferida primero; el resto sigue por costo por
+  unidad base. Eso cambia el default de sucursal sin quitarle la elección.
+* `CrearPedido` guarda `cantidad_base`.
+* `DetallePedido` gana una columna **Presentación** (sólo compras) con todas las
+  presentaciones activas del insumo, sin importar el proveedor. Debajo del
+  artículo se lee *"Sucursal pidió 4,000 ml"*, en ámbar si es estimado.
+* `handleCambiarPresentacion` recalcula **desde la necesidad, no desde el
+  volumen que iba a llegar**. Es la decisión de fondo del diseño: pidiendo
+  4,000 ml en galón llegan 7,600 ml; al cambiar a litros se piden **4**, no 8.
+  El excedente del envase anterior es un artefacto del empaque, no un
+  requerimiento.
+* Si la presentación nueva es de otro proveedor, se reusa la mecánica completa
+  de `handleReasignar`: alta del estatus del proveedor nuevo, limpieza del
+  huérfano si se queda sin líneas, y registro en `pedido_reasignaciones`. Un
+  PATCH pelón al `catalogo_id` habría dejado el pedido colgado del proveedor
+  equivocado en su link con token.
+* Se refrescan `costo_referencia` de la línea y `total_teorico` del pedido, y se
+  limpia `costo_real` (era el precio de otro envase).
+* Confirmación antes de cambiar, que dice las tres cosas que importan: si ese
+  proveedor ya vio el pedido, si la línea cambia de proveedor, y en qué cantidad
+  quedaría.
+* En el catálogo, una estrella ★/☆ para mover la preferida a mano. Sólo aparece
+  cuando el insumo tiene varias presentaciones. La primera presentación de un
+  insumo nace preferida, y si se elimina la preferida se hereda a una hermana —
+  si no, el insumo volvería callado a "la más barata", que es el criterio que
+  estamos corrigiendo.
+
+**Pruebas:** `herramientas/prueba-e2e/e2e-presentacion-compras.js`, 22
+verificaciones sobre el flujo completo en dos pestañas (sucursal pide, compras
+cambia dos veces). Suite total: **147** (82 + 12 + 19 + 12 + 22).
