@@ -778,3 +778,133 @@ tener a Botello en `enviado` y a Meli en `pendiente`.
 **Pruebas:** `herramientas/prueba-e2e/e2e-presentacion-compras.js`, 22
 verificaciones sobre el flujo completo en dos pestañas (sucursal pide, compras
 cambia dos veces). Suite total: **147** (82 + 12 + 19 + 12 + 22).
+
+## 11. Consumo por ticket y recosteo del histórico (v7.19)
+
+**Decisión de dirección (2026-08-09):** la bolsa no es del platillo, es del pedido.
+Un wrap solo va en bolsa chica; si el ticket trae varios productos cocina manda
+**una** bolsa grande en lugar de varias chicas; y si la venta es de mostrador no
+lleva bolsa. Nada de eso cabe en una receta, que describe un platillo y no una
+orden — así que no existe número correcto que poner en la receta de un wrap.
+
+El segundo criterio lo aportó dirección y es el que convirtió el problema en una
+regla en lugar de un promedio: **el canal es un dato duro**. El conector lo saca
+de la descripción del pago (si trae "UBER" es Uber Eats), y el 90.6 % de los
+tickets son de plataforma.
+
+### Lo que costaba el modelo anterior (8-jul al 8-ago)
+
+| | |
+|---|---|
+| Bolsas que descontaban las recetas | 2,775 ($12,393.53) |
+| Bolsas reales con la regla por ticket | 1,518 ($7,330.56) |
+| Sobrecosto | 1,257 bolsas y $5,062 |
+
+Un 56 % de más en empaque, ~$54,000 al año. Y esas bolsas fantasma también se
+descontaron del inventario, así que alimentaban las existencias negativas.
+
+Se descartó el atajo de bajar la bolsa a un coeficiente de 0.6 en las recetas:
+daba un total parecido ($7,436 vs $7,330) pero **acertaba por casualidad**,
+mezclando dos efectos distintos (tickets compartidos y canal) en un solo número.
+El día que la mezcla de Uber contra mostrador cambiara, quedaba descalibrado sin
+que nadie se diera cuenta.
+
+### El mecanismo
+
+`reglas_consumo_ticket` — insumos que se consumen una vez por ticket:
+
+* `canales text[]` en lugar de un canal suelto, para que Rappi y Didi funcionen
+  el día que aparezcan sin tocar código.
+* `grupo` **excluyente**: las reglas del mismo grupo nunca aplican juntas, gana la
+  de menor prioridad. Es lo que hace que bolsa chica y bolsa grande no se
+  descuenten las dos, aunque alguien configure rangos traslapados.
+* `min_productos` / `max_productos` cuentan **unidades de productos vendibles**,
+  excluyendo modificadores (no ocupan lugar en la bolsa) y contenedores de precio
+  marcados `sin_insumos` (un combo cobra, pero lo que se empaca son sus
+  componentes, que ya van como líneas aparte).
+* Reglas sin grupo son aditivas: servilleta y cubiertos pueden convivir.
+
+Reglas sembradas: mostrador → 0 bolsas; plataforma → 1 bolsa, chica con 1-2
+productos y grande con 3 o más.
+
+Las 39 líneas de bolsa salieron de las recetas, respaldadas en
+`recetas_retiradas_v7_19` para que sea reversible con un INSERT.
+
+**Hay UI**, a pedido de dirección: pestaña "Consumo por ticket" en el recetario,
+sólo admin. Da de alta, activa y desactiva reglas, y muestra **a cuántos tickets
+del histórico aplicaría cada una** con su costo — para verificar la regla antes de
+confiar en ella.
+
+La lógica está duplicada a propósito en `index.html` y en `conector-sr/sync.js`
+(mismo patrón que `costoInsumo` y `explotarReceta`). La prueba corre la **misma
+matriz de casos contra las dos implementaciones**: si una se desvía, falla.
+
+### El hallazgo que apareció al ir a medir
+
+Dirección pidió rentabilidad por ticket "para saber qué está bien calibrado".
+Al ir a construirla, el reporte no podía significar nada:
+
+| Mes | Venta sin IVA | Costo guardado | Food cost |
+|---|---|---|---|
+| Julio | $392,113 | **$3,460,789** | **882 %** |
+| Agosto | $251,521 | **$1,103,242** | **439 %** |
+
+El 91 % de julio venía de **un solo producto**: `BONELESS FIT` a **$24,545 por
+pieza** (129 unidades = $3,166,372) cuando con las recetas de hoy cuesta **$54.89**.
+Eran los valores congelados en los tickets desde antes de las correcciones —
+cuando la salsa wing costaba $40,040 y la mantequilla $162.50 el gramo.
+
+### El recosteo
+
+Se recostearon los **2,279 tickets** de julio y agosto con las recetas y costos
+vigentes: costo de cada línea = cantidad × costo unitario actual (explotando
+preparaciones hasta 5 niveles, con merma), y costo del ticket = suma de líneas +
+consumo por ticket.
+
+| Mes | Venta sin IVA | Costo | Food cost | Utilidad bruta |
+|---|---|---|---|---|
+| Julio | $392,113.27 | $104,545.02 | **26.7 %** | $287,568.25 |
+| Agosto | $251,521.19 | $66,284.78 | **26.4 %** | $185,236.41 |
+
+De 882 % a 26.7 %. Los dos meses coinciden entre sí, que es la mejor señal de que
+el modelo quedó consistente. Las bolsas aportan **$9,016** del total, y los 215
+tickets de mostrador quedaron sin bolsa.
+
+Distribución por ticket después del recosteo:
+
+| Banda | Tickets | % |
+|---|---|---|
+| Sin costo (faltan recetas) | 3 | 0.1 % |
+| Menos de 25 % | 915 | 40.1 % |
+| 25 a 35 % (saludable) | 1,072 | 47.0 % |
+| 35 a 45 % | 237 | 10.4 % |
+| 45 a 70 % | 52 | 2.3 % |
+| **Arriba de 70 %** | **0** | — |
+
+Cero tickets con costo roto.
+
+### La utilidad se medía contra la base equivocada
+
+El dashboard calculaba `utilidad = venta CON IVA − costo SIN IVA`, mezclando
+bases: inflaba la utilidad por todo el IVA cobrado ($21,434 en julio), que no es
+ganancia sino un pasivo con el SAT. El estado de resultados sí usaba subtotal, así
+que las dos pantallas reportaban utilidades distintas del mismo periodo. Corregido
+a `subtotal − costo`. La aserción `6b.4` de la prueba esperaba el valor viejo y se
+actualizó a $1,011.10.
+
+### Rentabilidad por ticket
+
+Bloque nuevo en el dashboard: food cost agregado contra el del **ticket típico**
+(mediana), utilidad por ticket, lo que aportó el consumo por ticket, la
+distribución en bandas, y una lista de **tickets a revisar** — los que no tienen
+costo (faltan recetas) y los que pasan de 100 % (costo mal capturado). El promedio
+esconde la descalibración: un food cost agregado razonable puede convivir con la
+mitad de los tickets sin receta y la otra mitad con costos rotos, porque se
+cancelan entre sí.
+
+**Pruebas:** `e2e-consumo-ticket.js`, 9 verificaciones. Suite total: **156**
+(82 + 12 + 19 + 12 + 22 + 9).
+
+**Pendiente de despliegue:** el conector nuevo hay que copiarlo a la PC del punto
+de venta. Hasta entonces los tickets que entren no descontarán bolsa (faltante
+chico, contra el sobrecosto de 56 % que había antes), y se corrigen recosteando.

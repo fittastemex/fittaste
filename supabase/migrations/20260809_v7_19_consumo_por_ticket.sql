@@ -1,4 +1,4 @@
--- v7.19 — Consumo por TICKET, no por platillo
+-- v7.19 (parte 1 de 2) — Consumo por TICKET, no por platillo
 --
 -- Decisión de dirección (2026-08-09): la bolsa no es del platillo, es del pedido.
 -- Un wrap solo va en bolsa chica; si el ticket trae varios productos, cocina manda
@@ -21,6 +21,13 @@
 --
 -- Se modela como regla configurable y no como código, porque esto no se acaba en
 -- la bolsa: servilletas, cubiertos y sellos de domicilio son el mismo caso.
+--
+-- ¿POR QUÉ DOS PARTES? El conector corre en la PC del punto de venta y se
+-- actualiza a mano. Si se retiran las bolsas de las recetas antes de que el
+-- conector nuevo esté corriendo, las bolsas dejan de contarse por completo. Esta
+-- parte 1 sólo crea la tabla y siembra las reglas: nadie las lee todavía, así que
+-- no cambia nada. La parte 2 (20260809_v7_19b) retira las bolsas de las recetas y
+-- se aplica DESPUÉS de desplegar el conector.
 
 -- ============================================================
 -- 1) Las reglas
@@ -62,9 +69,8 @@ COMMENT ON COLUMN public.reglas_consumo_ticket.min_productos IS
   'Se cuentan las unidades de productos vendibles del ticket, excluyendo modificadores (grupo_sr MODS%/EXTRAS) y contenedores de precio marcados sin_insumos.';
 
 -- ============================================================
--- 2) Respaldo de las líneas de bolsa que se retiran de las recetas
+-- 2) Respaldo (la parte 2 lo llena antes de borrar)
 -- ============================================================
--- Se guardan antes de borrar para que la migración sea reversible.
 CREATE TABLE IF NOT EXISTS public.recetas_retiradas_v7_19 (
   id uuid PRIMARY KEY,
   producto_venta_id uuid,
@@ -74,19 +80,6 @@ CREATE TABLE IF NOT EXISTS public.recetas_retiradas_v7_19 (
   motivo text,
   retirado_en timestamptz DEFAULT NOW()
 );
-
-INSERT INTO public.recetas_retiradas_v7_19 (id, producto_venta_id, insumo_id, cantidad, merma_pct, motivo)
-SELECT r.id, r.producto_venta_id, r.insumo_id, r.cantidad, r.merma_pct,
-       'v7.19: la bolsa pasa a ser regla por ticket'
-  FROM public.recetas r
-  JOIN public.insumos i ON i.id = r.insumo_id
- WHERE i.nombre IN ('BOLSA DE PAPEL CHICA','BOLSA DE PAPEL GRANDE')
-ON CONFLICT (id) DO NOTHING;
-
-DELETE FROM public.recetas r
- USING public.insumos i
- WHERE i.id = r.insumo_id
-   AND i.nombre IN ('BOLSA DE PAPEL CHICA','BOLSA DE PAPEL GRANDE');
 
 -- ============================================================
 -- 3) Las dos reglas de bolsa
