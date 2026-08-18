@@ -214,49 +214,6 @@ function costoReceta(prodId, recetas, invSucursal, catalogo, productosVenta, dep
     }, 0);
 }
 // Explota una receta (incluyendo preparaciones/sub-recetas) a insumos del catálogo
-// v7.19: consumo que NO es del platillo sino del TICKET (bolsas, servilletas,
-// cubiertos). La bolsa la decide la orden completa: un wrap solo va en bolsa
-// chica, pero si el ticket trae varios productos cocina manda UNA bolsa grande en
-// lugar de varias chicas, y una venta de mostrador no lleva bolsa. Eso no se
-// puede expresar en una receta, que describe un platillo y no una orden.
-//
-// Se cuentan UNIDADES de productos vendibles, excluyendo:
-//   - modificadores (grupo_sr MODS.../EXTRAS): no son cosas que ocupen espacio
-//   - contenedores de precio (sin_insumos): un combo cobra pero lo que va en la
-//     bolsa son sus componentes, que ya vienen como líneas aparte
-function contarProductosTicket(lineas) {
-  return lineas.reduce((n, l) => {
-    const g = (l.prod.grupo_sr || "").toUpperCase();
-    if (g.startsWith("MODS") || g === "EXTRAS") return n;
-    if (l.prod.sin_insumos) return n;
-    return n + (parseFloat(l.cantidad) || 0);
-  }, 0);
-}
-
-// Devuelve [{ insumo_id, cantidad, nombre }] para un ticket. Las reglas de un
-// mismo `grupo` son excluyentes: gana la de menor prioridad, para que "bolsa
-// chica" y "bolsa grande" nunca se descuenten juntas.
-function consumoPorTicket(reglas, canal, nProductos) {
-  const aplican = (reglas || []).filter((r) => {
-    if (r.activo === false) return false;
-    if (Array.isArray(r.canales) && r.canales.length > 0 && !r.canales.includes(canal)) return false;
-    if (r.min_productos != null && nProductos < r.min_productos) return false;
-    if (r.max_productos != null && nProductos > r.max_productos) return false;
-    return true;
-  });
-  aplican.sort((a, b) => (a.prioridad ?? 100) - (b.prioridad ?? 100));
-  const usados = new Set();
-  const out = [];
-  for (const r of aplican) {
-    if (r.grupo) {
-      if (usados.has(r.grupo)) continue;
-      usados.add(r.grupo);
-    }
-    out.push({ insumo_id: r.insumo_id, cantidad: parseFloat(r.cantidad) || 0, nombre: r.nombre });
-  }
-  return out;
-}
-
 function explotarReceta(prodId, cantidadVendida, recetas, productosVenta, consumo, depth = 0) {
   if (depth > 5) return consumo;
   recetas.filter((r) => r.producto_venta_id === prodId).forEach((r) => {
@@ -350,12 +307,10 @@ async function sincronizar() {
   };
 
   // Datos de FitTaste necesarios para explotar recetas
-  const [sucursales, recetas, catalogo, reglasTicket] = await Promise.all([
+  const [sucursales, recetas, catalogo] = await Promise.all([
     sbGet("sucursales", "activa=eq.true&limit=1"),
     sbGet("recetas"),
     sbGet("catalogo"),
-    // v7.19: insumos que se consumen una vez por TICKET (bolsas, servilletas).
-    sbGet("reglas_consumo_ticket", "activo=eq.true"),
   ]);
   let invSucursal = await sbGet("inventario_sucursal");
   const sucId = sucursales[0]?.id || null;
@@ -400,16 +355,9 @@ async function sincronizar() {
     pagosSR.forEach((p) => { fp[clasificarPago(p.descripcion)] += parseFloat(p.importe) || 0; });
     const fecha = new Date(t.fecha || t.cierre).toISOString().split("T")[0];
 
-    // v7.19: consumo del TICKET (bolsas). Su costo entra al costo_teorico de la
-    // venta, no al de ninguna línea: no es atribuible a un platillo.
-    const canal = detectarCanal(pagosSR);
-    const nProductos = contarProductosTicket(lineas);
-    const extrasTicket = consumoPorTicket(reglasTicket, canal, nProductos);
-    for (const e of extrasTicket) costoTotal += r2(costoInsumo(e.insumo_id, invSucursal, catalogo) * e.cantidad);
-
     // Insertar venta + detalle (rollback si falla el detalle)
     const vRes = await sbPost("ventas", {
-      sucursal_id: sucId, fecha, folio, origen: "api", canal,
+      sucursal_id: sucId, fecha, folio, origen: "api", canal: detectarCanal(pagosSR),
       subtotal: r2(subtotal), iva: r2(iva), total: r2(parseFloat(t.total) || subtotal + iva),
       total_efectivo: r2(fp.efectivo), total_tarjeta: r2(fp.tarjeta),
       total_plataforma: r2(fp.plataforma), total_otros: r2(fp.otros),
@@ -428,8 +376,6 @@ async function sincronizar() {
     // Explosión de recetas (incluye sub-recetas) → descuento de inventario + kárdex
     const consumo = {};
     lineas.forEach((l) => explotarReceta(l.prod.id, l.cantidad, recetas, prods, consumo));
-    // v7.19: las bolsas entran al mismo mapa, así reusan el descuento y el kárdex.
-    for (const e of extrasTicket) consumo[e.insumo_id] = (consumo[e.insumo_id] || 0) + e.cantidad;
     if (sucId) for (const [insId, cant] of Object.entries(consumo)) {
       let row = invSucursal.find((i) => i.sucursal_id === sucId && i.insumo_id === insId);
       const costoU = costoInsumo(insId, invSucursal, catalogo);
@@ -447,8 +393,7 @@ async function sincronizar() {
       });
     }
 
-    const etqExtras = extrasTicket.length ? ` + ${extrasTicket.map((e) => e.nombre).join(", ")}` : "";
-    console.log(`  ✓ ${folio}: $${r2(parseFloat(t.total) || 0)} (${detRows.length} productos${etqExtras})`);
+    console.log(`  ✓ ${folio}: $${r2(parseFloat(t.total) || 0)} (${detRows.length} productos)`);
     subidos++;
     avanzar(t);
   }

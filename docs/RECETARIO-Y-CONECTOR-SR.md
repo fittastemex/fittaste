@@ -835,9 +835,47 @@ sólo admin. Da de alta, activa y desactiva reglas, y muestra **a cuántos ticke
 del histórico aplicaría cada una** con su costo — para verificar la regla antes de
 confiar en ella.
 
-La lógica está duplicada a propósito en `index.html` y en `conector-sr/sync.js`
-(mismo patrón que `costoInsumo` y `explotarReceta`). La prueba corre la **misma
-matriz de casos contra las dos implementaciones**: si una se desvía, falla.
+### Dónde se aplica la regla: en la base, no en el conector
+
+La primera versión metía la regla en `conector-sr/sync.js`. Dirección lo cuestionó:
+*"¿por qué cambia el conector, no es algo que puedes hacer a partir de que llega?
+hoy el conector ya tiene el ticket y el canal."* Tenía razón, y la objeción destapó
+dos defectos:
+
+1. **Obligaba a ir a la PC del punto de venta** a copiar el archivo a mano. Hasta
+   entonces las bolsas no se contarían **en absoluto**, porque ya salieron de las
+   recetas.
+2. **Dejaba fuera la segunda puerta de entrada.** La importación manual de reportes
+   de SR desde la app escribe ventas sin pasar por el conector: esas ventas nunca
+   habrían llevado bolsa, ni con el conector actualizado.
+
+La regla se movió a un trigger de sentencia sobre `venta_detalle`
+(`fn_consumo_por_ticket`, migración `20260809_v7_19c`). Al aplicarla donde **llegan**
+los datos, las dos puertas quedan cubiertas, el conector se queda tal cual y hay una
+sola copia de la lógica en vez de tres.
+
+Dos cosas que hubo que resolver:
+
+* **Idempotencia.** Si el conector reintenta un ticket, la bolsa no se descuenta dos
+  veces: el candado es la existencia de un movimiento de esa venta con nota
+  `'Consumo por ticket%'`. Verificado insertando detalle adicional a un ticket ya
+  procesado — el costo no se movió y siguió habiendo una sola bolsa.
+* **El rollback del conector.** Cuando no logra subir el detalle completo, borra la
+  venta para reintentarla. `movimientos_sucursal.venta_id` **no tenía cascada**, así
+  que ese borrado habría fallado por la llave foránea y el ticket se reintentaría
+  para siempre. Se le agregó `ON DELETE CASCADE`. La cascada se lleva el movimiento
+  pero no devuelve la existencia: es una ventana rara y el conteo físico es el
+  respaldo.
+
+El costo se **suma** al que ya calculó quien escribió la venta, en lugar de
+recalcularlo, para que no importe si el detalle llegó en uno o varios lotes.
+
+Contrapartida asumida a conciencia: un trigger que falla no grita, y el arnés de
+pruebas E2E simula la base y no ejecuta triggers. Por eso el trigger se verificó
+contra producción con tres tickets de prueba —mostrador con 3 productos, Uber con 2
+más un modificador, Uber con 3— que dieron sin bolsa, chica y grande, y luego se
+borraron. La copia de la lógica que queda en `index.html` alimenta la vista previa de
+la pantalla de configuración, y esa sí la cubre la batería.
 
 ### El hallazgo que apareció al ir a medir
 
@@ -902,9 +940,16 @@ esconde la descalibración: un food cost agregado razonable puede convivir con l
 mitad de los tickets sin receta y la otra mitad con costos rotos, porque se
 cancelan entre sí.
 
-**Pruebas:** `e2e-consumo-ticket.js`, 9 verificaciones. Suite total: **156**
-(82 + 12 + 19 + 12 + 22 + 9).
+**Pruebas:** `e2e-consumo-ticket.js`, 4 verificaciones sobre la copia de la lógica
+que usa la vista previa. Suite total: **151** (82 + 12 + 19 + 12 + 22 + 4). El
+trigger se verifica contra la base real, no aquí.
 
-**Pendiente de despliegue:** el conector nuevo hay que copiarlo a la PC del punto
-de venta. Hasta entonces los tickets que entren no descontarán bolsa (faltante
-chico, contra el sobrecosto de 56 % que había antes), y se corrigen recosteando.
+**No hay nada que desplegar:** el conector se quedó igual. La regla vive en la base
+y aplica desde el primer ticket que entre, sea del conector o de la importación
+manual.
+
+**Inconsistencia conocida:** el recosteo corrigió los **costos** de julio y agosto,
+pero no el kárdex histórico. Las 2,775 bolsas que las recetas descontaron en su
+momento siguen descontadas, así que `BOLSA DE PAPEL CHICA` está en **−1,297** de
+existencia. Son ~1,257 bolsas de sobre-descuento acumulado; el conteo físico es lo
+que lo cuadra.
