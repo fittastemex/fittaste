@@ -346,7 +346,11 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   const costoMPDash=numDash(/Costo materia prima[^$]*\$([\d,.]+)/);
   const utilDash=numDash(/Utilidad bruta[^$]*\$([\d,.]+)/);
   check("6b.3 KPI costo MP teórico ≈ $290.62",approx(costoMPDash,290.62,0.05),costoMPDash);
-  check("6b.4 utilidad bruta ≈ $1,219.38 (venta − costo MP)",approx(utilDash,1219.38,0.05),utilDash);
+  // v7.19: la utilidad se mide contra la venta SIN IVA. Antes esta aserción
+  // esperaba $1,219.38 = total($1,510) − costo($290.62), que mezclaba bases e
+  // inflaba la utilidad por todo el IVA cobrado. Lo correcto es
+  // subtotal($1,301.72) − costo($290.62) = $1,011.10.
+  check("6b.4 utilidad bruta ≈ $1,011.10 (venta SIN IVA − costo MP)",approx(utilDash,1011.10,0.05),utilDash);
   check("6b.5 mix y formas de pago visibles",dashTxt.includes("Mix de venta")&&dashTxt.includes("Formas de pago"),null);
   check("6b.6 top productos: BOWL DE PRUEBA listado",dashTxt.includes("Top 10 productos")&&dashTxt.includes("BOWL DE PRUEBA"),null);
   // v7.14: la última venta del conector es de 2020 → el aviso debe salir y decir "días"
