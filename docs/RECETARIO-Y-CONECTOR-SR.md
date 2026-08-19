@@ -953,3 +953,74 @@ pero no el kárdex histórico. Las 2,775 bolsas que las recetas descontaron en s
 momento siguen descontadas, así que `BOLSA DE PAPEL CHICA` está en **−1,297** de
 existencia. Son ~1,257 bolsas de sobre-descuento acumulado; el conteo físico es lo
 que lo cuadra.
+
+## 12. Caída del conector — 17 al 19-ago-2026 (v7.20)
+
+**Síntoma:** 44 horas sin ventas registradas. El encargado reportaba que el conector
+"estaba activo" y mandó foto de la ventana abierta.
+
+Fueron **dos fallas encadenadas**, con causas distintas.
+
+### Falla 1 — el proceso se murió solo (17-ago ~17:00)
+
+Último ticket subido: `TKT-9104`, 17-ago **16:56**. Los días anteriores subía entre
+22:00 y 23:00, o sea al cierre — así que no terminó su jornada: el proceso murió a
+media operación. Es la **tercera** caída (29-jul, 7-ago, 17-ago), una cada 9 o 10
+días.
+
+Dirección aportó el dato que cerró el diagnóstico: **la PC nunca se apaga.** Entonces
+no eran reinicios; el proceso se estaba matando solo. Dos huecos en `sync.js`:
+
+1. **`await pool.close()` estaba al final de `sincronizar()`, no en un `finally`.** Si
+   algo tronaba antes, el pool de SQL Server quedaba abierto y el ciclo siguiente
+   reconectaba sobre un pool en mal estado.
+2. **Nadie escuchaba los errores del pool.** `mssql` emite un evento `'error'` cuando
+   se cae la conexión, y Node **mata el proceso** si ese evento no tiene oyente. Igual
+   con cualquier promesa rechazada sin manejar.
+
+Encaja con una PC siempre encendida: se cae la conexión de madrugada —mantenimiento de
+SQL Server, un reinicio de SR, un parpadeo de red— y el conector se va con ella.
+
+**La trampa que engañó al encargado:** el `.bat` termina con `pause`, así que cuando el
+proceso muere **la ventana no se cierra** — se queda mostrando "Presione una tecla para
+continuar". Una ventana titulada "Conector FitTaste" abierta **no significa que esté
+corriendo**. Durante 44 horas estuvo ahí, abierta y muerta.
+
+**Corregido en v7.20:** el pool se cierra en `finally`; hay oyentes para
+`unhandledRejection`, `uncaughtException` y el error del pool, de modo que el conector
+ya no muere sino que reintenta en el ciclo siguiente (seguro, porque
+`estado.ultimoCierre` sólo avanza cuando un ticket sube bien); y a los 3 ciclos
+fallidos seguidos imprime un bloque de asteriscos en lugar de una línea suelta.
+
+### Falla 2 — el permiso faltante impidió la recuperación (mío)
+
+Al reiniciarlo, el conector no pudo recuperarse: cada INSERT de `venta_detalle` moría
+con `42501: permission denied for table reglas_consumo_ticket`. El trigger de la v7.19c
+lee esa tabla y corre con el rol de quien inserta —`anon`—, y la tabla se creó sin
+GRANT para `anon`.
+
+**Por qué se escapó:** la tabla y el trigger se crearon y se probaron **como
+administrador**, nunca con el rol que los usa en producción. Con privilegios de
+`postgres` el permiso sobra y todo pasa. Es exactamente la contrapartida que se había
+anotado al elegir el trigger: *"un trigger que falla no grita"*.
+
+La verificación correcta, y de aquí en adelante obligatoria para toda tabla nueva que
+el conector o la app deban leer:
+
+```sql
+SET LOCAL ROLE anon;   -- y recién entonces insertar
+```
+
+**Recuperación:** en cuanto se otorgó el permiso, el conector se puso al corriente
+solo. El 18-ago completo (55 tickets) entró en 10 minutos y el 19 al corriente: **81
+tickets y $22,560** en los primeros 25 minutos, sin intervención en la PC.
+
+### Lo que sigue pendiente
+
+* **Reinicio automático** en el Programador de tareas de Windows. Tercera caída; con la
+  v7.20 el proceso ya no debería morir, pero sigue siendo el respaldo para cuando la PC
+  se reinicie por actualizaciones.
+* **Que la alarma salga de la PC.** El aviso rojo de la app (v7.14) funcionó —detecta a
+  las 6 horas— pero requiere abrir el Dashboard; y la consola del conector requiere
+  estar en el punto de venta. Ninguno de los dos buscó a dirección en 44 horas. El
+  problema es de **entrega**, no de detección.
