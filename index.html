@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.19";
+const V="7.21";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -2059,7 +2059,21 @@ function VentasSRView({productosVenta,setProductosVenta,productosInactivos,setPr
   };
 
   // --- Productos y recetas ---
-  const saveProd=async(p)=>{setSaving(true);const upd=p.es_preparacion?{nombre:prodData.nombre.trim().toUpperCase(),unidad:prodData.unidad||"kg",rendimiento:parseFloat(prodData.rendimiento)||1,updated_at:new Date().toISOString()}:{codigo_sr:prodData.codigo_sr||null,nombre:prodData.nombre.trim(),categoria:prodData.categoria||null,precio_venta:parseFloat(prodData.precio_venta)||0,updated_at:new Date().toISOString()};const res=await sbPatch("productos_venta",p.id,upd);if(res)setProductosVenta(productosVenta.map(x=>x.id===p.id?{...x,...upd}:x));setEditingProd(null);setSaving(false);};
+  // v7.21: si el producto existe en SoftRestaurant, su nombre y su precio los manda
+  // SR — el conector los vuelve a imponer cada 2 minutos. Mandarlos aquí sería
+  // escribir algo que se revierte solo, y peor: la pantalla diría "guardado".
+  const saveProd=async(p)=>{
+    setSaving(true);
+    const upd=p.es_preparacion
+      ?{nombre:prodData.nombre.trim().toUpperCase(),unidad:prodData.unidad||"kg",rendimiento:parseFloat(prodData.rendimiento)||1,updated_at:new Date().toISOString()}
+      :p.codigo_sr
+        ?{categoria:prodData.categoria||null,updated_at:new Date().toISOString()}
+        :{codigo_sr:prodData.codigo_sr||null,nombre:prodData.nombre.trim(),categoria:prodData.categoria||null,precio_venta:parseFloat(prodData.precio_venta)||0,updated_at:new Date().toISOString()};
+    const res=await sbPatchE("productos_venta",p.id,upd);
+    if(res.error)alert("No se pudo guardar: "+(res.error.message||"error desconocido"));
+    else setProductosVenta(productosVenta.map(x=>x.id===p.id?{...x,...upd}:x));
+    setEditingProd(null);setSaving(false);
+  };
   const addProd=async()=>{if(!newProd.nombre.trim())return;setSaving(true);const res=await sbPost("productos_venta",{codigo_sr:newProd.codigo_sr.trim()||null,nombre:newProd.nombre.trim(),categoria:newProd.categoria.trim()||null,precio_venta:parseFloat(newProd.precio_venta)||0});if(res&&res[0]){setProductosVenta([...productosVenta,res[0]]);setNewProd({codigo_sr:"",nombre:"",categoria:"",precio_venta:0});setAddingProd(false);}else alert("Error al guardar (¿código SR duplicado?)");setSaving(false);};
   const delProd=async(p)=>{
     if(p.es_preparacion&&recetas.some(r=>r.preparacion_id===p.id)){alert(`"${p.nombre}" se usa en otras recetas — quítala de esas recetas primero.`);return;}
@@ -2258,6 +2272,12 @@ function VentasSRView({productosVenta,setProductosVenta,productosInactivos,setPr
 
     {/* PRODUCTOS Y RECETAS */}
     {tab==="productos"&&<div>
+      {/* v7.21: explicar en pantalla de quién es cada dato, en vez de dejar editar
+          algo que el conector revierte a los 2 minutos sin decir nada. */}
+      <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2 mb-4 text-xs text-amber-900">
+        🔒 El <b>nombre</b>, el <b>precio</b> y el <b>grupo</b> de los productos que existen en SoftRestaurant los manda SR: el conector los vuelve a imponer cada 2 minutos, así que editarlos aquí no sirve — cámbialos en SoftRestaurant y se sincronizan solos.
+        <br/>Lo que sí es de FitTaste y puedes editar libremente: <b>las recetas</b>, la marca de <b>"no consume"</b>, las <b>preparaciones</b> y los productos que no existen en SR.
+      </div>
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <div className="flex gap-1">
           <button onClick={()=>setVerTipo("platillos")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${verTipo==="platillos"?"bg-gray-800 text-white":"bg-white border border-gray-200 text-gray-500 hover:text-gray-700"}`}>Platillos ({productosVenta.filter(p=>!p.es_preparacion).length})</button>
@@ -2315,10 +2335,21 @@ function VentasSRView({productosVenta,setProductosVenta,productosInactivos,setPr
         </React.Fragment>);}
         return(<React.Fragment key={p.id}><tr className={`border-t border-gray-100 ${isE||openReceta?"bg-lime-50/60":"hover:bg-gray-50"}`}>
           <td className="px-3 py-2 font-mono text-xs text-gray-500">{isE?<input className="w-20 border border-lime-400 rounded px-1 py-0.5 text-xs" value={prodData.codigo_sr||""} onChange={e=>setProdData({...prodData,codigo_sr:e.target.value})}/>:(p.codigo_sr||"—")}</td>
-          <td className="px-3 py-2 font-medium text-gray-900">{isE?<input className="w-full border border-lime-400 rounded px-1 py-0.5 text-sm" value={prodData.nombre} onChange={e=>setProdData({...prodData,nombre:e.target.value})}/>:p.nombre}</td>
+          {/* v7.21: el nombre y el precio de un producto que existe en SoftRestaurant
+              los MANDA SR: el conector los vuelve a imponer en cada ciclo, cada 2
+              minutos. Antes la pantalla dejaba editarlos y decía "actualizado", y el
+              cambio se revertía en silencio — se perdió tiempo capturando nombres que
+              nunca iban a quedar. Editable sólo lo que es de FitTaste. */}
+          <td className="px-3 py-2 font-medium text-gray-900">{isE
+            ?(p.codigo_sr
+              ?<span className="inline-flex items-center gap-1" title="El nombre viene de SoftRestaurant y el conector lo vuelve a imponer cada 2 minutos. Cámbialo en SR y se sincroniza solo.">{p.nombre}<span className="text-[10px] text-amber-600 font-normal">🔒 lo manda SR</span></span>
+              :<input className="w-full border border-lime-400 rounded px-1 py-0.5 text-sm" value={prodData.nombre} onChange={e=>setProdData({...prodData,nombre:e.target.value})}/>)
+            :p.nombre}</td>
           <td className="px-3 py-2 text-xs text-gray-500">{isE?<input className="w-20 border border-lime-400 rounded px-1 py-0.5 text-xs" value={prodData.categoria||""} onChange={e=>setProdData({...prodData,categoria:e.target.value})}/>:(p.grupo_sr||p.categoria||"—")}</td>
           <td className="px-3 py-2">{(()=>{const c=clasifProd(p);return c==="con"?<Badge v="success">Con receta</Badge>:c==="noconsume"?<Badge v="default">No consume</Badge>:<Badge v="danger">⚠ Falta receta</Badge>;})()}</td>
-          <td className="px-3 py-2 text-right">{isE?<input type="number" step="0.01" className="w-20 text-right border border-lime-400 rounded px-1 py-0.5 text-sm" value={prodData.precio_venta} onChange={e=>setProdData({...prodData,precio_venta:e.target.value})}/>:<span className="font-semibold">{fmt(p.precio_venta)}</span>}</td>
+          <td className="px-3 py-2 text-right">{isE&&!p.codigo_sr
+            ?<input type="number" step="0.01" className="w-20 text-right border border-lime-400 rounded px-1 py-0.5 text-sm" value={prodData.precio_venta} onChange={e=>setProdData({...prodData,precio_venta:e.target.value})}/>
+            :<span className="font-semibold" title={p.codigo_sr?"El precio viene de SoftRestaurant. Cámbialo en SR.":""}>{fmt(p.precio_venta)}{isE&&p.codigo_sr&&<span className="text-[10px] text-amber-600 font-normal ml-1">🔒</span>}</span>}</td>
           <td className="px-3 py-2 text-right text-gray-600">{nRec>0?fmt(cR):<span className="text-gray-300">—</span>}</td>
           <td className="px-3 py-2 text-right">{nRec>0&&precio>0?<Badge v={margen<50?"danger":margen<65?"warning":"success"}>{margen.toFixed(0)}%</Badge>:"—"}</td>
           <td className="px-3 py-2">{p.sin_insumos

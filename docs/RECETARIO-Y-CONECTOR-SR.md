@@ -1024,3 +1024,51 @@ tickets y $22,560** en los primeros 25 minutos, sin intervención en la PC.
   las 6 horas— pero requiere abrir el Dashboard; y la consola del conector requiere
   estar en el punto de venta. Ninguno de los dos buscó a dirección en 44 horas. El
   problema es de **entrega**, no de detección.
+
+## 13. "Edito el nombre del producto y no se guarda" (v7.21)
+
+**Reporte (20-ago-2026):** Fernanda editó los nombres de arrachera y res y no se
+modificaron.
+
+**Los cambios sí se guardaban.** El conector los borraba a los dos minutos.
+
+`sync.js` sincroniza el menú de SoftRestaurant en cada ciclo y, si el nombre en
+FitTaste no coincide con el de SR, **lo regresa al de SR**:
+
+```js
+} else if (!prod.es_preparacion && (prod.nombre !== nombre || ...)) {
+  const upd = { nombre, updated_at: new Date().toISOString() };
+  await sbPatch("productos_venta", prod.id, upd);
+```
+
+Lo mismo con el **precio** y el **grupo**.
+
+La pista que lo confirmó fueron los `updated_at`: `100G ARRACHERA` y
+`WRAP 100G ARRACHERA` cambiaron con **un segundo de diferencia** (11:36:54 y
+11:36:55). Eso no es una persona editando de uno en uno — es el conector recorriendo
+el menú en lote. Los timestamps que parecían ser de Fernanda eran del conector
+sobreescribiéndola.
+
+**No era un bug del conector: era un diseño que la pantalla no comunicaba.** La
+sincronización del menú existe a propósito y sirve — mantiene los códigos alineados
+para que los tickets empaten y los productos nuevos aparezcan solos. El problema era
+que la app **dejaba editar un campo que no le pertenece**, decía "actualizado", y lo
+revertía en silencio.
+
+**Decisión de dirección:** SoftRestaurant sigue mandando. Una sola fuente de verdad
+para que el cajero, el ticket y el reporte digan lo mismo.
+
+**Corregido en v7.21** — la pantalla ahora dice de quién es cada dato:
+
+* Nombre y precio se muestran **de solo lectura con un candado 🔒** cuando el producto
+  tiene `codigo_sr`. Las preparaciones y los productos que no existen en SR siguen
+  editables, porque ésos sí son de FitTaste.
+* `saveProd` ya **no manda** `nombre` ni `precio_venta` para productos de SR: mandarlos
+  era escribir algo que se revierte solo.
+* Pasó de `sbPatch` a `sbPatchE`, así que un guardado que falle ahora avisa en lugar de
+  reportar éxito.
+* Aviso fijo en la pestaña que explica qué es de SR y qué es de FitTaste, en vez de
+  depender de un tooltip.
+
+Lo que Fernanda **sí** puede editar sin que nada lo revierta: las recetas, la marca de
+"no consume", las preparaciones, los insumos y las presentaciones de compra.
