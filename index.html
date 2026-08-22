@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.23";
+const V="7.24";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -2974,6 +2974,22 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
   const [soloDif,setSoloDif]=useState(false);
   const [cerrando,setCerrando]=useState(false);
   const [resConteo,setResConteo]=useState(null);
+  // v7.24: el PRIMER conteo establece la línea base y NO es merma.
+  //
+  // Antes del primer conteo las existencias están negativas (se vendió sin
+  // recepción registrada, y las recetas se fueron corrigiendo sobre la marcha).
+  // Contar sube esas existencias del negativo al número físico real, y esa
+  // diferencia se registraba como `entrada_ajuste`, que el estado de resultados
+  // lee como SOBRANTE y le resta a la merma del mes.
+  //
+  // Con las existencias de hoy, contar sólo los 18 insumos del piloto generaría
+  // un sobrante ficticio de ~$139,489 — y el mes cerraría con una utilidad
+  // inflada en esa cantidad. Contando todo el inventario, ~$243,379.
+  //
+  // Marcado como línea base, los movimientos se escriben igual (queda el
+  // rastro y el folio) pero el estado de resultados los excluye, tal como ya
+  // excluía la carga de "Inventario inicial".
+  const [esLineaBase,setEsLineaBase]=useState(false);
   const nrm=(s)=>String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toUpperCase();
 
   const rows=invSucursal.filter(i=>!sucId||i.sucursal_id===sucId).map(i=>({...i,ins:insumos.find(x=>x.id===i.insumo_id)||{}})).sort((a,b)=>(a.ins.nombre||"").localeCompare(b.ins.nombre||""));
@@ -3031,21 +3047,30 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
     const ymd=fecha.replace(/-/g,"");
     const nHoy=movSucursal.filter(m=>(m.nota||"").startsWith(`CONT-${ymd}`)).map(m=>parseInt((m.nota.match(/CONT-\d{8}-(\d+)/)||[])[1]||0)).reduce((a,b)=>Math.max(a,b),0);
     const folio=`CONT-${ymd}-${String(nHoy+1).padStart(2,"0")}`;
-    const nota=`${folio}${conteoNota?" · "+conteoNota:""}`;
-    let invLocal=[...invSucursal];const nuevosMov=[];
+    // La marca "línea base" viaja en la nota: el folio se conserva para el
+    // historial y el estado de resultados excluye los movientos marcados.
+    const nota=`${folio}${esLineaBase?" · línea base":""}${conteoNota?" · "+conteoNota:""}`;
+    let invLocal=[...invSucursal];const nuevosMov=[];const fallos=[];
     let faltante=0,sobrante=0;
     for(const c of cambios){
+      // v7.24: sbPatchE en lugar de sbPatch. El ajuste de existencia es lo
+      // único que no se puede perder en un conteo, y con sbPatch un fallo se
+      // reportaba como éxito: el kárdex diría que se ajustó y la existencia
+      // seguiría en el número viejo.
+      const r=await sbPatchE("inventario_sucursal",c.row.id,{existencia:c.fisico,updated_at:new Date().toISOString()});
+      if(r.error){fallos.push(`${c.row.ins?.nombre||"?"}: ${r.error.message||"error desconocido"}`);continue;}
       const mv=await sbPost("movimientos_sucursal",{sucursal_id:c.row.sucursal_id,insumo_id:c.row.insumo_id,tipo:c.diff>0?"entrada_ajuste":"salida_ajuste",cantidad:Math.abs(c.diff),costo_unitario:c.costo,fecha,nota,registrado_por:rol});
       if(mv&&mv[0])nuevosMov.push(mv[0]);
-      await sbPatch("inventario_sucursal",c.row.id,{existencia:c.fisico,updated_at:new Date().toISOString()});
       invLocal=invLocal.map(i=>i.id===c.row.id?{...i,existencia:c.fisico}:i);
       const val=Math.abs(c.diff)*c.costo;
       if(c.diff<0)faltante+=val;else sobrante+=val;
     }
     setInvSucursal(invLocal);
     if(nuevosMov.length)setMovSucursal(prev=>[...prev,...nuevosMov]);
-    setResConteo({folio,fecha,items:cambios.length,faltante:Math.round(faltante*100)/100,sobrante:Math.round(sobrante*100)/100,neto:Math.round((faltante-sobrante)*100)/100,detalle:cambios});
-    setConteo({});setConteoNota("");setSoloDif(false);setConteoBusq("");
+    const aplicados=cambios.length-fallos.length;
+    setResConteo({folio,fecha,items:aplicados,lineaBase:esLineaBase,faltante:Math.round(faltante*100)/100,sobrante:Math.round(sobrante*100)/100,neto:Math.round((faltante-sobrante)*100)/100,detalle:cambios.filter(c=>!fallos.some(f=>f.startsWith((c.row.ins?.nombre||"?")+":")))});
+    if(fallos.length)alert(`Se ajustaron ${aplicados} de ${cambios.length} insumos. NO se pudo ajustar:\n\n${fallos.join("\n")}\n\nVuelve a capturar esos renglones.`);
+    else{setConteo({});setConteoNota("");setSoloDif(false);setConteoBusq("");setEsLineaBase(false);}
     setCerrando(false);
   };
 
@@ -3176,11 +3201,32 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
           </tr>);})}</tbody></table>
       </div>}
 
-      <div className="bg-white border border-gray-200 rounded-xl p-4 mt-4 flex items-end gap-3 flex-wrap">
-        <div className="flex-1 min-w-48"><label className="text-xs text-gray-500 block mb-1">Nota del conteo (opcional)</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Ej. Conteo semanal de proteínas, cierre de mes…" value={conteoNota} onChange={e=>setConteoNota(e.target.value)}/></div>
-        <Btn onClick={cerrarConteo} disabled={cerrando||cDif===0} color="purple">{cerrando?"Guardando...":`Cerrar conteo${cDif>0?` (${cDif} ajuste${cDif>1?"s":""})`:""}`}</Btn>
+      {/* v7.24: sin esta casilla, el PRIMER conteo mete un sobrante ficticio
+          enorme al mes — las existencias venían negativas y subirlas al número
+          físico se leía como sobrante. */}
+      <div className={`rounded-xl p-4 mt-4 border-2 ${esLineaBase?"bg-teal-50 border-teal-300":"bg-white border-gray-200"}`}>
+        <label className="flex items-start gap-2 cursor-pointer mb-3">
+          <input type="checkbox" className="mt-0.5 w-4 h-4" checked={esLineaBase} onChange={e=>setEsLineaBase(e.target.checked)}/>
+          <span className="text-sm">
+            <b className="text-gray-800">Éste es el conteo inicial (línea base)</b>
+            <span className="block text-xs text-gray-600 mt-0.5">Marca esto la <b>primera</b> vez que cuentas un insumo. El inventario queda igual al físico y el movimiento se registra, pero <b>no cuenta como merma ni como sobrante</b> del mes: la diferencia contra el teórico no es una pérdida, es el saldo que nunca se había registrado.</span>
+          </span>
+        </label>
+        {(()=>{const negativos=conteoRows.filter(c=>c.valido&&c.teorico<0);
+          if(negativos.length===0||esLineaBase)return null;
+          // La cifra es el sobrante que SE REGISTRARÍA de verdad (la suma de las
+          // diferencias positivas), no el valor del saldo negativo: es lo que
+          // acabaría restándole a la merma del mes.
+          const ficticio=conteoRows.filter(c=>c.valido&&c.diff>0).reduce((s,c)=>s+c.diffVal,0);
+          return(<div className="rounded-lg px-3 py-2 mb-3 text-xs bg-amber-50 border border-amber-300 text-amber-900">
+            ⚠ {negativos.length} de los insumos que capturaste {negativos.length>1?"tienen":"tiene"} existencia <b>negativa</b>. Cerrar sin marcar "conteo inicial" registraría <b>{fmt(ficticio)}</b> de sobrante que reduciría la merma del mes y <b>inflaría la utilidad</b> en esa cantidad. Si es la primera vez que los cuentas, marca la casilla de arriba.
+          </div>);})()}
+        <div className="flex items-end gap-3 flex-wrap">
+          <div className="flex-1 min-w-48"><label className="text-xs text-gray-500 block mb-1">Nota del conteo (opcional)</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Ej. Conteo semanal de proteínas, cierre de mes…" value={conteoNota} onChange={e=>setConteoNota(e.target.value)}/></div>
+          <Btn onClick={cerrarConteo} disabled={cerrando||cDif===0} color="purple">{cerrando?"Guardando...":`Cerrar conteo${cDif>0?` (${cDif} ajuste${cDif>1?"s":""})`:""}`}</Btn>
+        </div>
       </div>
-      <p className="text-xs text-gray-400 mt-2">Solo se registran los insumos con diferencia. Los faltantes se contabilizan como merma del mes; los sobrantes la reducen. El inventario queda igual al conteo físico.</p>
+      <p className="text-xs text-gray-400 mt-2">Solo se registran los insumos con diferencia. El inventario queda igual al conteo físico. En un conteo normal los faltantes se contabilizan como merma del mes y los sobrantes la reducen; en un conteo de <b>línea base</b> no afectan el resultado del mes.</p>
 
       {conteosHist.length>0&&<div className="bg-white border border-gray-200 rounded-xl overflow-hidden mt-5">
         <div className="px-4 py-2 bg-gray-50 border-b border-gray-100"><h3 className="text-sm font-bold text-gray-700">Conteos anteriores</h3></div>
@@ -3267,9 +3313,16 @@ function EstadosView({ventas,mermas,gastosOp,comprasDirectas,cxp,pagos,inventari
   // Mermas del mes = mermas registradas + faltantes netos de conteo físico.
   // Los ajustes de conteo se guardan como entrada/salida_ajuste; la baja
   // (salida) es faltante/merma, la alta (entrada) es sobrante y la reduce.
-  // Se excluye el "Inventario inicial" (carga, no sobrante real).
+  //
+  // Se excluyen DOS cosas que son carga de saldos y no merma real:
+  //   · "Inventario inicial" — la carga masiva de existencias.
+  //   · los conteos marcados como "línea base" (v7.24) — el primer conteo sube
+  //     las existencias del negativo al número físico, y esa diferencia no es
+  //     un sobrante: es el saldo que nunca se había registrado. Sin excluirlo,
+  //     el primer conteo metía ~$243 mil de sobrante ficticio al mes.
+  const esCargaDeSaldos=(m)=>{const n=m.nota||"";return n==="Inventario inicial"||n.includes("línea base");};
   const mermaRegistrada=mermas.filter(m=>enMes(m.fecha||"")).reduce((s,m)=>s+parseFloat(m.costo_total||0),0);
-  const ajusteFaltante=movSucursal.filter(m=>enMes(m.fecha||"")&&(m.tipo==="salida_ajuste"||m.tipo==="entrada_ajuste")&&(m.nota||"")!=="Inventario inicial").reduce((s,m)=>{const val=(parseFloat(m.cantidad)||0)*(parseFloat(m.costo_unitario)||0);return s+(m.tipo==="salida_ajuste"?val:-val);},0);
+  const ajusteFaltante=movSucursal.filter(m=>enMes(m.fecha||"")&&(m.tipo==="salida_ajuste"||m.tipo==="entrada_ajuste")&&!esCargaDeSaldos(m)).reduce((s,m)=>{const val=(parseFloat(m.cantidad)||0)*(parseFloat(m.costo_unitario)||0);return s+(m.tipo==="salida_ajuste"?val:-val);},0);
   const mermaMes=Math.round((mermaRegistrada+ajusteFaltante)*100)/100;
   const gMes=gastosOp.filter(g=>enMes(g.fecha||g.created_at?.split("T")[0]||""));
   const gastosTotal=gMes.reduce((s,g)=>s+parseFloat(g.monto||0),0);

@@ -1235,3 +1235,70 @@ importa: el catálogo dice $100/kg, la factura dice $130/kg, y se comprueba que 
 `costo_promedio` y el kárdex queden en **0.13/g** y no en 0.10.
 
 Batería completa: **187 verificaciones** en 8 archivos.
+
+---
+
+## 16. Qué detona "cerrar conteo", y por qué el primero es distinto (v7.24)
+
+Pregunta de dirección del 2026-08-22, hecha **antes** de apretar el botón. La respuesta
+descubrió un problema que habría falseado el mes.
+
+### 16.1 Qué hace hoy
+
+Para cada insumo con físico capturado **y** diferencia distinta de cero:
+
+1. Escribe un movimiento de kárdex: `entrada_ajuste` si sobra, `salida_ajuste` si falta,
+   por la diferencia absoluta, al costo actual del insumo.
+2. Pone `inventario_sucursal.existencia` **igual al físico**.
+3. Todo con un folio `CONT-YYYYMMDD-NN`.
+
+Los renglones en blanco se omiten (no se contaron) y los que coinciden no generan nada.
+**No** actualiza el `costo_promedio`, y **no** crea renglón en `mermas`: el estado de
+resultados lee los movimientos de ajuste directamente — los faltantes suman a la merma del
+mes, los sobrantes la restan.
+
+Sólo aparecen en la hoja los insumos que **ya tienen fila** de `inventario_sucursal`; los
+38 insumos activos sin fila no se pueden contar hasta que se les cree una.
+
+### 16.2 El problema del PRIMER conteo
+
+Antes de contar, las existencias están negativas: se vendió sin recepción registrada y las
+recetas se fueron corrigiendo sobre la marcha. Contar sube la existencia del negativo al
+número físico real, y esa diferencia se registraba como **sobrante** — que no es un
+sobrante: es el saldo que nunca se había registrado.
+
+Medido contra producción al 22-ago-2026:
+
+| Alcance | Insumos en negativo | Sobrante ficticio |
+|---|---|---|
+| Los 18 del conteo piloto | 17 de 18 | **$139,489** |
+| Todo el inventario | 113 de 152 | **$243,379** |
+
+Ese sobrante le resta a la merma del mes, así que agosto habría cerrado con la utilidad
+operativa inflada en esa cantidad. Nada en la pantalla lo advertía.
+
+### 16.3 Cómo quedó
+
+* Casilla **"Éste es el conteo inicial (línea base)"**. Marcada, la existencia queda igual
+  en el físico y el movimiento se escribe igual (queda el rastro y el folio), pero la nota
+  lleva la marca `· línea base` y el estado de resultados lo **excluye** de la merma del
+  mes — tal como ya excluía la carga de `"Inventario inicial"`.
+* **Aviso automático** cuando se captura el físico de un insumo con existencia negativa y
+  la casilla NO está marcada: dice cuántos son y **cuánto sobrante se registraría**, con la
+  cifra exacta que acabaría restándole a la merma.
+* `cerrarConteo` pasó de `sbPatch` a **`sbPatchE`**: el ajuste de existencia es lo único
+  que no se puede perder en un conteo, y con `sbPatch` un fallo se reportaba como éxito —
+  el kárdex diría que se ajustó y la existencia seguiría en el número viejo. Ahora si algo
+  falla se avisa cuáles renglones no se aplicaron y la captura **no se borra**, para poder
+  reintentar sólo esos.
+
+La marca viaja en la nota en lugar de una columna nueva para no migrar `movimientos_sucursal`
+a media operación; el folio se conserva intacto, así que el historial de conteos sigue
+agrupando igual.
+
+**Pruebas:** `herramientas/prueba-e2e/e2e-conteo-linea-base.js`, 14 verificaciones. POLLO en
+−50 kg contado en 10 kg: se comprueba que el movimiento de 60 kg **sí** se escriba, que la
+existencia **sí** quede en 10 kg, y que los $7,800 **no** lleguen al estado de resultados.
+Y en el mismo archivo, que un faltante normal (RES, $125) **sí** llegue.
+
+Batería completa: **201 verificaciones** en 9 archivos.
