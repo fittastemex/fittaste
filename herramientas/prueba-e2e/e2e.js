@@ -226,6 +226,13 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   await page.getByPlaceholder("ej. 2.5").fill("2");
   await page.getByRole("button",{name:"Crear y armar receta"}).click();
   await page.getByText("Receta de SALSA DE PRUEBA").waitFor();
+  // v7.22: la receta ya no se toca sin apretar "Editar receta" primero. Antes
+  // cada casilla se guardaba en onBlur y cualquier dedazo quedaba grabado.
+  const abrirEdicion=async()=>{
+    const btn=page.getByRole("button",{name:/Editar receta/});
+    if(await btn.count()>0)await btn.first().click();
+  };
+  await abrirEdicion();
   const addRow=page.locator("div.flex.gap-2.items-end").filter({hasText:"Agregar ingrediente"});
   // v7.6: el ingrediente se elige con combobox (escribir → clic en la opción filtrada)
   const addLinea=async(texto,cant)=>{
@@ -253,6 +260,7 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   await page.waitForTimeout(300);
   await page.getByRole("button",{name:"+ Crear receta"}).click();
   await page.getByText("Receta de BOWL DE PRUEBA").waitFor();
+  await abrirEdicion();
   await addLinea("PECHUGA",0.18);
   await addLinea("CREMA",30);
   await addLinea("SALSA DE PRUEBA",0.05);
