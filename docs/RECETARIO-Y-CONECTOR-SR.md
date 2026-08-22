@@ -1302,3 +1302,122 @@ existencia **sí** quede en 10 kg, y que los $7,800 **no** lleguen al estado de 
 Y en el mismo archivo, que un faltante normal (RES, $125) **sí** llegue.
 
 Batería completa: **201 verificaciones** en 9 archivos.
+
+---
+
+## 17. Producción de preparaciones (v7.25)
+
+Petición de dirección: *"en el conteo de inventario no veo las preparaciones, es importante
+también tener un módulo de producción donde cocina pueda registrar que se producen las
+preparaciones/preservicios y puedan tener un descuento de insumos, generación de una
+cantidad de preparación y eso a su vez se descuente de recetas."*
+
+### 17.1 Qué estaba mal
+
+Las preparaciones **no tenían existencia**. `explotarReceta` las reventaba hasta insumos de
+compra: al vender un wrap con 0.03 kg de `DIP DE AGUACATE` se descontaban el aguacate y el
+limón prorrateados, nunca el dip. Costeaba igual, pero rompía tres cosas:
+
+1. **El inventario de ingredientes estaba mal todos los días.** Los aguacates salen del
+   almacén el día que cocina hace la tanda, no conforme se venden los wraps de la semana.
+   Entre la producción y el agotamiento, la existencia de aguacate nunca cuadraba.
+2. **La preparación no se podía contar.** Los 3 litros de aderezo en la cámara eran
+   invisibles para el sistema.
+3. **El rendimiento real era invisible.** Si la tanda debía dar 500 ml y dio 420, ese 16%
+   no aparecía en ningún lado — y en una cocina ese número es la mitad del food cost.
+
+### 17.2 El insumo espejo
+
+Cada preparación gana un **insumo espejo**: una fila de `insumos` con
+`tipo_control = 'preparacion'` y `preparacion_id` apuntando a la preparación. Ese espejo es
+el que lleva existencia, kárdex y costo promedio.
+
+Se eligió así en lugar de agregar `preparacion_id` a `inventario_sucursal` y
+`movimientos_sucursal` porque **todo lo que ya funciona lo hace sobre `insumos.id`**: la
+hoja de conteo, el kárdex, el costo promedio ponderado, la alarma de negativos y el estado
+de resultados quedaron cubiertos sin tocarlos. La alternativa obligaba a revisar cada join
+del sistema.
+
+El valor `'preparacion'` es nuevo en el CHECK de `tipo_control`. Los filtros que ya decían
+`tipo_control === 'inventariable'` — sobre todo el buscador de ingredientes de receta — lo
+excluyen solos, que es lo correcto: una preparación ya se ofrece como opción `prep:` y
+aparecer dos veces sería una trampa.
+
+Los espejos son **de solo lectura** en la pestaña de insumos (candado 🔒): su nombre y su
+unidad los manda la preparación, y cambiarles el tipo los desconectaría del inventario.
+Misma lección que los productos de SoftRestaurant en v7.21.
+
+### 17.3 Lo que cambió en el costeo
+
+* **`explotarReceta`** ya no revienta preparaciones: descuenta el espejo. Los ingredientes
+  salen en su momento real, al registrar la producción.
+* **`costoReceta`** toma el costo de una preparación de su espejo (`costo_promedio`), que es
+  el que dejaron las tandas realmente producidas. Ese número es **mejor** que el teórico
+  porque ya incorpora el rendimiento real: el mismo consumo de ingredientes repartido entre
+  menos producto sube el costo por unidad, y el platillo lo refleja.
+* Mientras no haya producciones ni conteo, el espejo no tiene costo promedio y **se cae al
+  cálculo teórico de siempre** (receta ÷ rendimiento). Nada se rompe el día del cambio.
+* Si una preparación no tuviera espejo, se cae al comportamiento anterior en lugar de dejar
+  de costear en silencio.
+
+### 17.4 La pantalla
+
+`Almacén → Inventario sucursal → Producción`.
+
+Cocina captura **cuánto salió de verdad**, no cuántas tandas hizo. Esa decisión es la que
+hace medible el rendimiento: capturar "hice 1 tanda" lo volvería invisible por construcción.
+Las tandas equivalentes (producido ÷ rendimiento) son el multiplicador con el que se
+descuentan los ingredientes — si salieron 3.8 de una receta que rinde 4.4, se consumió 0.864
+de receta.
+
+Al guardar: salen los ingredientes (`salida_produccion`), entra la preparación
+(`entrada_produccion`) con costo promedio ponderado, y se escriben `producciones` +
+`produccion_consumo`. Todos los movimientos quedan ligados por `produccion_id`.
+
+La pantalla muestra antes de guardar qué va a salir y si el inventario alcanza. **El
+faltante no bloquea**: la mercancía ya se usó físicamente y negarlo dejaría el inventario
+peor; se avisa y se pide confirmar. También muestra el rendimiento contra la receta y las
+últimas tandas de esa preparación, para distinguir un caso aislado de un patrón — un
+rendimiento negativo repetido significa que la receta promete más de lo que da, y ahí hay
+que corregir el rendimiento, no la tanda.
+
+`producciones` guarda `cantidad_producida` **y** `cantidad_teorica` porque el rendimiento de
+la receta puede cambiar después y entonces el histórico mentiría.
+
+### 17.5 La hoja de conteo ahora lista todo
+
+Al probar el módulo salió que las preparaciones sólo aparecían **después** de la primera
+producción: la hoja de conteo listaba únicamente insumos con fila en `inventario_sucursal`.
+Eso dejaba fuera las 25 preparaciones y 38 insumos activos — justo lo que dirección no veía.
+
+Ahora la hoja lista **todo lo inventariable**, tenga o no fila; los que no la tienen entran
+con existencia 0 y su fila se crea al cerrar el conteo. La pestaña *Inventario* sigue
+mostrando sólo lo que ya tiene fila (60 renglones en cero sería ruido) y dice cuántos faltan.
+
+### 17.6 Permisos
+
+Verificado con `SET LOCAL ROLE anon` antes de darlo por bueno: lectura de espejos e
+inserción en `producciones`, `produccion_consumo` y `movimientos_sucursal` con los dos tipos
+nuevos. Es paso obligatorio desde el incidente de v7.20 — probar como administrador esconde
+los permisos faltantes.
+
+**Pruebas:** `herramientas/prueba-e2e/e2e-produccion.js`, 24 verificaciones. Las que
+importan: que al vender se descuente **la preparación y no sus ingredientes** (se inspecciona
+la salida de `explotarReceta`), que una tanda de 1.6 lt de una receta que rinde 2 descuente
+800 ml y 400 g (0.8 tandas) y dé entrada a 1.6 lt a $30/lt, y que la preparación se pueda
+**contar antes de que exista una sola producción**.
+
+Batería completa: **225 verificaciones** en 10 archivos.
+
+### 17.7 Corrección aparte del mismo día
+
+Al revisar el conteo de línea base apareció que valuó 2.1 kg de `ISO PROTEIN CHOCOLATE` en
+**$1,300,398**. Al cambiar su `unidad_base` de kg a g quedaron tres residuos que nadie
+recalibró: el `contenido` de la presentación de `WHEY PROTEIN CHOCOLATE` (1 en lugar de
+1000), el `costo_promedio` de ambas (que gana sobre el catálogo en `costoInsumo`, así que
+corregir el catálogo no bastaba), y la cantidad en sus recetas (`0.03`, que era el kilo, y
+en gramos son 30 como las de vainilla).
+
+Es el mismo patrón de v7.22: **corregir un denominador obliga a revisar las cantidades que
+se calibraron contra el denominador roto.** Ya corregido; el conteo era línea base, así que
+no llegó al resultado del mes.

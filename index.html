@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.24";
+const V="7.25";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -136,30 +136,63 @@ function presentacionesDe(insumoId,catalogo){
   return (catalogo||[]).filter(c=>c.insumo_id===insumoId)
     .sort((a,b)=>(b.preferida?1:0)-(a.preferida?1:0)||cu(a)-cu(b));
 }
+// v7.25: el ESPEJO de una preparación. Cada preparación tiene un insumo con
+// `preparacion_id` apuntándola; ése es el que lleva existencia, kárdex y costo
+// promedio. Es el puente entre el mundo de las recetas (productos_venta) y el
+// del inventario (insumos).
+function espejoDe(prepId,insumos){
+  return (insumos||[]).find(i=>i.preparacion_id===prepId)||null;
+}
 // v7.1: costo teórico de un producto de venta (platillo SR) explotando su receta.
-// Una línea puede ser un insumo del catálogo o una PREPARACIÓN (sub-receta): en
-// ese caso el costo unitario es el costo de su tanda entre su rendimiento.
 // merma_pct es el % extra de consumo por rendimiento (ej. limpieza de verdura).
 // depth protege contra ciclos (una prep que se usa a sí misma).
-function costoReceta(prodId,recetas,invSucursal,catalogo,productosVenta,depth=0){
+//
+// v7.25: para una línea de preparación, el costo unitario sale del COSTO
+// PROMEDIO de su espejo — el que dejaron las tandas realmente producidas. Ese
+// número es mejor que el teórico porque ya incorpora el rendimiento real: si la
+// tanda debía dar 500 ml y dio 420, el costo por ml sube y el platillo lo
+// refleja. Mientras no haya producciones ni conteo, el espejo no tiene costo
+// promedio y se cae al cálculo teórico de siempre (receta ÷ rendimiento), así
+// que nada se rompe el día del cambio.
+function costoReceta(prodId,recetas,invSucursal,catalogo,productosVenta,depth=0,insumos=null){
   if(depth>5)return 0;
   return (recetas||[]).filter(r=>r.producto_venta_id===prodId).reduce((s,r)=>{
     const q=(parseFloat(r.cantidad)||0)*(1+(parseFloat(r.merma_pct)||0)/100);
     let cu=0;
     if(r.insumo_id)cu=costoInsumo(r.insumo_id,invSucursal,catalogo);
-    else if(r.preparacion_id){const prep=(productosVenta||[]).find(p=>p.id===r.preparacion_id);const rend=parseFloat(prep?.rendimiento)||1;cu=costoReceta(r.preparacion_id,recetas,invSucursal,catalogo,productosVenta,depth+1)/rend;}
+    else if(r.preparacion_id){
+      const esp=espejoDe(r.preparacion_id,insumos);
+      const real=esp?costoInsumo(esp.id,invSucursal,catalogo):0;
+      if(real>0)cu=real;
+      else{const prep=(productosVenta||[]).find(p=>p.id===r.preparacion_id);const rend=parseFloat(prep?.rendimiento)||1;cu=costoReceta(r.preparacion_id,recetas,invSucursal,catalogo,productosVenta,depth+1,insumos)/rend;}
+    }
     return s+q*cu;
   },0);
 }
-// v7.1: explota una receta (incluyendo sub-recetas) hasta insumos del catálogo.
-// Acumula en `consumo` {catalogo_id: cantidad}; solo los insumos del catálogo
-// descuentan inventario (las preparaciones son virtuales: no llevan stock).
-function explotarReceta(prodId,cantidadVendida,recetas,productosVenta,consumo,depth=0){
+// v7.1: explota una receta para saber qué descuentan las ventas.
+//
+// v7.25: las preparaciones YA NO se revientan hasta sus ingredientes. Antes, al
+// vender un wrap con 0.03 kg de DIP DE AGUACATE se descontaban el aguacate y el
+// limón prorrateados, nunca el dip. Eso costeaba igual pero rompía la operación:
+// los aguacates salen del almacén el día que cocina hace la tanda, no conforme
+// se venden los wraps de la semana — así que la existencia de aguacate nunca
+// cuadraba entre la producción y el agotamiento. Y la preparación, al no tener
+// existencia, no se podía contar ni medir su rendimiento.
+//
+// Ahora se descuenta el ESPEJO de la preparación, y los ingredientes salen en su
+// momento real: cuando se registra la producción. Si una preparación no tiene
+// espejo (no debería pasar), se cae al comportamiento anterior para no dejar de
+// costear en silencio.
+function explotarReceta(prodId,cantidadVendida,recetas,productosVenta,consumo,depth=0,insumos=null){
   if(depth>5)return consumo;
   (recetas||[]).filter(r=>r.producto_venta_id===prodId).forEach(r=>{
     const q=(parseFloat(r.cantidad)||0)*(1+(parseFloat(r.merma_pct)||0)/100)*cantidadVendida;
     if(r.insumo_id)consumo[r.insumo_id]=(consumo[r.insumo_id]||0)+q;
-    else if(r.preparacion_id){const rend=parseFloat((productosVenta||[]).find(p=>p.id===r.preparacion_id)?.rendimiento)||1;explotarReceta(r.preparacion_id,q/rend,recetas,productosVenta,consumo,depth+1);}
+    else if(r.preparacion_id){
+      const esp=espejoDe(r.preparacion_id,insumos);
+      if(esp)consumo[esp.id]=(consumo[esp.id]||0)+q;
+      else{const rend=parseFloat((productosVenta||[]).find(p=>p.id===r.preparacion_id)?.rendimiento)||1;explotarReceta(r.preparacion_id,q/rend,recetas,productosVenta,consumo,depth+1,insumos);}
+    }
   });
   return consumo;
 }
@@ -1550,19 +1583,23 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
       const sinPres=(x)=>!catalogo.some(c=>c.insumo_id===x.id);
       const sinUso=(x)=>!(recetas||[]).some(r=>r.insumo_id===x.id);
       const cuenta={todos:insumos.length,
-        inventariable:insumos.filter(x=>x.tipo_control!=="gasto").length,
+        inventariable:insumos.filter(x=>x.tipo_control==="inventariable").length,
+        preparacion:insumos.filter(x=>x.tipo_control==="preparacion").length,
         gasto:insumos.filter(x=>x.tipo_control==="gasto").length,
-        sinpres:insumos.filter(sinPres).length,
+        // Un espejo de preparación no se compra, así que "sin presentación" no
+        // le aplica: contarlo ahí sería una alarma falsa permanente.
+        sinpres:insumos.filter(x=>x.tipo_control!=="preparacion"&&sinPres(x)).length,
         sinuso:insumos.filter(sinUso).length};
       const chipI=(id,l,col)=>(<button key={id} onClick={()=>setFiltroIns(id)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${filtroIns===id?"text-white border-transparent":"bg-white border-gray-200 text-gray-600 hover:text-gray-800"}`} style={filtroIns===id?{background:col}:{}}>{l} ({cuenta[id]})</button>);
       return(<div className="flex flex-col md:flex-row md:items-center gap-2 mb-4">
       <div className="relative flex-1"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">🔍</span><input className="w-full border border-gray-200 rounded-xl pl-9 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-teal-400" placeholder="Buscar insumo por nombre o unidad..." value={filterIns} onChange={e=>setFilterIns(e.target.value)}/></div>
-      <div className="flex gap-1 flex-wrap">{chipI("todos","Todos","#2D2D2D")}{chipI("inventariable","Inventariables","#0e918b")}{chipI("gasto","Gasto directo","#9ca3af")}{chipI("sinpres","⚠ Sin presentación","#bb4430")}{chipI("sinuso","Sin uso en recetas","#d6816c")}</div>
+      <div className="flex gap-1 flex-wrap">{chipI("todos","Todos","#2D2D2D")}{chipI("inventariable","De compra","#0e918b")}{chipI("preparacion","Preparaciones","#7c5cbf")}{chipI("gasto","Gasto directo","#9ca3af")}{chipI("sinpres","⚠ Sin presentación","#bb4430")}{chipI("sinuso","Sin uso en recetas","#d6816c")}</div>
       </div>);})()}
     {(()=>{const insFiltrados=insumos.filter(x=>{
-        if(filtroIns==="inventariable"&&x.tipo_control==="gasto")return false;
+        if(filtroIns==="inventariable"&&x.tipo_control!=="inventariable")return false;
+        if(filtroIns==="preparacion"&&x.tipo_control!=="preparacion")return false;
         if(filtroIns==="gasto"&&x.tipo_control!=="gasto")return false;
-        if(filtroIns==="sinpres"&&catalogo.some(c=>c.insumo_id===x.id))return false;
+        if(filtroIns==="sinpres"&&(x.tipo_control==="preparacion"||catalogo.some(c=>c.insumo_id===x.id)))return false;
         if(filtroIns==="sinuso"&&(recetas||[]).some(r=>r.insumo_id===x.id))return false;
         const q=norm(filterIns);return !q||norm(x.nombre).includes(q)||norm(x.unidad_base).includes(q)||norm(x.categoria_gasto).includes(q);
       }).slice().sort((a,b)=>a.nombre.localeCompare(b.nombre));return(<>
@@ -1572,14 +1609,18 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
       </tr></thead><tbody>{insFiltrados.map(x=>{
         const isE=editingIns===x.id;
         const nPres=catalogo.filter(c=>c.insumo_id===x.id).length;
-        return(<tr key={x.id} className={`border-t border-gray-100 ${isE?"bg-teal-50":"hover:bg-gray-50"}`}>
-          <td className="px-3 py-2 font-medium text-gray-900">{isE?<input className="w-full border border-teal-400 rounded px-1 py-0.5 text-sm bg-teal-50" value={editInsData.nombre} onChange={e=>setEditInsData({...editInsData,nombre:e.target.value})}/>:x.nombre}</td>
+        // v7.25: los espejos de preparación son de solo lectura. Su nombre y su
+        // unidad los manda la preparación (Ventas → Productos y recetas), y
+        // cambiarles el tipo los desconectaría del inventario.
+        const esEspejo=!!x.preparacion_id;
+        return(<tr key={x.id} className={`border-t border-gray-100 ${isE?"bg-teal-50":esEspejo?"bg-purple-50/40 hover:bg-purple-50":"hover:bg-gray-50"}`}>
+          <td className="px-3 py-2 font-medium text-gray-900">{isE?<input className="w-full border border-teal-400 rounded px-1 py-0.5 text-sm bg-teal-50" value={editInsData.nombre} onChange={e=>setEditInsData({...editInsData,nombre:e.target.value})}/>:<span>{x.nombre}{esEspejo&&<span className="ml-1 text-purple-500" title="Es una preparación: su nombre y su unidad se editan en Ventas → Productos y recetas">🔒</span>}</span>}</td>
           <td className="px-3 py-2">{isE?<select className="border border-teal-400 rounded px-1 py-0.5 text-xs bg-teal-50" value={editInsData.unidad_base} onChange={e=>setEditInsData({...editInsData,unidad_base:e.target.value})}>{["ml","g","kg","lt","pz","paq","porcion"].map(u=><option key={u} value={u}>{u}</option>)}</select>:<span className="text-gray-600">{x.unidad_base}</span>}</td>
-          <td className="px-3 py-2">{isE?<select className="border border-teal-400 rounded px-1 py-0.5 text-xs bg-teal-50" value={editInsData.tipo_control} onChange={e=>setEditInsData({...editInsData,tipo_control:e.target.value})}><option value="inventariable">Inventariable</option><option value="gasto">Gasto directo</option></select>:<Badge v={x.tipo_control==="gasto"?"default":"almacen"}>{x.tipo_control==="gasto"?"Gasto directo":"Inventariable"}</Badge>}</td>
+          <td className="px-3 py-2">{isE?<select className="border border-teal-400 rounded px-1 py-0.5 text-xs bg-teal-50" value={editInsData.tipo_control} onChange={e=>setEditInsData({...editInsData,tipo_control:e.target.value})}><option value="inventariable">Inventariable</option><option value="gasto">Gasto directo</option></select>:<Badge v={x.tipo_control==="gasto"?"default":x.tipo_control==="preparacion"?"purple":"almacen"}>{x.tipo_control==="gasto"?"Gasto directo":x.tipo_control==="preparacion"?"Preparación":"De compra"}</Badge>}</td>
           <td className="px-3 py-2">{isE&&editInsData.tipo_control==="gasto"?<input className="w-24 border border-teal-400 rounded px-1 py-0.5 text-xs bg-teal-50" placeholder="Limpieza" value={editInsData.categoria_gasto||""} onChange={e=>setEditInsData({...editInsData,categoria_gasto:e.target.value})}/>:<span className="text-xs text-gray-500">{x.tipo_control==="gasto"?(x.categoria_gasto||"—"):"—"}</span>}</td>
           <td className="px-3 py-2 text-right"><span className={`text-xs font-medium ${nPres>0?"text-gray-800":"text-red-500"}`}>{nPres}</span></td>
           <td className="px-3 py-2 text-right text-xs text-gray-600">{(()=>{const pres=catalogo.filter(c=>c.insumo_id===x.id&&parseFloat(c.costo_referencia)>0);return pres.length>0?`${fmt(Math.min(...pres.map(c=>parseFloat(c.costo_referencia)/(parseFloat(c.contenido)||1))))}/${x.unidad_base}`:"—";})()}</td>
-          <td className="px-3 py-2 text-right">{isE?<div className="flex gap-1 justify-end"><button onClick={()=>saveIns(x)} disabled={saving} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded">{saving?"...":"Guardar"}</button><button onClick={()=>setEditingIns(null)} className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded">X</button></div>:<div className="flex gap-1 justify-end"><button onClick={()=>{setEditingIns(x.id);setEditInsData({nombre:x.nombre,unidad_base:x.unidad_base,tipo_control:x.tipo_control,categoria_gasto:x.categoria_gasto||""});}} className="text-xs text-amber-700 hover:bg-amber-100 px-2 py-1 rounded">Editar</button><button onClick={()=>delIns(x)} className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded">✕</button></div>}</td>
+          <td className="px-3 py-2 text-right">{esEspejo?<span className="text-xs text-purple-600">Preparación</span>:isE?<div className="flex gap-1 justify-end"><button onClick={()=>saveIns(x)} disabled={saving} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded">{saving?"...":"Guardar"}</button><button onClick={()=>setEditingIns(null)} className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded">X</button></div>:<div className="flex gap-1 justify-end"><button onClick={()=>{setEditingIns(x.id);setEditInsData({nombre:x.nombre,unidad_base:x.unidad_base,tipo_control:x.tipo_control,categoria_gasto:x.categoria_gasto||""});}} className="text-xs text-amber-700 hover:bg-amber-100 px-2 py-1 rounded">Editar</button><button onClick={()=>delIns(x)} className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded">✕</button></div>}</td>
         </tr>);})}</tbody></table>
     </div>
     {insFiltrados.length===0&&<p className="text-sm text-gray-400 text-center py-6">Ningún insumo coincide con {filterIns?`"${filterIns}"`:"el filtro"}.</p>}
@@ -2245,7 +2286,7 @@ function VentasSRView({productosVenta,setProductosVenta,productosInactivos,setPr
       ?(productosVenta.find(x=>x.id===r.preparacion_id)?.unidad||"u")
       :(insumos.find(x=>x.id===r.insumo_id)?.unidad_base||"u");
     const costoDe=(r)=>r.preparacion_id
-      ?costoReceta(r.preparacion_id,recetas,invSucursal,catalogo,productosVenta)/(parseFloat(productosVenta.find(x=>x.id===r.preparacion_id)?.rendimiento)||1)
+      ?costoReceta(r.preparacion_id,recetas,invSucursal,catalogo,productosVenta,0,insumos)/(parseFloat(productosVenta.find(x=>x.id===r.preparacion_id)?.rendimiento)||1)
       :costoInsumo(r.insumo_id,invSucursal,catalogo);
     const alertas=[];
     for(const r of cambios){
@@ -2315,7 +2356,7 @@ function VentasSRView({productosVenta,setProductosVenta,productosInactivos,setPr
         const esPrep=!!r.preparacion_id;
         const prep=esPrep?productosVenta.find(x=>x.id===r.preparacion_id):null;
         const ins=esPrep?null:(insumos.find(x=>x.id===r.insumo_id)||{});
-        const cU=esPrep?(costoReceta(r.preparacion_id,recetas,invSucursal,catalogo,productosVenta)/(parseFloat(prep?.rendimiento)||1)):costoInsumo(r.insumo_id,invSucursal,catalogo);
+        const cU=esPrep?(costoReceta(r.preparacion_id,recetas,invSucursal,catalogo,productosVenta,0,insumos)/(parseFloat(prep?.rendimiento)||1)):costoInsumo(r.insumo_id,invSucursal,catalogo);
         const b=editando?borrador[r.id]:null;
         // En edición el costo de la línea sigue lo TECLEADO, para ver el efecto
         // del cambio antes de guardarlo.
@@ -2345,7 +2386,7 @@ function VentasSRView({productosVenta,setProductosVenta,productosInactivos,setPr
       {editando&&<div className="flex gap-2 items-end flex-wrap">
         <div className="flex-1"><label className="text-xs text-gray-500">Agregar ingrediente (escribe para buscar)</label>
         <BuscadorIngrediente key={p.id+"-"+recetas.filter(r=>r.producto_venta_id===p.id).length} placeholder="ej. pollo, salsa, crema…" onPick={(o)=>setNewLinea({...newLinea,ref:o.value})} opciones={[
-          ...productosVenta.filter(x=>x.es_preparacion&&x.id!==p.id&&!recetas.some(r=>r.producto_venta_id===p.id&&r.preparacion_id===x.id)).map(x=>{const rx=parseFloat(x.rendimiento)||1;return{value:"prep:"+x.id,label:x.nombre,prep:true,extra:`${x.unidad||"u"} — ${fmt(costoReceta(x.id,recetas,invSucursal,catalogo,productosVenta)/rx)}`,usos:recetas.filter(r=>r.preparacion_id===x.id).length};}),
+          ...productosVenta.filter(x=>x.es_preparacion&&x.id!==p.id&&!recetas.some(r=>r.producto_venta_id===p.id&&r.preparacion_id===x.id)).map(x=>{const rx=parseFloat(x.rendimiento)||1;return{value:"prep:"+x.id,label:x.nombre,prep:true,extra:`${x.unidad||"u"} — ${fmt(costoReceta(x.id,recetas,invSucursal,catalogo,productosVenta,0,insumos)/rx)}`,usos:recetas.filter(r=>r.preparacion_id===x.id).length};}),
           ...insumos.filter(x=>x.tipo_control==="inventariable"&&!recetas.some(r=>r.producto_venta_id===p.id&&r.insumo_id===x.id)).map(x=>({value:"ins:"+x.id,label:x.nombre,extra:`${x.unidad_base} — ${fmt(costoInsumo(x.id,invSucursal,catalogo))}/${x.unidad_base}`,usos:recetas.filter(r=>r.insumo_id===x.id).length})),
         ]}/></div>
         <div><label className="text-xs text-gray-500">Cantidad</label><input type="number" min="0" step="0.001" className="w-24 border border-gray-200 rounded-lg px-2 py-1.5 text-xs" value={newLinea.cantidad||""} onChange={e=>setNewLinea({...newLinea,cantidad:parseFloat(e.target.value)||0})}/></div>
@@ -2443,7 +2484,7 @@ function VentasSRView({productosVenta,setProductosVenta,productosInactivos,setPr
             {sinReceta>0&&<Badge v="danger">{sinReceta} sin receta (no descuentan inventario)</Badge>}
           </div>
           <div className="bg-white border border-gray-200 rounded-xl overflow-hidden max-h-64 overflow-y-auto"><table className="w-full text-xs"><thead className="bg-gray-50 sticky top-0"><tr>{["Código SR","Producto","Cant","Importe","Estado","Receta","Costo teórico"].map(h=><th key={h} className={`px-2 py-1.5 font-semibold text-gray-600 uppercase ${["Cant","Importe","Costo teórico"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}</tr></thead><tbody>
-            {parsed.rows.map((r,i)=>{const nRec=r.prodId?recetas.filter(x=>x.producto_venta_id===r.prodId).length:0;const cT=r.prodId?costoReceta(r.prodId,recetas,invSucursal,catalogo,productosVenta)*r.cantidad:0;return(<tr key={i} className="border-t border-gray-50">
+            {parsed.rows.map((r,i)=>{const nRec=r.prodId?recetas.filter(x=>x.producto_venta_id===r.prodId).length:0;const cT=r.prodId?costoReceta(r.prodId,recetas,invSucursal,catalogo,productosVenta,0,insumos)*r.cantidad:0;return(<tr key={i} className="border-t border-gray-50">
               <td className="px-2 py-1 font-mono text-gray-500">{r.codigo||"—"}</td>
               <td className="px-2 py-1 font-medium text-gray-800">{r.nombre}</td>
               <td className="px-2 py-1 text-right">{r.cantidad}</td>
@@ -2556,7 +2597,7 @@ function VentasSRView({productosVenta,setProductosVenta,productosInactivos,setPr
         {(verTipo==="preparaciones"?["Preparación","Se mide en","Rinde/tanda","Costo tanda","Costo unidad","Receta",""]:["Código SR","Producto","Grupo","Clasificación","Precio","Costo receta","Margen","Receta",""]).map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Precio","Costo receta","Margen","Rinde/tanda","Costo tanda","Costo unidad"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
       </tr></thead><tbody>{lista.map(p=>{
         const isE=editingProd===p.id;
-        const cR=costoReceta(p.id,recetas,invSucursal,catalogo,productosVenta);
+        const cR=costoReceta(p.id,recetas,invSucursal,catalogo,productosVenta,0,insumos);
         const nRec=recetas.filter(r=>r.producto_venta_id===p.id).length;
         const precio=parseFloat(isE?prodData.precio_venta:p.precio_venta)||0;
         const margen=precio>0?(precio/1.16-cR)/(precio/1.16)*100:0;
@@ -2957,7 +2998,7 @@ function VentasDashboardView({ventas,ventaDetalle,productosVenta,gastosOp}){
 }
 
 // ======================== INVENTARIO SUCURSAL + MERMA (v7.0) ========================
-function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,mermas,setMermas,catalogo,insumos,sucursales,rol}){
+function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,mermas,setMermas,catalogo,insumos,sucursales,rol,productosVenta,recetas,producciones,setProducciones}){
   const [tab,setTab]=useState("inventario");
   const sucId=sucursales[0]?.id||null;
   const [adding,setAdding]=useState(false);
@@ -2990,9 +3031,25 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
   // rastro y el folio) pero el estado de resultados los excluye, tal como ya
   // excluía la carga de "Inventario inicial".
   const [esLineaBase,setEsLineaBase]=useState(false);
+  // v7.25: captura de producción
+  const [fProd,setFProd]=useState({preparacion_id:"",cantidad:"",fecha:new Date().toISOString().split("T")[0],nota:""});
+  const [msgProd,setMsgProd]=useState(null);
+  const [busqProdPrep,setBusqProdPrep]=useState("");
   const nrm=(s)=>String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toUpperCase();
 
-  const rows=invSucursal.filter(i=>!sucId||i.sucursal_id===sucId).map(i=>({...i,ins:insumos.find(x=>x.id===i.insumo_id)||{}})).sort((a,b)=>(a.ins.nombre||"").localeCompare(b.ins.nombre||""));
+  // v7.25: la lista incluye TODO lo que lleva inventario, tenga o no fila en
+  // `inventario_sucursal`. Antes sólo salían los que ya tenían fila, así que lo
+  // que nunca se recibió ni se produjo era invisible: las 25 preparaciones y 38
+  // insumos activos no se podían contar. Los que no tienen fila entran con
+  // existencia 0 y `sinFila`, y la fila se crea al cerrar el conteo.
+  const rows=(()=>{
+    const conFila=invSucursal.filter(i=>!sucId||i.sucursal_id===sucId)
+      .map(i=>({...i,ins:insumos.find(x=>x.id===i.insumo_id)||{},sinFila:false}));
+    const yaEstan=new Set(conFila.map(r=>r.insumo_id));
+    const sinFila=insumos.filter(x=>x.activo!==false&&x.tipo_control!=="gasto"&&!yaEstan.has(x.id))
+      .map(x=>({id:null,sucursal_id:sucId,insumo_id:x.id,existencia:0,costo_promedio:0,ins:x,sinFila:true}));
+    return [...conFila,...sinFila].sort((a,b)=>(a.ins.nombre||"").localeCompare(b.ins.nombre||""));
+  })();
   const valor=rows.reduce((s,i)=>s+Math.max(0,parseFloat(i.existencia)||0)*costoInsumo(i.insumo_id,invSucursal,catalogo),0);
   const hoy=new Date();const mesInicio=new Date(hoy.getFullYear(),hoy.getMonth(),1).toISOString().split("T")[0];
   const mermaMes=mermas.filter(m=>(m.fecha||"")>=mesInicio).reduce((s,m)=>s+parseFloat(m.costo_total||0),0);
@@ -3057,11 +3114,19 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
       // único que no se puede perder en un conteo, y con sbPatch un fallo se
       // reportaba como éxito: el kárdex diría que se ajustó y la existencia
       // seguiría en el número viejo.
-      const r=await sbPatchE("inventario_sucursal",c.row.id,{existencia:c.fisico,updated_at:new Date().toISOString()});
+      let filaId=c.row.id;
+      if(!filaId){
+        // Nunca se había recibido ni producido: el conteo es su primer registro.
+        const nuevo=await sbPostE("inventario_sucursal",{sucursal_id:c.row.sucursal_id||sucId,insumo_id:c.row.insumo_id,existencia:0,costo_promedio:c.costo||0});
+        if(nuevo.error||!(nuevo.data&&nuevo.data[0])){fallos.push(`${c.row.ins?.nombre||"?"}: no se pudo crear su renglón de inventario (${nuevo.error?.message||"error desconocido"})`);continue;}
+        filaId=nuevo.data[0].id;
+        invLocal=[...invLocal,nuevo.data[0]];
+      }
+      const r=await sbPatchE("inventario_sucursal",filaId,{existencia:c.fisico,updated_at:new Date().toISOString()});
       if(r.error){fallos.push(`${c.row.ins?.nombre||"?"}: ${r.error.message||"error desconocido"}`);continue;}
-      const mv=await sbPost("movimientos_sucursal",{sucursal_id:c.row.sucursal_id,insumo_id:c.row.insumo_id,tipo:c.diff>0?"entrada_ajuste":"salida_ajuste",cantidad:Math.abs(c.diff),costo_unitario:c.costo,fecha,nota,registrado_por:rol});
+      const mv=await sbPost("movimientos_sucursal",{sucursal_id:c.row.sucursal_id||sucId,insumo_id:c.row.insumo_id,tipo:c.diff>0?"entrada_ajuste":"salida_ajuste",cantidad:Math.abs(c.diff),costo_unitario:c.costo,fecha,nota,registrado_por:rol});
       if(mv&&mv[0])nuevosMov.push(mv[0]);
-      invLocal=invLocal.map(i=>i.id===c.row.id?{...i,existencia:c.fisico}:i);
+      invLocal=invLocal.map(i=>i.id===filaId?{...i,existencia:c.fisico}:i);
       const val=Math.abs(c.diff)*c.costo;
       if(c.diff<0)faltante+=val;else sobrante+=val;
     }
@@ -3072,6 +3137,109 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
     if(fallos.length)alert(`Se ajustaron ${aplicados} de ${cambios.length} insumos. NO se pudo ajustar:\n\n${fallos.join("\n")}\n\nVuelve a capturar esos renglones.`);
     else{setConteo({});setConteoNota("");setSoloDif(false);setConteoBusq("");setEsLineaBase(false);}
     setCerrando(false);
+  };
+
+  // ============================================================
+  // v7.25 — PRODUCCIÓN DE PREPARACIONES
+  // ============================================================
+  // Cocina captura CUÁNTO SALIÓ DE VERDAD, no cuántas tandas hizo. Se eligió así
+  // porque es lo único que permite medir el rendimiento real: si la receta dice
+  // que la tanda rinde 4.4 lt y salieron 3.8, ese 14% de pérdida es dinero que
+  // hoy no aparece en ningún lado. Capturar "hice 1 tanda" lo haría invisible
+  // por construcción.
+  //
+  // Las tandas equivalentes (producido ÷ rendimiento) son el multiplicador con
+  // el que se descuentan los ingredientes: si salieron 3.8 de una receta que
+  // rinde 4.4, se consumió 0.864 de receta.
+  const prepsActivas=(productosVenta||[]).filter(p=>p.es_preparacion&&p.activo!==false)
+    .slice().sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
+
+  // Lo que consumiría una producción, sin escribir nada: alimenta la vista previa
+  // y luego el guardado, para que la pantalla y la base no puedan discrepar.
+  const planDeProduccion=(prepId,cantidadProducida)=>{
+    const prep=prepsActivas.find(p=>p.id===prepId);
+    if(!prep)return null;
+    const rend=parseFloat(prep.rendimiento)||0;
+    const producido=parseFloat(cantidadProducida)||0;
+    if(rend<=0||producido<=0)return null;
+    const tandas=producido/rend;
+    const lineas=(recetas||[]).filter(r=>r.producto_venta_id===prepId).map(r=>{
+      // Una preparación puede llevar otra dentro (arroz en un bowl base): ahí se
+      // consume el ESPEJO de la sub-preparación, que es lo que tiene existencia.
+      const insId=r.insumo_id||espejoDe(r.preparacion_id,insumos)?.id||null;
+      const ins=(insumos||[]).find(x=>x.id===insId);
+      const cant=(parseFloat(r.cantidad)||0)*(1+(parseFloat(r.merma_pct)||0)/100)*tandas;
+      const cu=insId?costoInsumo(insId,invSucursal,catalogo):0;
+      const existe=(invSucursal||[]).find(v=>v.insumo_id===insId&&(!sucId||v.sucursal_id===sucId));
+      return {insumo_id:insId,nombre:ins?.nombre||"(sin insumo)",unidad:ins?.unidad_base||"",
+              cantidad:Math.round(cant*10000)/10000,costo_unitario:cu,
+              importe:Math.round(cant*cu*100)/100,
+              existencia:existe?parseFloat(existe.existencia)||0:0,
+              alcanza:existe?(parseFloat(existe.existencia)||0)>=cant:false};
+    });
+    const costoTotal=Math.round(lineas.reduce((s,l)=>s+l.importe,0)*100)/100;
+    return {prep,rend,producido,tandas:Math.round(tandas*10000)/10000,
+            teorico:Math.round(rend*Math.round(tandas*10000)/10000*10000)/10000,
+            lineas,costoTotal,
+            costoUnitario:producido>0?Math.round(costoTotal/producido*10000)/10000:0,
+            espejo:espejoDe(prepId,insumos),
+            faltantes:lineas.filter(l=>!l.alcanza)};
+  };
+
+  const registrarProduccion=async()=>{
+    if(saving)return;
+    const plan=planDeProduccion(fProd.preparacion_id,fProd.cantidad);
+    if(!plan){setMsgProd({tipo:"error",txt:"Elige una preparación y captura cuánto salió. Si la preparación no tiene rendimiento, corrígelo primero en Ventas → Productos y recetas."});return;}
+    if(plan.lineas.length===0){setMsgProd({tipo:"error",txt:`${plan.prep.nombre} no tiene receta capturada, así que no hay ingredientes que descontar.`});return;}
+    if(!plan.espejo){setMsgProd({tipo:"error",txt:`${plan.prep.nombre} no tiene su renglón de inventario. Avisa a dirección: falta correr la migración de producción.`});return;}
+    const sinInsumo=plan.lineas.filter(l=>!l.insumo_id);
+    if(sinInsumo.length){setMsgProd({tipo:"error",txt:`La receta de ${plan.prep.nombre} tiene ${sinInsumo.length} línea(s) sin insumo. Corrígela antes de producir.`});return;}
+    // El faltante NO bloquea: la mercancía ya se usó físicamente y negarlo dejaría
+    // el inventario peor. Se avisa y se pide confirmar, igual que en las recetas.
+    if(plan.faltantes.length){
+      const det=plan.faltantes.map(l=>`• ${l.nombre}: se necesitan ${fmtCant(l.cantidad,l.unidad)} y hay ${fmtCant(l.existencia,l.unidad)}`).join("\n");
+      if(!confirm(`El inventario no alcanza para esta tanda:\n\n${det}\n\nSe puede registrar igual (la existencia quedará en negativo), pero suele significar que falta capturar una recepción o que la receta pide más de lo real.\n\n¿Registrar de todas formas?`))return;
+    }
+    setSaving(true);setMsgProd(null);
+    const fecha=fProd.fecha||new Date().toISOString().split("T")[0];
+    const prodRes=await sbPostE("producciones",{sucursal_id:sucId,preparacion_id:plan.prep.id,
+      cantidad_producida:plan.producido,cantidad_teorica:plan.teorico,tandas:plan.tandas,
+      costo_total:plan.costoTotal,costo_unitario:plan.costoUnitario,fecha,
+      nota:fProd.nota||null,registrado_por:rol});
+    if(prodRes.error||!(prodRes.data&&prodRes.data[0])){
+      setSaving(false);
+      setMsgProd({tipo:"error",txt:"No se guardó nada. Error al registrar la producción: "+(prodRes.error?.message||"error desconocido")});
+      return;
+    }
+    const prodId=prodRes.data[0].id;
+    let invLocal=[...invSucursal];const movs=[];
+    // 1) Salen los ingredientes
+    for(const l of plan.lineas){
+      let row=invLocal.find(v=>v.insumo_id===l.insumo_id&&(!sucId||v.sucursal_id===sucId));
+      if(!row){const c=await sbPost("inventario_sucursal",{sucursal_id:sucId,insumo_id:l.insumo_id,existencia:0,costo_promedio:l.costo_unitario});if(c&&c[0]){row=c[0];invLocal=[...invLocal,row];}else continue;}
+      const nueva=Math.round(((parseFloat(row.existencia)||0)-l.cantidad)*1000)/1000;
+      await sbPatch("inventario_sucursal",row.id,{existencia:nueva,updated_at:new Date().toISOString()});
+      invLocal=invLocal.map(v=>v.id===row.id?{...v,existencia:nueva}:v);
+      const mv=await sbPost("movimientos_sucursal",{sucursal_id:sucId,insumo_id:l.insumo_id,tipo:"salida_produccion",
+        cantidad:Math.round(l.cantidad*1000)/1000,costo_unitario:l.costo_unitario,produccion_id:prodId,fecha,
+        nota:`Producción de ${plan.prep.nombre}`,registrado_por:rol});
+      if(mv&&mv[0])movs.push(mv[0]);
+      await sbPost("produccion_consumo",{produccion_id:prodId,insumo_id:l.insumo_id,cantidad:l.cantidad,costo_unitario:l.costo_unitario});
+    }
+    // 2) Entra la preparación terminada, con su costo promedio ponderado. Aquí
+    //    es donde el rendimiento real entra al costeo: el mismo consumo de
+    //    ingredientes repartido entre menos producto sube el costo por unidad.
+    const ent=await entradaSucursalDB(invLocal,sucId,plan.espejo.id,plan.producido,plan.costoUnitario,"entrada_produccion",
+      {produccion_id:prodId,fecha,nota:`Producción ${fmtCant(plan.producido,plan.prep.unidad||"")} · ${plan.tandas} tanda(s)`,registrado_por:rol});
+    invLocal=ent.invList;if(ent.mov)movs.push(ent.mov);
+
+    setInvSucursal(invLocal);
+    if(movs.length)setMovSucursal(prev=>[...prev,...movs]);
+    setProducciones(prev=>[prodRes.data[0],...(prev||[])]);
+    const desv=plan.teorico>0?(plan.producido-plan.teorico)/plan.teorico*100:0;
+    setMsgProd({tipo:"ok",txt:`${plan.prep.nombre}: ${fmtCant(plan.producido,plan.prep.unidad||"")} a ${fmt(plan.costoUnitario)} por ${plan.prep.unidad||"unidad"} (${fmt(plan.costoTotal)} de ingredientes).${Math.abs(desv)>=1?` Rendimiento ${desv>0?"+":""}${desv.toFixed(1)}% contra la receta.`:""}`});
+    setFProd({preparacion_id:"",cantidad:"",fecha:new Date().toISOString().split("T")[0],nota:""});
+    setSaving(false);
   };
 
   const registrarMerma=async()=>{
@@ -3117,7 +3285,7 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
   movSucursal.forEach(m=>{const f=(m.nota||"").match(/^(CONT-\d{8}-\d+)/);if(!f)return;const k=f[1];if(!conteosPrev[k])conteosPrev[k]={folio:k,fecha:m.fecha,items:0,faltante:0,sobrante:0};const g=conteosPrev[k];g.items++;const val=(parseFloat(m.cantidad)||0)*(parseFloat(m.costo_unitario)||0);if(m.tipo==="salida_ajuste")g.faltante+=val;else g.sobrante+=val;});
   const conteosHist=Object.values(conteosPrev).map(g=>({...g,neto:Math.round((g.faltante-g.sobrante)*100)/100})).sort((a,b)=>b.folio.localeCompare(a.folio));
 
-  const tabsS=[{id:"inventario",l:`Inventario (${rows.length})`},{id:"conteo",l:"Hoja de conteo"},{id:"merma",l:"Registrar merma"},{id:"movimientos",l:"Movimientos"}];
+  const tabsS=[{id:"inventario",l:`Inventario (${rows.length})`},{id:"conteo",l:"Hoja de conteo"},{id:"produccion",l:`Producción (${prepsActivas.length})`},{id:"merma",l:"Registrar merma"},{id:"movimientos",l:"Movimientos"}];
 
   return(<div>
     <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
@@ -3138,10 +3306,11 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
         <Btn onClick={addInsumo} disabled={saving||!newRow.insumo_id} color="purple">{saving?"...":"Agregar"}</Btn>
         <button onClick={()=>setAdding(false)} className="text-xs text-gray-500 px-2 py-1.5">Cancelar</button>
       </div></div>:<Btn onClick={()=>setAdding(true)} color="purple">+ Agregar insumo</Btn>}</div>
-      {rows.length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400 mb-1">Sin insumos en inventario de sucursal</p><p className="text-xs text-gray-400">Se llena automáticamente al recibir mercancía de pedidos; también puedes cargar un inventario inicial</p></div>
+      {(()=>{const rowsInv=rows.filter(r=>!r.sinFila);return(<>
+      {rowsInv.length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400 mb-1">Sin insumos en inventario de sucursal</p><p className="text-xs text-gray-400">Se llena automáticamente al recibir mercancía de pedidos; también puedes cargar un inventario inicial</p></div>
       :<div className="bg-white border border-gray-200 rounded-xl overflow-hidden"><table className="w-full text-sm"><thead className="bg-gray-50"><tr>
         {["Insumo","Existencia","Costo prom.","Valor","Mínimo","Estado",""].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Existencia","Costo prom.","Valor","Mínimo"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
-      </tr></thead><tbody>{rows.map(r=>{
+      </tr></thead><tbody>{rowsInv.map(r=>{
         const ex=parseFloat(r.existencia)||0;
         const costo=costoInsumo(r.insumo_id,invSucursal,catalogo);
         const min=parseFloat(r.minimo_stock)||0;
@@ -3156,7 +3325,8 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
           <td className="px-3 py-2">{ex<0?<Badge v="danger">Negativo</Badge>:ex===0?<Badge v="danger">Agotado</Badge>:low?<Badge v="warning">Bajo</Badge>:<Badge v="success">OK</Badge>}</td>
           <td className="px-3 py-2 text-right">{isAj?<div className="flex gap-1 justify-end items-center"><input className="w-32 border border-gray-200 rounded px-1 py-0.5 text-xs" placeholder="Motivo del ajuste" value={ajusteNota} onChange={e=>setAjusteNota(e.target.value)}/><button onClick={()=>confirmarAjuste(r)} disabled={saving} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded">{saving?"...":"✓"}</button><button onClick={()=>setAjustando(null)} className="text-xs bg-gray-200 px-2 py-1 rounded">✕</button></div>:<button onClick={()=>{setAjustando(r.id);setAjusteVal(ex);setAjusteNota("");}} className="text-xs text-teal-700 hover:bg-teal-50 px-2 py-1 rounded font-medium">Ajustar</button>}</td>
         </tr>);})}</tbody></table></div>}
-      <p className="text-xs text-gray-400 mt-2">El ajuste registra la diferencia como movimiento de conteo físico. Las existencias negativas indican ventas sin recepción registrada o recetas con cantidades altas — revísalas.</p>
+      <p className="text-xs text-gray-400 mt-2">El ajuste registra la diferencia como movimiento de conteo físico. Las existencias negativas indican ventas sin recepción registrada o recetas con cantidades altas — revísalas. {rows.length>rowsInv.length&&<span>Hay <b>{rows.length-rowsInv.length}</b> insumos y preparaciones que todavía no tienen renglón aquí porque nunca se recibieron ni se produjeron: aparecen en la <b>Hoja de conteo</b> y se dan de alta al contarlos.</span>}</p>
+      </>);})()}
     </div>}
 
     {tab==="conteo"&&<div>
@@ -3242,6 +3412,108 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
         </tbody></table>
       </div>}
     </div>}
+
+    {/* ===== PRODUCCIÓN DE PREPARACIONES (v7.25) ===== */}
+    {tab==="produccion"&&(()=>{
+      const plan=planDeProduccion(fProd.preparacion_id,fProd.cantidad);
+      const prepSel=prepsActivas.find(p=>p.id===fProd.preparacion_id);
+      const prepsVista=prepsActivas.filter(p=>!busqProdPrep||nrm(p.nombre).includes(nrm(busqProdPrep)));
+      const desv=plan&&plan.teorico>0?(plan.producido-plan.teorico)/plan.teorico*100:null;
+      // Últimas tandas de la preparación elegida, para ver si el rendimiento es
+      // un caso aislado o el patrón (y entonces la receta está mal calibrada).
+      const histPrep=(producciones||[]).filter(x=>x.preparacion_id===fProd.preparacion_id).slice(0,6);
+      return(<div>
+      <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 mb-4 text-xs text-purple-900">
+        Aquí se registra lo que <b>cocina produjo</b>. Al guardar salen del inventario los ingredientes de la receta y <b>entra la preparación terminada</b>, que desde ahora sí tiene existencia y se puede contar. Captura <b>cuánto salió de verdad</b>, no cuántas tandas hiciste: comparado con el rendimiento de la receta, eso es lo que mide la pérdida real de la cocina.
+      </div>
+      {msgProd&&<div className={`rounded-xl px-4 py-3 mb-4 text-sm ${msgProd.tipo==="ok"?"bg-emerald-50 border border-emerald-300 text-emerald-800":"bg-red-50 border-2 border-red-300 text-red-800"}`}>{msgProd.tipo==="ok"?"✓ ":"⚠ "}{msgProd.txt}</div>}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* --- Captura --- */}
+        <div className="bg-white border-2 border-purple-200 rounded-xl p-4">
+          <h3 className="text-sm font-bold text-gray-800 mb-3">Registrar una tanda</h3>
+          <div className="mb-3">
+            <label className="text-xs text-gray-500 block mb-1">Preparación</label>
+            <input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm mb-1" placeholder="Buscar preparación…" value={busqProdPrep} onChange={e=>setBusqProdPrep(e.target.value)}/>
+            <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={fProd.preparacion_id} onChange={e=>{setFProd({...fProd,preparacion_id:e.target.value});setMsgProd(null);}}>
+              <option value="">Selecciona…</option>
+              {prepsVista.map(p=>{const r=parseFloat(p.rendimiento)||0;const nL=(recetas||[]).filter(x=>x.producto_venta_id===p.id).length;
+                return<option key={p.id} value={p.id}>{p.nombre} — rinde {r||"?"} {p.unidad||"u"} por tanda{nL===0?" · SIN RECETA":""}</option>;})}
+            </select>
+          </div>
+          {prepSel&&(()=>{const r=parseFloat(prepSel.rendimiento)||0;const nL=(recetas||[]).filter(x=>x.producto_venta_id===prepSel.id).length;
+            if(nL===0)return<div className="rounded-lg px-3 py-2 mb-3 text-xs bg-red-50 border border-red-300 text-red-800">⚠ {prepSel.nombre} no tiene receta capturada: no hay ingredientes que descontar. Captúrala en Ventas → Productos y recetas → Preparaciones.</div>;
+            if(r<=0)return<div className="rounded-lg px-3 py-2 mb-3 text-xs bg-red-50 border border-red-300 text-red-800">⚠ {prepSel.nombre} no tiene rendimiento por tanda, así que no se puede saber cuánta receta se consumió. Corrígelo en Ventas → Productos y recetas.</div>;
+            return null;})()}
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <div><label className="text-xs text-gray-500 block mb-1">¿Cuánto salió? {prepSel&&<b className="text-purple-700">({prepSel.unidad||"u"})</b>}</label>
+              <input type="number" min="0" step="0.001" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder={prepSel?`ej. ${prepSel.rendimiento||"1"}`:"0"} value={fProd.cantidad} onChange={e=>setFProd({...fProd,cantidad:e.target.value})}/></div>
+            <div><label className="text-xs text-gray-500 block mb-1">Fecha</label>
+              <input type="date" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={fProd.fecha} onChange={e=>setFProd({...fProd,fecha:e.target.value})}/></div>
+          </div>
+          <div className="mb-3"><label className="text-xs text-gray-500 block mb-1">Nota (opcional)</label>
+            <input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Ej. salió menos porque se quemó una parte" value={fProd.nota} onChange={e=>setFProd({...fProd,nota:e.target.value})}/></div>
+          {plan&&<div className="rounded-lg px-3 py-2 mb-3 text-xs bg-gray-50 border border-gray-200">
+            <div className="flex justify-between"><span className="text-gray-600">Tandas equivalentes</span><b>{plan.tandas}</b></div>
+            <div className="flex justify-between"><span className="text-gray-600">Costo de los ingredientes</span><b>{fmt(plan.costoTotal)}</b></div>
+            <div className="flex justify-between"><span className="text-gray-600">Costo por {plan.prep.unidad||"unidad"}</span><b className="text-purple-700">{fmt(plan.costoUnitario)}</b></div>
+          </div>}
+          <Btn onClick={registrarProduccion} disabled={saving||!plan||plan.lineas.length===0} color="purple">{saving?"Guardando...":"Registrar producción"}</Btn>
+        </div>
+
+        {/* --- Vista previa del consumo --- */}
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <h3 className="text-sm font-bold text-gray-800 mb-3">Qué va a salir del inventario</h3>
+          {!plan?<p className="text-sm text-gray-400 py-6 text-center">Elige una preparación y captura cuánto salió.</p>
+          :<>
+            {plan.faltantes.length>0&&<div className="rounded-lg px-3 py-2 mb-3 text-xs bg-amber-50 border border-amber-300 text-amber-900">⚠ El inventario no alcanza para {plan.faltantes.length} ingrediente{plan.faltantes.length>1?"s":""}. Se puede registrar igual —la mercancía ya se usó— pero suele significar que falta capturar una recepción.</div>}
+            <table className="w-full text-xs mb-3"><thead><tr>{["Ingrediente","Sale","Hay","Importe"].map(h=><th key={h} className={`px-2 py-1 font-medium text-gray-500 ${h==="Ingrediente"?"text-left":"text-right"}`}>{h}</th>)}</tr></thead><tbody>
+              {plan.lineas.map((l,i)=>(<tr key={i} className={`border-t border-gray-100 ${!l.alcanza?"bg-amber-50":""}`}>
+                <td className="px-2 py-1 font-medium text-gray-800">{l.nombre}</td>
+                <td className="px-2 py-1 text-right">{fmtCant(l.cantidad,l.unidad)}</td>
+                <td className={`px-2 py-1 text-right ${l.alcanza?"text-gray-500":"text-amber-700 font-semibold"}`}>{fmtCant(l.existencia,l.unidad)}</td>
+                <td className="px-2 py-1 text-right font-semibold text-gray-700">{fmt(l.importe)}</td>
+              </tr>))}
+            </tbody></table>
+            <div className="rounded-lg px-3 py-2 text-xs bg-purple-50 border border-purple-200 text-purple-900">
+              Entra al inventario: <b>{fmtCant(plan.producido,plan.prep.unidad||"")}</b> de {plan.prep.nombre} a <b>{fmt(plan.costoUnitario)}</b> por {plan.prep.unidad||"unidad"}.
+              {desv!=null&&Math.abs(desv)>=1&&<span className="block mt-1">La receta esperaba <b>{fmtCant(plan.teorico,plan.prep.unidad||"")}</b> para este consumo → rendimiento <b className={desv<0?"text-red-700":"text-emerald-700"}>{desv>0?"+":""}{desv.toFixed(1)}%</b>. {desv<0?"Salió menos de lo previsto, así que cada unidad cuesta más.":"Salió más de lo previsto."}</span>}
+            </div>
+          </>}
+          {histPrep.length>0&&<div className="mt-4">
+            <p className="text-xs font-semibold text-gray-600 mb-1">Últimas tandas de esta preparación</p>
+            <table className="w-full text-xs"><tbody>{histPrep.map(h=>{
+              const d=parseFloat(h.cantidad_teorica)>0?(parseFloat(h.cantidad_producida)-parseFloat(h.cantidad_teorica))/parseFloat(h.cantidad_teorica)*100:null;
+              return(<tr key={h.id} className="border-t border-gray-100">
+                <td className="px-1 py-1 text-gray-500">{h.fecha}</td>
+                <td className="px-1 py-1 text-right">{fmtCant(parseFloat(h.cantidad_producida),prepSel?.unidad||"")}</td>
+                <td className="px-1 py-1 text-right text-gray-600">{fmt(parseFloat(h.costo_unitario)||0)}</td>
+                <td className={`px-1 py-1 text-right font-semibold ${d==null?"text-gray-400":d<0?"text-red-600":"text-emerald-600"}`}>{d==null?"—":`${d>0?"+":""}${d.toFixed(1)}%`}</td>
+              </tr>);})}</tbody></table>
+          </div>}
+        </div>
+      </div>
+
+      {/* --- Historial general --- */}
+      {(producciones||[]).length>0&&<div className="bg-white border border-gray-200 rounded-xl overflow-hidden mt-4">
+        <table className="w-full text-sm"><thead className="bg-gray-50"><tr>
+          {["Fecha","Preparación","Produjo","Esperaba","Rendimiento","Costo ingredientes","Costo/unidad"].map(h=><th key={h} className={`px-3 py-2 font-semibold text-gray-600 text-xs uppercase ${h==="Fecha"||h==="Preparación"?"text-left":"text-right"}`}>{h}</th>)}
+        </tr></thead><tbody>{(producciones||[]).slice(0,25).map(h=>{
+          const pv=(productosVenta||[]).find(p=>p.id===h.preparacion_id);
+          const teo=parseFloat(h.cantidad_teorica)||0;const pro=parseFloat(h.cantidad_producida)||0;
+          const d=teo>0?(pro-teo)/teo*100:null;
+          return(<tr key={h.id} className="border-t border-gray-100">
+            <td className="px-3 py-2 text-gray-500 text-xs">{h.fecha}</td>
+            <td className="px-3 py-2 font-medium text-gray-800">{pv?.nombre||"?"}{h.nota&&<span className="block text-xs text-gray-400">{h.nota}</span>}</td>
+            <td className="px-3 py-2 text-right">{fmtCant(pro,pv?.unidad||"")}</td>
+            <td className="px-3 py-2 text-right text-gray-500">{teo>0?fmtCant(teo,pv?.unidad||""):"—"}</td>
+            <td className={`px-3 py-2 text-right font-bold ${d==null?"text-gray-400":d<-5?"text-red-600":d<0?"text-amber-600":"text-emerald-600"}`}>{d==null?"—":`${d>0?"+":""}${d.toFixed(1)}%`}</td>
+            <td className="px-3 py-2 text-right text-gray-600">{fmt(parseFloat(h.costo_total)||0)}</td>
+            <td className="px-3 py-2 text-right font-semibold text-purple-700">{fmt(parseFloat(h.costo_unitario)||0)}</td>
+          </tr>);})}</tbody></table>
+        <p className="text-xs text-gray-400 px-3 py-2">Un rendimiento negativo repetido en la misma preparación significa que la receta promete más de lo que da: ahí hay que corregir el rendimiento, no la tanda.</p>
+      </div>}
+      </div>);})()}
 
     {tab==="merma"&&<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       <div className="bg-white border-2 border-red-200 rounded-xl p-4">
@@ -3492,6 +3764,7 @@ function App(){
   const [insumos,setInsumos]=useState([]);
   // v7.19: insumos que se consumen por TICKET y no por platillo (bolsas, servilletas).
   const [reglasTicket,setReglasTicket]=useState([]);
+  const [producciones,setProducciones]=useState([]);
 
   // Check URL for provider token
   useEffect(()=>{
@@ -3535,7 +3808,7 @@ function App(){
         return;
       }
 
-      const tables=["catalogo","proveedores","tipos_flujo_costo","unidades_medida","inventario_almacen","pedidos","pedido_detalle","pedido_proveedor_estatus","lotes_almacen","recepciones","recepcion_detalle","cuentas_por_pagar","pagos","compras_directas","gastos_operativos","categorias_gastos","sucursales","productos_venta","recetas","inventario_sucursal","ventas","venta_detalle","mermas","movimientos_sucursal","insumos","reglas_consumo_ticket"];
+      const tables=["catalogo","proveedores","tipos_flujo_costo","unidades_medida","inventario_almacen","pedidos","pedido_detalle","pedido_proveedor_estatus","lotes_almacen","recepciones","recepcion_detalle","cuentas_por_pagar","pagos","compras_directas","gastos_operativos","categorias_gastos","sucursales","productos_venta","recetas","inventario_sucursal","ventas","venta_detalle","mermas","movimientos_sucursal","insumos","reglas_consumo_ticket","producciones"];
       const results={};
       for(const t of tables){setLoadMsg(`Cargando ${t}...`);results[t]=await sbGet(t);}
       
@@ -3573,6 +3846,7 @@ function App(){
       setMovSucursal(results.movimientos_sucursal||[]);
       setInsumos((results.insumos||[]).filter(i=>i.activo!==false));
       setReglasTicket(results.reglas_consumo_ticket||[]);
+      setProducciones((results.producciones||[]).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)));
 
       setLoading(false);
     }
@@ -3795,7 +4069,7 @@ function App(){
       const prod=prods.find(p=>p.id===r.prodId)||{};
       const sub=prod.aplica_iva!==false?r.importe/1.16:r.importe;
       subtotal+=sub;iva+=r.importe-sub;
-      const cT=Math.round(costoReceta(r.prodId,recetas,invSucursal,catalogo,prods)*r.cantidad*100)/100;
+      const cT=Math.round(costoReceta(r.prodId,recetas,invSucursal,catalogo,prods,0,insumos)*r.cantidad*100)/100;
       costoTotal+=cT;
       return{producto_venta_id:r.prodId,cantidad:r.cantidad,precio_unitario:Math.round((r.precio||0)*100)/100,importe:Math.round(r.importe*100)/100,costo_teorico:cT};
     });
@@ -3812,7 +4086,7 @@ function App(){
     }
     // Consumo de insumos por receta (v7.1: explota también sub-recetas/preparaciones)
     const consumo={};
-    rowsFinal.forEach(r=>explotarReceta(r.prodId,r.cantidad,recetas,prods,consumo));
+    rowsFinal.forEach(r=>explotarReceta(r.prodId,r.cantidad,recetas,prods,consumo,0,insumos));
     let invList=invSucursal;const movsNew=[];const negativos=[];
     if(sucId)for(const[insId,cant]of Object.entries(consumo)){
       let row=invList.find(i=>i.sucursal_id===sucId&&i.insumo_id===insId);
@@ -4137,7 +4411,7 @@ function App(){
       }}/>}
       {view==="ventas"&&["admin","compras","sucursal","finanzas"].includes(rol)&&<VentasSRView productosVenta={productosVenta} setProductosVenta={setProductosVenta} productosInactivos={productosInactivos} setProductosInactivos={setProductosInactivos} recetas={recetas} setRecetas={setRecetas} ventas={ventas} ventaDetalle={ventaDetalle} catalogo={catalogo} insumos={insumos} invSucursal={invSucursal} reglasTicket={reglasTicket} setReglasTicket={setReglasTicket} onImport={handleImportVentas} rol={rol}/>}
       {view==="recetario"&&["admin","compras","sucursal","finanzas"].includes(rol)&&<VentasSRView key="recetario" tabInicial="productos" productosVenta={productosVenta} setProductosVenta={setProductosVenta} productosInactivos={productosInactivos} setProductosInactivos={setProductosInactivos} recetas={recetas} setRecetas={setRecetas} ventas={ventas} ventaDetalle={ventaDetalle} catalogo={catalogo} insumos={insumos} invSucursal={invSucursal} reglasTicket={reglasTicket} setReglasTicket={setReglasTicket} onImport={handleImportVentas} rol={rol}/>}
-      {view==="inv_sucursal"&&["admin","compras","sucursal"].includes(rol)&&<SucursalInvView invSucursal={invSucursal} setInvSucursal={setInvSucursal} movSucursal={movSucursal} setMovSucursal={setMovSucursal} mermas={mermas} setMermas={setMermas} catalogo={catalogo} insumos={insumos} sucursales={sucursales} rol={rol}/>}
+      {view==="inv_sucursal"&&["admin","compras","sucursal"].includes(rol)&&<SucursalInvView invSucursal={invSucursal} setInvSucursal={setInvSucursal} movSucursal={movSucursal} setMovSucursal={setMovSucursal} mermas={mermas} setMermas={setMermas} catalogo={catalogo} insumos={insumos} sucursales={sucursales} rol={rol} productosVenta={productosVenta} recetas={recetas} producciones={producciones} setProducciones={setProducciones}/>}
       {view==="estados"&&["admin","compras","finanzas"].includes(rol)&&<EstadosView ventas={ventas} mermas={mermas} gastosOp={gastosOp} comprasDirectas={comprasDirectas} cxp={cxp} pagos={pagos} inventario={inventario} invSucursal={invSucursal} movSucursal={movSucursal} catalogo={catalogo}/>}
       {view==="gastos"&&["sucursal","admin","compras","finanzas"].includes(rol)&&<GastosView gastosOp={gastosOp} setGastosOp={setGastosOp} catGastos={catGastos} setCatGastos={setCatGastos} rol={rol}/>}
     </div>
