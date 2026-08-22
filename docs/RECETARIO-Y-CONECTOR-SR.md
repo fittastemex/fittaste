@@ -1195,3 +1195,43 @@ cambiar el tipo. Es a propósito: el SKU ya está en pedidos y recepciones hist�
 `e2e.js` se actualizó: "Agregar ingrediente" ahora vive detrás de "Editar receta".
 
 Batería completa: **169 verificaciones** en 7 archivos.
+
+---
+
+## 15. El costo unitario se captura al recibir (v7.23)
+
+Decisión de dirección sobre el hueco documentado en §14.3: *"necesito que cuando reciban
+pongan el precio unitario para que se reciba con un costo."*
+
+La recepción ahora **exige el costo unitario** de cada artículo recibido, y con ese precio
+entra la mercancía al inventario. Ya no hay un "después" en el que capturar el precio —que
+era el problema, porque capturarlo después nunca recosteaba la entrada ya registrada.
+
+**Cómo quedó:**
+
+* Columna **Costo unitario s/IVA** en la pantalla de recepción, con el importe de la línea
+  al lado y el total sin IVA de lo recibido al pie.
+* **No se recibe sin costo.** El aviso nombra los artículos que faltan; no se crea la
+  recepción ni entra nada al inventario.
+* La casilla arranca **en blanco** salvo que ya se haya capturado un precio para ese
+  pedido. El precio de catálogo se muestra como referencia *debajo* de la casilla pero
+  **no se precarga**: precargarlo permitiría pasar de largo y recibir con un estimado,
+  que es justo lo que se quería evitar.
+* Aviso de magnitud, mismo criterio que en recetas: un precio **5× o más** arriba del de
+  catálogo se marca con *"¿es el unitario?"* — el error típico es capturar el importe
+  total de la línea en lugar del precio por unidad.
+* El costo se escribe en `pedido_detalle.costo_real` con `capturado_por = "sucursal"`
+  **antes** de meter la mercancía, así la entrada y el movimiento de kárdex nacen con el
+  precio de la factura.
+* **Excepción:** al proveedor de *Almacén interno* no se le pide precio — ahí costea el
+  sistema por PEPS y pedirlo a mano sería inventarlo. La celda lo dice.
+
+`handleRecibir` recibe un quinto argumento `costos = {pedido_detalle_id: costo_unitario}`.
+No se metió dentro de `items` porque ése se expande directo a `recepcion_detalle`, que no
+tiene columna de costo — el precio pertenece a `pedido_detalle.costo_real`.
+
+**Pruebas:** `herramientas/prueba-e2e/e2e-costo-al-recibir.js`, 18 verificaciones. La que
+importa: el catálogo dice $100/kg, la factura dice $130/kg, y se comprueba que el
+`costo_promedio` y el kárdex queden en **0.13/g** y no en 0.10.
+
+Batería completa: **187 verificaciones** en 8 archivos.

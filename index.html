@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.22";
+const V="7.23";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -1654,6 +1654,20 @@ function RecepcionView({pedidos,pedidoDetalle,proveedores,provEstatus,catalogo,r
   const [recibiendo,setRecibiendo]=useState(null); // {pedId, provId}
   const [cantRecibida,setCantRecibida]=useState({});
   const [notasRecep,setNotasRecep]=useState({});
+  // v7.23: el COSTO UNITARIO se captura al recibir, no después.
+  //
+  // Decisión de dirección (2026-08-22): "necesito que cuando reciban pongan el
+  // precio unitario para que se reciba con un costo."
+  //
+  // Antes se podía recibir sin precio: la entrada tomaba el costo del catálogo
+  // (o el promedio anterior si el catálogo estaba en 0) y el pedido sólo exigía
+  // el precio para poder CERRARSE. El problema es que capturarlo después nunca
+  // corregía la entrada ya registrada: el movimiento de kárdex y el
+  // costo_promedio se quedaban con el estimado para siempre, así que el
+  // promedio nunca aprendía el precio real de ese lote — y el P&L, que lee el
+  // kárdex, arrastraba el estimado. Capturándolo aquí ya no hay "después".
+  const [costoRecep,setCostoRecep]=useState({});
+  const [avisoRecep,setAvisoRecep]=useState(null);
   const [saving,setSaving]=useState(false);
 
   // Pedidos con proveedores pendientes de recepción
@@ -1673,21 +1687,43 @@ function RecepcionView({pedidos,pedidoDetalle,proveedores,provEstatus,catalogo,r
   // Recientes (ya recibidos)
   const recientes=recepciones.slice().sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).slice(0,10);
 
+  // El almacén interno costea por PEPS: ahí el precio lo pone el sistema y
+  // pedirlo a mano sería inventarlo.
+  const costeaElSistema=(provId)=>proveedores.find(p=>p.id===provId)?.tipo_flujo==="Almacen interno";
+
   const startRecibir=(pedId,provId,items)=>{
-    setRecibiendo({pedId,provId});
-    const c={};const n={};
-    items.forEach(d=>{c[d.id]=d.cantidad;n[d.id]="";});
-    setCantRecibida(c);setNotasRecep(n);
+    setRecibiendo({pedId,provId});setAvisoRecep(null);
+    const c={};const n={};const k={};
+    items.forEach(d=>{
+      c[d.id]=d.cantidad;n[d.id]="";
+      // Se propone SÓLO el precio ya capturado para este pedido. El de catálogo
+      // se muestra como referencia debajo de la casilla, pero no se precarga:
+      // precargarlo permitiría pasar de largo y recibir con un estimado, que es
+      // justo lo que se quiere evitar. La casilla en blanco obliga a mirar la
+      // factura.
+      k[d.id]=d.costo_real!=null&&parseFloat(d.costo_real)>0?String(d.costo_real):"";
+    });
+    setCantRecibida(c);setNotasRecep(n);setCostoRecep(k);
   };
 
   const confirmarRecepcion=async()=>{
     if(!recibiendo||saving)return;
-    setSaving(true);
     const{pedId,provId}=recibiendo;
     const items=pedidoDetalle.filter(d=>d.pedido_id===pedId&&d.proveedor_id===provId);
+    // Sin costo no se recibe: una entrada sin precio entra al inventario con un
+    // costo inventado y ya nada lo corrige.
+    if(!costeaElSistema(provId)){
+      const sinCosto=items.filter(d=>(cantRecibida[d.id]||0)>0&&!(parseFloat(costoRecep[d.id])>0));
+      if(sinCosto.length){
+        setAvisoRecep(`Falta el costo unitario de ${sinCosto.length} artículo${sinCosto.length>1?"s":""}: ${sinCosto.map(d=>(catalogo.find(c=>c.id===d.catalogo_id)||{}).articulo||"?").join(", ")}. Es el precio de la factura, sin IVA, por unidad de compra.`);
+        return;
+      }
+    }
+    setAvisoRecep(null);setSaving(true);
+    const costos={};items.forEach(d=>{const v=parseFloat(costoRecep[d.id]);if(v>0)costos[d.id]=v;});
     const hayFaltante=items.some(d=>(cantRecibida[d.id]||0)!==d.cantidad);
     const estatus=hayFaltante?"con_faltantes":"completo";
-    await onRecibir(pedId,provId,estatus,items.map(d=>({pedido_detalle_id:d.id,cantidad_pedida:d.cantidad,cantidad_esperada:d.cantidad,cantidad_recibida:cantRecibida[d.id]||0,tiene_discrepancia:(cantRecibida[d.id]||0)!==d.cantidad,nota:notasRecep[d.id]||null})));
+    await onRecibir(pedId,provId,estatus,items.map(d=>({pedido_detalle_id:d.id,cantidad_pedida:d.cantidad,cantidad_esperada:d.cantidad,cantidad_recibida:cantRecibida[d.id]||0,tiene_discrepancia:(cantRecibida[d.id]||0)!==d.cantidad,nota:notasRecep[d.id]||null})),costos);
     setRecibiendo(null);setSaving(false);
   };
 
@@ -1698,29 +1734,49 @@ function RecepcionView({pedidos,pedidoDetalle,proveedores,provEstatus,catalogo,r
     const items=pedidoDetalle.filter(d=>d.pedido_id===pedId&&d.proveedor_id===provId);
     const hayFaltante=items.some(d=>(cantRecibida[d.id]||0)!==d.cantidad);
     const todoOk=items.every(d=>(cantRecibida[d.id]||0)===d.cantidad);
+    const sistemaCostea=costeaElSistema(provId);
+    const totalFactura=items.reduce((s,d)=>{const cu=parseFloat(costoRecep[d.id])||0;return s+cu*(cantRecibida[d.id]||0);},0);
     return(<div>
       <button onClick={()=>setRecibiendo(null)} className="text-sm text-gray-500 hover:text-gray-700 mb-4">← Volver</button>
       <div className="flex items-center justify-between mb-4"><div><h2 className="text-lg font-bold text-gray-900">Recepción — {prov?.nombre}</h2><p className="text-sm text-gray-500">Pedido {ped?.numero_pedido} — Valida cantidades recibidas</p></div>
         {todoOk&&<Badge v="success">Todo coincide</Badge>}
         {hayFaltante&&<Badge v="warning">Hay diferencias</Badge>}
       </div>
-      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden mb-4"><table className="w-full text-sm"><thead className="bg-gray-50"><tr>
-        {["Artículo","Esperado","Recibido","Nota"].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${h==="Esperado"||h==="Recibido"?"text-center":"text-left"}`}>{h}</th>)}
+      {avisoRecep&&<div className="bg-red-50 border-2 border-red-300 rounded-xl p-3 mb-3 text-sm text-red-800">⚠ {avisoRecep}</div>}
+      {!sistemaCostea&&<div className="bg-teal-50 border border-teal-200 rounded-xl p-3 mb-3 text-xs text-teal-800">Captura el <b>costo unitario de la factura</b> (sin IVA, por {items[0]&&(catalogo.find(c=>c.id===items[0].catalogo_id)||{}).unidad_clave||"unidad"} de compra) de cada artículo que estés recibiendo. Con ese precio entra al inventario y se recalcula el costo promedio: si se deja en blanco, la entrada tomaría un costo estimado que después ya nada corrige.</div>}
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden mb-4 overflow-x-auto"><table className="w-full text-sm"><thead className="bg-gray-50"><tr>
+        {["Artículo","Esperado","Recibido","Costo unitario s/IVA","Importe","Nota"].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Esperado","Recibido"].includes(h)?"text-center":h==="Importe"?"text-right":"text-left"}`}>{h}</th>)}
       </tr></thead><tbody>{items.map(d=>{
         const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};
         const esperado=d.cantidad;
         const recibido=cantRecibida[d.id]||0;
         const diff=recibido!==esperado;
-        return(<tr key={d.id} className={`border-t border-gray-100 ${diff?"bg-orange-50":""}`}>
+        const cu=parseFloat(costoRecep[d.id]);
+        const faltaCosto=!sistemaCostea&&recibido>0&&!(cu>0);
+        // Aviso de magnitud, mismo criterio que en recetas: un precio 5 veces
+        // arriba del de referencia casi siempre es un decimal fuera de lugar o
+        // el importe total en lugar del unitario.
+        const ref=parseFloat(d.costo_referencia)||0;
+        const raro=cu>0&&ref>0&&(cu/ref>=5||ref/cu>=5);
+        return(<tr key={d.id} className={`border-t border-gray-100 ${faltaCosto?"bg-red-50":diff?"bg-orange-50":""}`}>
           <td className="px-3 py-2 font-medium text-gray-900">{cat.articulo} <span className="text-gray-400 text-xs">{cat.unidad_clave}</span></td>
           <td className="px-3 py-2 text-center text-gray-500">{cat.unidad_clave==="kg"?fmtQ(esperado,"kg"):esperado}</td>
           <td className="px-3 py-2 text-center"><input type="number" min="0" step={cat.unidad_clave==="kg"?"0.25":"1"} className={`w-20 text-center border rounded-lg px-1 py-1 text-sm ${diff?"border-orange-400 bg-orange-50":"border-gray-200"}`} value={cantRecibida[d.id]||""} onChange={e=>setCantRecibida({...cantRecibida,[d.id]:parseFloat(e.target.value)||0})}/></td>
+          <td className="px-3 py-2">{sistemaCostea
+            ?<span className="text-xs text-gray-400">lo calcula el sistema (PEPS)</span>
+            :<div><input type="number" min="0" step="0.01" placeholder="0.00" className={`w-24 text-right border rounded-lg px-2 py-1 text-sm ${faltaCosto?"border-red-400 bg-red-50":raro?"border-amber-400 bg-amber-50":"border-gray-200"}`} value={costoRecep[d.id]??""} onChange={e=>setCostoRecep({...costoRecep,[d.id]:e.target.value})}/>
+               {ref>0&&<span className="block text-[10px] text-gray-400">catálogo {fmt(ref)}</span>}
+               {raro&&<span className="block text-[10px] text-amber-700 font-semibold">{(cu>ref?cu/ref:ref/cu).toFixed(0)}× el de catálogo — ¿es el unitario?</span>}</div>}</td>
+          <td className="px-3 py-2 text-right text-xs font-semibold text-gray-700">{cu>0&&recibido>0?fmt(cu*recibido):"—"}</td>
           <td className="px-3 py-2"><input className="w-full border border-gray-200 rounded-lg px-2 py-1 text-xs" placeholder="Nota opcional" value={notasRecep[d.id]||""} onChange={e=>setNotasRecep({...notasRecep,[d.id]:e.target.value})}/></td>
         </tr>);})}</tbody></table></div>
       {hayFaltante&&<div className="bg-orange-50 border border-orange-200 rounded-xl p-3 mb-3"><p className="text-sm font-semibold text-orange-800">Artículos con diferencias:</p><div className="text-xs text-orange-700 mt-1">{items.filter(d=>(cantRecibida[d.id]||0)!==d.cantidad).map(d=>{const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};return<p key={d.id}>{cat.articulo}: esperado {d.cantidad} → recibido {cantRecibida[d.id]||0}</p>;})}</div></div>}
-      <div className="flex justify-end gap-2">
-        <Btn onClick={()=>{const c={};items.forEach(d=>{c[d.id]=d.cantidad;});setCantRecibida(c);}} color="amber">Todo correcto</Btn>
-        <Btn onClick={confirmarRecepcion} disabled={saving} color="green">{saving?"Guardando...":hayFaltante?"Confirmar con faltantes":"Recepción completa ✓"}</Btn>
+      <div className="flex justify-between items-center gap-2 flex-wrap">
+        <span className="text-sm text-gray-600">{!sistemaCostea&&totalFactura>0&&<span>Total sin IVA de lo recibido: <b className="text-gray-800">{fmt(totalFactura)}</b></span>}</span>
+        <div className="flex gap-2">
+          <Btn onClick={()=>{const c={};items.forEach(d=>{c[d.id]=d.cantidad;});setCantRecibida(c);}} color="amber">Todo correcto</Btn>
+          <Btn onClick={confirmarRecepcion} disabled={saving} color="green">{saving?"Guardando...":hayFaltante?"Confirmar con faltantes":"Recepción completa ✓"}</Btn>
+        </div>
       </div>
     </div>);
   }
@@ -3798,7 +3854,11 @@ function App(){
   };
 
   // RECEPCIÓN DE MERCANCÍA
-  const handleRecibir=async(pedId,provId,estatus,items)=>{
+  // v7.23: `costos` = {pedido_detalle_id: costo_unitario} capturado en la
+  // pantalla de recepción. Se escribe en pedido_detalle.costo_real ANTES de
+  // meter la mercancía al inventario, así la entrada y el kárdex nacen con el
+  // precio de la factura y no con un estimado que después nada corrige.
+  const handleRecibir=async(pedId,provId,estatus,items,costos)=>{
     const res=await sbPost("recepciones",{pedido_id:pedId,proveedor_id:provId,estatus:estatus,recibido_por:"sucursal"});
     if(res&&res[0]){
       const recId=res[0].id;
@@ -3812,12 +3872,15 @@ function App(){
         await sbPatch("pedido_proveedor_estatus",pe.id,{estatus:newEst,fecha_completado:new Date().toISOString()});
         setProvEstatus(provEstatus.map(x=>x.id===pe.id?{...x,estatus:newEst}:x));
       }
-      // Update pedido_detalle with received quantities
+      // Cantidad recibida y costo de la factura, en un solo PATCH por línea.
       for(const item of items){
-        if(item.cantidad_recibida!==item.cantidad_esperada){
-          await sbPatch("pedido_detalle",item.pedido_detalle_id,{cantidad:item.cantidad_recibida});
-          setPedidoDetalle(prev=>prev.map(d=>d.id===item.pedido_detalle_id?{...d,cantidad:item.cantidad_recibida}:d));
-        }
+        const upd={};
+        if(item.cantidad_recibida!==item.cantidad_esperada)upd.cantidad=item.cantidad_recibida;
+        const cu=costos&&costos[item.pedido_detalle_id];
+        if(cu>0){upd.costo_real=cu;upd.capturado_por="sucursal";upd.fecha_captura=new Date().toISOString();}
+        if(Object.keys(upd).length===0)continue;
+        await sbPatch("pedido_detalle",item.pedido_detalle_id,upd);
+        setPedidoDetalle(prev=>prev.map(d=>d.id===item.pedido_detalle_id?{...d,...upd}:d));
       }
       setRecepciones([...recepciones,res[0]]);
       const detRes=await sbGet("recepcion_detalle",`recepcion_id=eq.${recId}`);
@@ -3839,7 +3902,9 @@ function App(){
           if(!cat?.insumo_id)continue;
           const ins=insumos.find(x=>x.id===cat.insumo_id);
           const contenido=parseFloat(cat.contenido)||1;
-          const costoPres=parseFloat(det.costo_real||det.costo_referencia)||0;
+          // El costo capturado al recibir manda sobre lo que traiga el
+          // pedido: es el de la factura que llegó con la mercancía.
+          const costoPres=parseFloat((costos&&costos[item.pedido_detalle_id])||det.costo_real||det.costo_referencia)||0;
           if(ins?.tipo_control==="gasto"){
             const monto=Math.round(item.cantidad_recibida*costoPres*100)/100;
             if(monto>0){const g=await sbPost("gastos_operativos",{categoria:ins.categoria_gasto||"Insumos generales",descripcion:`${cat.articulo} × ${item.cantidad_recibida} (recepción ${pedRec?.numero_pedido||""})`,monto,metodo_pago:"transferencia",fecha:new Date().toISOString().split("T")[0],registrado_por:"sistema",nota:"Auto: insumo tipo gasto"});if(g&&g[0])gastosNew.push(g[0]);}
