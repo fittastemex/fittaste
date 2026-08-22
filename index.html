@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.19";
+const V="7.24";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -183,6 +183,10 @@ async function entradaSucursalDB(invList,sucId,insumoId,cantidad,costoU,tipo,ext
 
 const fmt=(n)=>n==null?"-":`$${Number(n).toLocaleString("es-MX",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 const fmtQ=(n,u)=>`${n.toLocaleString("es-MX",{maximumFractionDigits:2})} ${u}`;
+// v7.22: cantidades de receta. fmtQ redondea a 2 decimales y ahí un 0.001 se ve
+// como "0" — justo las cantidades diminutas que hay que poder leer para
+// detectar un parche. Hasta 4 decimales.
+const fmtCant=(n,u)=>`${Number(n).toLocaleString("es-MX",{maximumFractionDigits:4})}${u?" "+u:""}`;
 const Badge=({children,v="default"})=>{const s={default:"bg-gray-100 text-gray-700",success:"bg-emerald-100 text-emerald-800",danger:"bg-red-100 text-red-800",warning:"bg-orange-100 text-orange-800",info:"bg-sky-100 text-sky-800",purple:"bg-teal-100 text-teal-800",commodity:"bg-amber-200 text-amber-900",manual:"bg-sky-200 text-sky-900",almacen:"bg-teal-200 text-teal-900",nuevo:"bg-amber-400 text-amber-950",proceso:"bg-blue-200 text-blue-900",enviado:"bg-orange-200 text-orange-900",cerrado:"bg-gray-300 text-gray-800"};return<span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${s[v]||s.default}`}>{children}</span>;};
 const LOGO_SRC="data:image/png;base64,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";
 const Logo=({size=32})=><img src={LOGO_SRC} height={size} style={{objectFit:"contain",borderRadius:6,background:"#2D2D2D",padding:2}} alt="Fit Taste"/>;
@@ -1163,7 +1167,7 @@ function DashboardView({pedidos,catalogo,proveedores,pedidoDetalle,inventario,co
 }
 
 // ======================== CATÁLOGO (solo Admin) ========================
-function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,inventario,flujos,insumos,setInsumos}){
+function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,inventario,flujos,insumos,setInsumos,recetas}){
   const [filter,setFilter]=useState("");
   const [filterProv,setFilterProv]=useState("");
   const [editing,setEditing]=useState(null);
@@ -1181,6 +1185,11 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
   const [editingIns,setEditingIns]=useState(null);
   const [editInsData,setEditInsData]=useState({});
   const [filterIns,setFilterIns]=useState("");
+  // v7.22: filtros de la lista de insumos. Antes sólo había búsqueda por texto,
+  // y las dos preguntas que se hacen a diario no se podían contestar: qué
+  // insumos no tienen presentación de compra (no se pueden pedir) y cuáles no
+  // los usa ninguna receta (candidatos a baja antes del conteo físico).
+  const [filtroIns,setFiltroIns]=useState("todos"); // todos | inventariable | gasto | sinpres | sinuso
   // v7.8: alta unificada — insumo + su presentación de compra en un solo popup
   const [modalOpen,setModalOpen]=useState(false);
   const [nModo,setNModo]=useState("nuevo"); // "nuevo" | "existente"
@@ -1309,19 +1318,22 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
 
   const norm=(s)=>String(s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
   const filtered=catalogo.filter(p=>{const q=norm(filter);const insN=insumos.find(x=>x.id===p.insumo_id)?.nombre||"";const textMatch=!q||norm(p.articulo).includes(q)||norm(p.sku).includes(q)||norm(p.tipo_producto).includes(q)||norm(p.proveedor_nombre).includes(q)||norm(insN).includes(q);const provMatch=!filterProv||p.proveedor_id===filterProv;return textMatch&&provMatch;});
-  const tipos=[...new Set(catalogo.map(c=>c.tipo_producto))].sort();
+  // v7.22: la lista de tipos alimenta el filtro Y el select de edición, así que
+  // incluye los canónicos aunque todavía no haya ninguna presentación con ese
+  // tipo — si no, un tipo sin uso no se podría elegir nunca.
+  const tipos=[...new Set([...catalogo.map(c=>c.tipo_producto),...Object.keys(prefixMap)].filter(Boolean))].sort();
 
-  const startEdit=(p)=>{setEditing(p.id);setEditData({articulo:p.articulo,costo_referencia:p.costo_referencia,proveedor_id:p.proveedor_id,unidad_clave:p.unidad_clave,notas:p.notas||"",aplica_iva:p.aplica_iva!==false,inv_id:p.inv_id||"",insumo_id:p.insumo_id||"",contenido:p.contenido||1});};
+  const startEdit=(p)=>{setEditing(p.id);setEditData({articulo:p.articulo,tipo_producto:p.tipo_producto||"ABARROTES",costo_referencia:p.costo_referencia,proveedor_id:p.proveedor_id,unidad_clave:p.unidad_clave,notas:p.notas||"",aplica_iva:p.aplica_iva!==false,inv_id:p.inv_id||"",insumo_id:p.insumo_id||"",contenido:p.contenido||1});};
 
   const saveEdit=async(p)=>{
     setSaving(true);setMsg(null);
     const unid=unidades.find(u=>u.clave===editData.unidad_clave);
-    const updates={articulo:editData.articulo.toUpperCase().trim(),costo_referencia:editData.costo_referencia,proveedor_id:editData.proveedor_id,notas:editData.notas||null,aplica_iva:editData.aplica_iva,inventario_almacen_id:editData.inv_id||null,insumo_id:editData.insumo_id||null,contenido:parseFloat(editData.contenido)||1};
+    const updates={articulo:editData.articulo.toUpperCase().trim(),tipo_producto:editData.tipo_producto,costo_referencia:editData.costo_referencia,proveedor_id:editData.proveedor_id,notas:editData.notas||null,aplica_iva:editData.aplica_iva,inventario_almacen_id:editData.inv_id||null,insumo_id:editData.insumo_id||null,contenido:parseFloat(editData.contenido)||1};
     if(unid)updates.unidad_id=unid.id;
     const res=await sbPatch("catalogo",p.id,updates);
     if(res){
       const prov=proveedores.find(pr=>pr.id===editData.proveedor_id);
-      setCatalogo(catalogo.map(c=>c.id===p.id?{...c,articulo:editData.articulo.toUpperCase().trim(),costo_referencia:parseFloat(editData.costo_referencia),proveedor_id:editData.proveedor_id,proveedor_nombre:prov?.nombre||c.proveedor_nombre,unidad_clave:editData.unidad_clave,notas:editData.notas,aplica_iva:editData.aplica_iva,inv_id:editData.inv_id||null,insumo_id:editData.insumo_id||null,contenido:parseFloat(editData.contenido)||1}:c));
+      setCatalogo(catalogo.map(c=>c.id===p.id?{...c,articulo:editData.articulo.toUpperCase().trim(),tipo_producto:editData.tipo_producto,costo_referencia:parseFloat(editData.costo_referencia),proveedor_id:editData.proveedor_id,proveedor_nombre:prov?.nombre||c.proveedor_nombre,unidad_clave:editData.unidad_clave,notas:editData.notas,aplica_iva:editData.aplica_iva,inv_id:editData.inv_id||null,insumo_id:editData.insumo_id||null,contenido:parseFloat(editData.contenido)||1}:c));
       setMsg(`${editData.articulo.toUpperCase().trim()} actualizado`);
     }else{setMsg("Error al guardar");}
     setEditing(null);setSaving(false);
@@ -1480,7 +1492,7 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
         return(<tr key={p.id} className={`border-t border-gray-100 ${isEditing?"bg-amber-50":""}`}>
           <td className="px-3 py-2 font-mono text-xs text-gray-500">{p.sku}</td>
           <td className="px-3 py-2 font-medium text-gray-900">{isEditing?<input className="w-full border border-amber-300 rounded px-1 py-0.5 text-sm bg-amber-50 font-medium focus:ring-2 focus:ring-amber-400" value={editData.articulo} onChange={e=>setEditData({...editData,articulo:e.target.value})}/>:p.articulo}</td>
-          <td className="px-3 py-2"><Badge v={({PROTEINAS:"danger",SUPLEMENTO:"purple",EMPAQUE:"info",FRUTA:"warning"})[p.tipo_producto]||"success"}>{p.tipo_producto}</Badge></td>
+          <td className="px-3 py-2">{isEditing?<select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.tipo_producto} onChange={e=>setEditData({...editData,tipo_producto:e.target.value})}>{tipos.map(t=><option key={t} value={t}>{t}</option>)}</select>:<Badge v={({PROTEINAS:"danger",SUPLEMENTO:"purple",EMPAQUE:"info",FRUTA:"warning"})[p.tipo_producto]||"success"}>{p.tipo_producto}</Badge>}</td>
           <td className="px-3 py-2">{isEditing?<select className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editData.unidad_clave} onChange={e=>setEditData({...editData,unidad_clave:e.target.value})}>{unidades.map(u=><option key={u.clave} value={u.clave}>{u.clave}</option>)}</select>:<span className="text-gray-600">{p.unidad_clave}</span>}</td>
           <td className="px-3 py-2 text-right">{isEditing?<input type="number" step="0.01" className="w-24 text-right border border-amber-300 rounded px-1 py-0.5 text-sm bg-amber-50 focus:ring-2 focus:ring-amber-400" value={editData.costo_referencia} onChange={e=>setEditData({...editData,costo_referencia:parseFloat(e.target.value)||0})}/>:<span className="font-semibold text-gray-800">{fmt(p.costo_referencia)}</span>}</td>
           <td className="px-3 py-2 text-center">{isEditing?<label className="flex items-center justify-center gap-1 cursor-pointer"><input type="checkbox" checked={editData.aplica_iva} onChange={e=>setEditData({...editData,aplica_iva:e.target.checked})} className="w-4 h-4 rounded border-amber-300 text-amber-500 focus:ring-amber-400"/><span className="text-xs">{editData.aplica_iva?"Sí":"No"}</span></label>:p.aplica_iva?<span className="text-xs text-gray-500">16%</span>:<span className="text-xs text-emerald-600 font-semibold">Exento</span>}</td>
@@ -1534,10 +1546,26 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
     <div className="bg-teal-50 border border-teal-200 rounded-xl p-3 mb-4 text-xs text-teal-800">
       El <b>insumo</b> es el ingrediente genérico (CREMA en ml) que usan recetas e inventario; las <b>presentaciones</b> (Crema Lala 900 ml) son los renglones de la pestaña Presentaciones de compra. Para fusionar marcas: en Presentaciones, edita cada una y apúntala al mismo insumo con su contenido (ej. ×900 ml). Los insumos tipo <b>gasto</b> (jabón, fibras) no llevan inventario: su costo se registra como gasto operativo al recibirse.
     </div>
-    <div className="mb-4">
-      <div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">🔍</span><input className="w-full border border-gray-200 rounded-xl pl-9 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-teal-400" placeholder="Buscar insumo por nombre o unidad..." value={filterIns} onChange={e=>setFilterIns(e.target.value)}/></div>
-    </div>
-    {(()=>{const insFiltrados=insumos.filter(x=>{const q=norm(filterIns);return !q||norm(x.nombre).includes(q)||norm(x.unidad_base).includes(q)||norm(x.categoria_gasto).includes(q);}).slice().sort((a,b)=>a.nombre.localeCompare(b.nombre));return(<>
+    {(()=>{
+      const sinPres=(x)=>!catalogo.some(c=>c.insumo_id===x.id);
+      const sinUso=(x)=>!(recetas||[]).some(r=>r.insumo_id===x.id);
+      const cuenta={todos:insumos.length,
+        inventariable:insumos.filter(x=>x.tipo_control!=="gasto").length,
+        gasto:insumos.filter(x=>x.tipo_control==="gasto").length,
+        sinpres:insumos.filter(sinPres).length,
+        sinuso:insumos.filter(sinUso).length};
+      const chipI=(id,l,col)=>(<button key={id} onClick={()=>setFiltroIns(id)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${filtroIns===id?"text-white border-transparent":"bg-white border-gray-200 text-gray-600 hover:text-gray-800"}`} style={filtroIns===id?{background:col}:{}}>{l} ({cuenta[id]})</button>);
+      return(<div className="flex flex-col md:flex-row md:items-center gap-2 mb-4">
+      <div className="relative flex-1"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">🔍</span><input className="w-full border border-gray-200 rounded-xl pl-9 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-teal-400" placeholder="Buscar insumo por nombre o unidad..." value={filterIns} onChange={e=>setFilterIns(e.target.value)}/></div>
+      <div className="flex gap-1 flex-wrap">{chipI("todos","Todos","#2D2D2D")}{chipI("inventariable","Inventariables","#0e918b")}{chipI("gasto","Gasto directo","#9ca3af")}{chipI("sinpres","⚠ Sin presentación","#bb4430")}{chipI("sinuso","Sin uso en recetas","#d6816c")}</div>
+      </div>);})()}
+    {(()=>{const insFiltrados=insumos.filter(x=>{
+        if(filtroIns==="inventariable"&&x.tipo_control==="gasto")return false;
+        if(filtroIns==="gasto"&&x.tipo_control!=="gasto")return false;
+        if(filtroIns==="sinpres"&&catalogo.some(c=>c.insumo_id===x.id))return false;
+        if(filtroIns==="sinuso"&&(recetas||[]).some(r=>r.insumo_id===x.id))return false;
+        const q=norm(filterIns);return !q||norm(x.nombre).includes(q)||norm(x.unidad_base).includes(q)||norm(x.categoria_gasto).includes(q);
+      }).slice().sort((a,b)=>a.nombre.localeCompare(b.nombre));return(<>
     <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
       <table className="w-full text-sm"><thead className="bg-gray-50"><tr>
         {["Insumo","Unidad base","Control","Categoría gasto","Presentaciones","Costo/unidad",""].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Presentaciones","Costo/unidad"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
@@ -1554,8 +1582,8 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
           <td className="px-3 py-2 text-right">{isE?<div className="flex gap-1 justify-end"><button onClick={()=>saveIns(x)} disabled={saving} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded">{saving?"...":"Guardar"}</button><button onClick={()=>setEditingIns(null)} className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded">X</button></div>:<div className="flex gap-1 justify-end"><button onClick={()=>{setEditingIns(x.id);setEditInsData({nombre:x.nombre,unidad_base:x.unidad_base,tipo_control:x.tipo_control,categoria_gasto:x.categoria_gasto||""});}} className="text-xs text-amber-700 hover:bg-amber-100 px-2 py-1 rounded">Editar</button><button onClick={()=>delIns(x)} className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded">✕</button></div>}</td>
         </tr>);})}</tbody></table>
     </div>
-    {insFiltrados.length===0&&<p className="text-sm text-gray-400 text-center py-6">Ningún insumo coincide con "{filterIns}".</p>}
-    <p className="text-xs text-gray-400 mt-2 text-right">{filterIns?`${insFiltrados.length} de ${insumos.length}`:insumos.length} insumos{filterIns?"":" activos"} · Si cambias la unidad base de un insumo con historial, recalibra sus recetas</p>
+    {insFiltrados.length===0&&<p className="text-sm text-gray-400 text-center py-6">Ningún insumo coincide con {filterIns?`"${filterIns}"`:"el filtro"}.</p>}
+    <p className="text-xs text-gray-400 mt-2 text-right">{(filterIns||filtroIns!=="todos")?`${insFiltrados.length} de ${insumos.length}`:insumos.length} insumos{(filterIns||filtroIns!=="todos")?"":" activos"} · Si cambias la unidad base de un insumo con historial, recalibra sus recetas</p>
     </>);})()}
     </div>}
 
@@ -1626,6 +1654,20 @@ function RecepcionView({pedidos,pedidoDetalle,proveedores,provEstatus,catalogo,r
   const [recibiendo,setRecibiendo]=useState(null); // {pedId, provId}
   const [cantRecibida,setCantRecibida]=useState({});
   const [notasRecep,setNotasRecep]=useState({});
+  // v7.23: el COSTO UNITARIO se captura al recibir, no después.
+  //
+  // Decisión de dirección (2026-08-22): "necesito que cuando reciban pongan el
+  // precio unitario para que se reciba con un costo."
+  //
+  // Antes se podía recibir sin precio: la entrada tomaba el costo del catálogo
+  // (o el promedio anterior si el catálogo estaba en 0) y el pedido sólo exigía
+  // el precio para poder CERRARSE. El problema es que capturarlo después nunca
+  // corregía la entrada ya registrada: el movimiento de kárdex y el
+  // costo_promedio se quedaban con el estimado para siempre, así que el
+  // promedio nunca aprendía el precio real de ese lote — y el P&L, que lee el
+  // kárdex, arrastraba el estimado. Capturándolo aquí ya no hay "después".
+  const [costoRecep,setCostoRecep]=useState({});
+  const [avisoRecep,setAvisoRecep]=useState(null);
   const [saving,setSaving]=useState(false);
 
   // Pedidos con proveedores pendientes de recepción
@@ -1645,21 +1687,43 @@ function RecepcionView({pedidos,pedidoDetalle,proveedores,provEstatus,catalogo,r
   // Recientes (ya recibidos)
   const recientes=recepciones.slice().sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).slice(0,10);
 
+  // El almacén interno costea por PEPS: ahí el precio lo pone el sistema y
+  // pedirlo a mano sería inventarlo.
+  const costeaElSistema=(provId)=>proveedores.find(p=>p.id===provId)?.tipo_flujo==="Almacen interno";
+
   const startRecibir=(pedId,provId,items)=>{
-    setRecibiendo({pedId,provId});
-    const c={};const n={};
-    items.forEach(d=>{c[d.id]=d.cantidad;n[d.id]="";});
-    setCantRecibida(c);setNotasRecep(n);
+    setRecibiendo({pedId,provId});setAvisoRecep(null);
+    const c={};const n={};const k={};
+    items.forEach(d=>{
+      c[d.id]=d.cantidad;n[d.id]="";
+      // Se propone SÓLO el precio ya capturado para este pedido. El de catálogo
+      // se muestra como referencia debajo de la casilla, pero no se precarga:
+      // precargarlo permitiría pasar de largo y recibir con un estimado, que es
+      // justo lo que se quiere evitar. La casilla en blanco obliga a mirar la
+      // factura.
+      k[d.id]=d.costo_real!=null&&parseFloat(d.costo_real)>0?String(d.costo_real):"";
+    });
+    setCantRecibida(c);setNotasRecep(n);setCostoRecep(k);
   };
 
   const confirmarRecepcion=async()=>{
     if(!recibiendo||saving)return;
-    setSaving(true);
     const{pedId,provId}=recibiendo;
     const items=pedidoDetalle.filter(d=>d.pedido_id===pedId&&d.proveedor_id===provId);
+    // Sin costo no se recibe: una entrada sin precio entra al inventario con un
+    // costo inventado y ya nada lo corrige.
+    if(!costeaElSistema(provId)){
+      const sinCosto=items.filter(d=>(cantRecibida[d.id]||0)>0&&!(parseFloat(costoRecep[d.id])>0));
+      if(sinCosto.length){
+        setAvisoRecep(`Falta el costo unitario de ${sinCosto.length} artículo${sinCosto.length>1?"s":""}: ${sinCosto.map(d=>(catalogo.find(c=>c.id===d.catalogo_id)||{}).articulo||"?").join(", ")}. Es el precio de la factura, sin IVA, por unidad de compra.`);
+        return;
+      }
+    }
+    setAvisoRecep(null);setSaving(true);
+    const costos={};items.forEach(d=>{const v=parseFloat(costoRecep[d.id]);if(v>0)costos[d.id]=v;});
     const hayFaltante=items.some(d=>(cantRecibida[d.id]||0)!==d.cantidad);
     const estatus=hayFaltante?"con_faltantes":"completo";
-    await onRecibir(pedId,provId,estatus,items.map(d=>({pedido_detalle_id:d.id,cantidad_pedida:d.cantidad,cantidad_esperada:d.cantidad,cantidad_recibida:cantRecibida[d.id]||0,tiene_discrepancia:(cantRecibida[d.id]||0)!==d.cantidad,nota:notasRecep[d.id]||null})));
+    await onRecibir(pedId,provId,estatus,items.map(d=>({pedido_detalle_id:d.id,cantidad_pedida:d.cantidad,cantidad_esperada:d.cantidad,cantidad_recibida:cantRecibida[d.id]||0,tiene_discrepancia:(cantRecibida[d.id]||0)!==d.cantidad,nota:notasRecep[d.id]||null})),costos);
     setRecibiendo(null);setSaving(false);
   };
 
@@ -1670,29 +1734,49 @@ function RecepcionView({pedidos,pedidoDetalle,proveedores,provEstatus,catalogo,r
     const items=pedidoDetalle.filter(d=>d.pedido_id===pedId&&d.proveedor_id===provId);
     const hayFaltante=items.some(d=>(cantRecibida[d.id]||0)!==d.cantidad);
     const todoOk=items.every(d=>(cantRecibida[d.id]||0)===d.cantidad);
+    const sistemaCostea=costeaElSistema(provId);
+    const totalFactura=items.reduce((s,d)=>{const cu=parseFloat(costoRecep[d.id])||0;return s+cu*(cantRecibida[d.id]||0);},0);
     return(<div>
       <button onClick={()=>setRecibiendo(null)} className="text-sm text-gray-500 hover:text-gray-700 mb-4">← Volver</button>
       <div className="flex items-center justify-between mb-4"><div><h2 className="text-lg font-bold text-gray-900">Recepción — {prov?.nombre}</h2><p className="text-sm text-gray-500">Pedido {ped?.numero_pedido} — Valida cantidades recibidas</p></div>
         {todoOk&&<Badge v="success">Todo coincide</Badge>}
         {hayFaltante&&<Badge v="warning">Hay diferencias</Badge>}
       </div>
-      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden mb-4"><table className="w-full text-sm"><thead className="bg-gray-50"><tr>
-        {["Artículo","Esperado","Recibido","Nota"].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${h==="Esperado"||h==="Recibido"?"text-center":"text-left"}`}>{h}</th>)}
+      {avisoRecep&&<div className="bg-red-50 border-2 border-red-300 rounded-xl p-3 mb-3 text-sm text-red-800">⚠ {avisoRecep}</div>}
+      {!sistemaCostea&&<div className="bg-teal-50 border border-teal-200 rounded-xl p-3 mb-3 text-xs text-teal-800">Captura el <b>costo unitario de la factura</b> (sin IVA, por {items[0]&&(catalogo.find(c=>c.id===items[0].catalogo_id)||{}).unidad_clave||"unidad"} de compra) de cada artículo que estés recibiendo. Con ese precio entra al inventario y se recalcula el costo promedio: si se deja en blanco, la entrada tomaría un costo estimado que después ya nada corrige.</div>}
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden mb-4 overflow-x-auto"><table className="w-full text-sm"><thead className="bg-gray-50"><tr>
+        {["Artículo","Esperado","Recibido","Costo unitario s/IVA","Importe","Nota"].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Esperado","Recibido"].includes(h)?"text-center":h==="Importe"?"text-right":"text-left"}`}>{h}</th>)}
       </tr></thead><tbody>{items.map(d=>{
         const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};
         const esperado=d.cantidad;
         const recibido=cantRecibida[d.id]||0;
         const diff=recibido!==esperado;
-        return(<tr key={d.id} className={`border-t border-gray-100 ${diff?"bg-orange-50":""}`}>
+        const cu=parseFloat(costoRecep[d.id]);
+        const faltaCosto=!sistemaCostea&&recibido>0&&!(cu>0);
+        // Aviso de magnitud, mismo criterio que en recetas: un precio 5 veces
+        // arriba del de referencia casi siempre es un decimal fuera de lugar o
+        // el importe total en lugar del unitario.
+        const ref=parseFloat(d.costo_referencia)||0;
+        const raro=cu>0&&ref>0&&(cu/ref>=5||ref/cu>=5);
+        return(<tr key={d.id} className={`border-t border-gray-100 ${faltaCosto?"bg-red-50":diff?"bg-orange-50":""}`}>
           <td className="px-3 py-2 font-medium text-gray-900">{cat.articulo} <span className="text-gray-400 text-xs">{cat.unidad_clave}</span></td>
           <td className="px-3 py-2 text-center text-gray-500">{cat.unidad_clave==="kg"?fmtQ(esperado,"kg"):esperado}</td>
           <td className="px-3 py-2 text-center"><input type="number" min="0" step={cat.unidad_clave==="kg"?"0.25":"1"} className={`w-20 text-center border rounded-lg px-1 py-1 text-sm ${diff?"border-orange-400 bg-orange-50":"border-gray-200"}`} value={cantRecibida[d.id]||""} onChange={e=>setCantRecibida({...cantRecibida,[d.id]:parseFloat(e.target.value)||0})}/></td>
+          <td className="px-3 py-2">{sistemaCostea
+            ?<span className="text-xs text-gray-400">lo calcula el sistema (PEPS)</span>
+            :<div><input type="number" min="0" step="0.01" placeholder="0.00" className={`w-24 text-right border rounded-lg px-2 py-1 text-sm ${faltaCosto?"border-red-400 bg-red-50":raro?"border-amber-400 bg-amber-50":"border-gray-200"}`} value={costoRecep[d.id]??""} onChange={e=>setCostoRecep({...costoRecep,[d.id]:e.target.value})}/>
+               {ref>0&&<span className="block text-[10px] text-gray-400">catálogo {fmt(ref)}</span>}
+               {raro&&<span className="block text-[10px] text-amber-700 font-semibold">{(cu>ref?cu/ref:ref/cu).toFixed(0)}× el de catálogo — ¿es el unitario?</span>}</div>}</td>
+          <td className="px-3 py-2 text-right text-xs font-semibold text-gray-700">{cu>0&&recibido>0?fmt(cu*recibido):"—"}</td>
           <td className="px-3 py-2"><input className="w-full border border-gray-200 rounded-lg px-2 py-1 text-xs" placeholder="Nota opcional" value={notasRecep[d.id]||""} onChange={e=>setNotasRecep({...notasRecep,[d.id]:e.target.value})}/></td>
         </tr>);})}</tbody></table></div>
       {hayFaltante&&<div className="bg-orange-50 border border-orange-200 rounded-xl p-3 mb-3"><p className="text-sm font-semibold text-orange-800">Artículos con diferencias:</p><div className="text-xs text-orange-700 mt-1">{items.filter(d=>(cantRecibida[d.id]||0)!==d.cantidad).map(d=>{const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};return<p key={d.id}>{cat.articulo}: esperado {d.cantidad} → recibido {cantRecibida[d.id]||0}</p>;})}</div></div>}
-      <div className="flex justify-end gap-2">
-        <Btn onClick={()=>{const c={};items.forEach(d=>{c[d.id]=d.cantidad;});setCantRecibida(c);}} color="amber">Todo correcto</Btn>
-        <Btn onClick={confirmarRecepcion} disabled={saving} color="green">{saving?"Guardando...":hayFaltante?"Confirmar con faltantes":"Recepción completa ✓"}</Btn>
+      <div className="flex justify-between items-center gap-2 flex-wrap">
+        <span className="text-sm text-gray-600">{!sistemaCostea&&totalFactura>0&&<span>Total sin IVA de lo recibido: <b className="text-gray-800">{fmt(totalFactura)}</b></span>}</span>
+        <div className="flex gap-2">
+          <Btn onClick={()=>{const c={};items.forEach(d=>{c[d.id]=d.cantidad;});setCantRecibida(c);}} color="amber">Todo correcto</Btn>
+          <Btn onClick={confirmarRecepcion} disabled={saving} color="green">{saving?"Guardando...":hayFaltante?"Confirmar con faltantes":"Recepción completa ✓"}</Btn>
+        </div>
       </div>
     </div>);
   }
@@ -2002,11 +2086,29 @@ function VentasSRView({productosVenta,setProductosVenta,productosInactivos,setPr
   const [newProd,setNewProd]=useState({codigo_sr:"",nombre:"",categoria:"",precio_venta:0});
   const [recetaDe,setRecetaDe]=useState(null);
   const [newLinea,setNewLinea]=useState({ref:"",cantidad:0,merma_pct:0});
+  // v7.22: la receta se edita en DOS PASOS — botón Editar, cambios, Guardar.
+  // Antes cada casilla se guardaba en `onBlur`: teclear y hacer clic afuera ya
+  // escribía en la base, sin confirmar y sin forma de deshacer. Un dedazo
+  // quedaba grabado en silencio, y es la explicación más probable de las
+  // cantidades absurdas que aparecieron en el análisis de recetas (ESENCIA
+  // MENTA 0.001 ml, VINAGRETA DULCE 1 litro por ensalada).
+  // `editReceta` = id del producto cuya receta está en edición.
+  // `borrador`   = {recetaId: {cantidad, merma_pct}} — lo teclado, sin guardar.
+  const [editReceta,setEditReceta]=useState(null);
+  const [borrador,setBorrador]=useState({});
+  // El acuse vive DENTRO del editor de receta, donde ocurrió el cambio, y no en
+  // un banner al tope de la página que queda fuera de la vista (misma lección
+  // del popup de alta de insumo en v7.17).
+  const [msgReceta,setMsgReceta]=useState(null);
   // v7.1: preparaciones (sub-recetas)
   const [verTipo,setVerTipo]=useState("platillos");
   // v7.8: filtro y buscador de productos para triar rápido lo que falta
   const [busqProd,setBusqProd]=useState("");
   const [filtroEst,setFiltroEst]=useState("todos"); // todos | falta | con | noconsume
+  // v7.22: filtro por grupo de SR (antes el grupo sólo se alcanzaba escribiéndolo
+  // en el buscador) y buscador de preparaciones, que no tenían ninguno.
+  const [filtroGrupo,setFiltroGrupo]=useState("");
+  const [busqPrep,setBusqPrep]=useState("");
   const nrmP=(s)=>String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toUpperCase();
   // clasificación de un platillo para el indicador
   const clasifProd=(p)=>p.sin_insumos?"noconsume":(recetas.some(r=>r.producto_venta_id===p.id)?"con":"falta");
@@ -2059,7 +2161,21 @@ function VentasSRView({productosVenta,setProductosVenta,productosInactivos,setPr
   };
 
   // --- Productos y recetas ---
-  const saveProd=async(p)=>{setSaving(true);const upd=p.es_preparacion?{nombre:prodData.nombre.trim().toUpperCase(),unidad:prodData.unidad||"kg",rendimiento:parseFloat(prodData.rendimiento)||1,updated_at:new Date().toISOString()}:{codigo_sr:prodData.codigo_sr||null,nombre:prodData.nombre.trim(),categoria:prodData.categoria||null,precio_venta:parseFloat(prodData.precio_venta)||0,updated_at:new Date().toISOString()};const res=await sbPatch("productos_venta",p.id,upd);if(res)setProductosVenta(productosVenta.map(x=>x.id===p.id?{...x,...upd}:x));setEditingProd(null);setSaving(false);};
+  // v7.21: si el producto existe en SoftRestaurant, su nombre y su precio los manda
+  // SR — el conector los vuelve a imponer cada 2 minutos. Mandarlos aquí sería
+  // escribir algo que se revierte solo, y peor: la pantalla diría "guardado".
+  const saveProd=async(p)=>{
+    setSaving(true);
+    const upd=p.es_preparacion
+      ?{nombre:prodData.nombre.trim().toUpperCase(),unidad:prodData.unidad||"kg",rendimiento:parseFloat(prodData.rendimiento)||1,updated_at:new Date().toISOString()}
+      :p.codigo_sr
+        ?{categoria:prodData.categoria||null,updated_at:new Date().toISOString()}
+        :{codigo_sr:prodData.codigo_sr||null,nombre:prodData.nombre.trim(),categoria:prodData.categoria||null,precio_venta:parseFloat(prodData.precio_venta)||0,updated_at:new Date().toISOString()};
+    const res=await sbPatchE("productos_venta",p.id,upd);
+    if(res.error)alert("No se pudo guardar: "+(res.error.message||"error desconocido"));
+    else setProductosVenta(productosVenta.map(x=>x.id===p.id?{...x,...upd}:x));
+    setEditingProd(null);setSaving(false);
+  };
   const addProd=async()=>{if(!newProd.nombre.trim())return;setSaving(true);const res=await sbPost("productos_venta",{codigo_sr:newProd.codigo_sr.trim()||null,nombre:newProd.nombre.trim(),categoria:newProd.categoria.trim()||null,precio_venta:parseFloat(newProd.precio_venta)||0});if(res&&res[0]){setProductosVenta([...productosVenta,res[0]]);setNewProd({codigo_sr:"",nombre:"",categoria:"",precio_venta:0});setAddingProd(false);}else alert("Error al guardar (¿código SR duplicado?)");setSaving(false);};
   const delProd=async(p)=>{
     if(p.es_preparacion&&recetas.some(r=>r.preparacion_id===p.id)){alert(`"${p.nombre}" se usa en otras recetas — quítala de esas recetas primero.`);return;}
@@ -2074,12 +2190,95 @@ function VentasSRView({productosVenta,setProductosVenta,productosInactivos,setPr
     const payload={producto_venta_id:recetaDe,cantidad:newLinea.cantidad,merma_pct:newLinea.merma_pct||0};
     if(tipoRef==="prep")payload.preparacion_id=refId;else payload.insumo_id=refId;
     const res=await sbPost("recetas",payload);
-    if(res&&res[0]){setRecetas([...recetas,res[0]]);setNewLinea({ref:"",cantidad:0,merma_pct:0});}
+    // v7.22: la línea nueva entra también al borrador, para que quede editable
+    // sin salir y volver a entrar al modo edición.
+    if(res&&res[0]){
+      setRecetas([...recetas,res[0]]);setNewLinea({ref:"",cantidad:0,merma_pct:0});
+      if(editReceta===recetaDe)setBorrador(b=>({...b,[res[0].id]:{cantidad:String(res[0].cantidad??""),merma_pct:String(res[0].merma_pct??0)}}));
+    }
     else alert("Error al agregar (¿el insumo ya está en la receta?)");
     setSaving(false);
   };
-  const delLinea=async(id)=>{await sbDelete("recetas",id);setRecetas(recetas.filter(r=>r.id!==id));};
-  const updLinea=async(id,campo,valor)=>{await sbPatch("recetas",id,{[campo]:valor});setRecetas(recetas.map(r=>r.id===id?{...r,[campo]:valor}:r));};
+  const delLinea=async(id)=>{
+    const r=recetas.find(x=>x.id===id);
+    const nom=r?(r.preparacion_id?productosVenta.find(p=>p.id===r.preparacion_id)?.nombre:insumos.find(i=>i.id===r.insumo_id)?.nombre):null;
+    if(!confirm(`¿Quitar ${nom||"este ingrediente"} de la receta?`))return;
+    await sbDelete("recetas",id);setRecetas(recetas.filter(x=>x.id!==id));
+  };
+
+  // v7.22: abrir/cerrar el modo edición de una receta.
+  const abrirEdicion=(p)=>{
+    const b={};
+    recetas.filter(r=>r.producto_venta_id===p.id).forEach(r=>{
+      b[r.id]={cantidad:String(r.cantidad??""),merma_pct:String(r.merma_pct??0)};
+    });
+    setBorrador(b);setEditReceta(p.id);
+  };
+  const cancelarEdicion=()=>{setBorrador({});setEditReceta(null);setMsgReceta(null);};
+  const tocarBorrador=(id,campo,valor)=>setBorrador(b=>({...b,[id]:{...b[id],[campo]:valor}}));
+
+  // Líneas cuyo valor teclado difiere del guardado.
+  const lineasCambiadas=(prodId)=>recetas.filter(r=>r.producto_venta_id===prodId).filter(r=>{
+    const b=borrador[r.id];if(!b)return false;
+    const q=parseFloat(b.cantidad),m=parseFloat(b.merma_pct);
+    return (isFinite(q)&&q!==parseFloat(r.cantidad))||(isFinite(m)&&m!==(parseFloat(r.merma_pct)||0));
+  });
+
+  // v7.22: guardar la receta completa en un solo paso, con dos candados.
+  //
+  // 1) CANTIDAD EN CERO: una línea en 0 no cuesta nada y el ⚠ no la ve, así que
+  //    el ingrediente desaparece del costeo sin dejar rastro visible.
+  // 2) CAMBIO DE MAGNITUD: si la cantidad se multiplica o se divide por 10 o
+  //    más, casi siempre es un punto decimal fuera de lugar o una confusión de
+  //    unidad — las preparaciones se miden en LITROS y KILOS, así que teclear
+  //    "1" cuando se quería "0.03" pide un litro de aderezo por platillo. Es
+  //    exactamente el error que costaba $71 por ensalada en VINAGRETA DULCE.
+  //    No se bloquea: se muestra el antes → después con su costo y se pregunta.
+  const guardarReceta=async(p)=>{
+    const cambios=lineasCambiadas(p.id);
+    setMsgReceta(null);
+    if(cambios.length===0){cancelarEdicion();return;}
+    const nombreDe=(r)=>r.preparacion_id
+      ?(productosVenta.find(x=>x.id===r.preparacion_id)?.nombre||"?")
+      :(insumos.find(x=>x.id===r.insumo_id)?.nombre||"?");
+    const unidadDe=(r)=>r.preparacion_id
+      ?(productosVenta.find(x=>x.id===r.preparacion_id)?.unidad||"u")
+      :(insumos.find(x=>x.id===r.insumo_id)?.unidad_base||"u");
+    const costoDe=(r)=>r.preparacion_id
+      ?costoReceta(r.preparacion_id,recetas,invSucursal,catalogo,productosVenta)/(parseFloat(productosVenta.find(x=>x.id===r.preparacion_id)?.rendimiento)||1)
+      :costoInsumo(r.insumo_id,invSucursal,catalogo);
+    const alertas=[];
+    for(const r of cambios){
+      const anterior=parseFloat(r.cantidad)||0;
+      const nuevo=parseFloat(borrador[r.id].cantidad);
+      if(!isFinite(nuevo))continue;
+      if(nuevo<=0){
+        alertas.push(`• ${nombreDe(r)}: ${fmtCant(anterior,unidadDe(r))} → 0. En cero el ingrediente deja de costear y no se ve en ninguna alarma.`);
+      }else if(anterior>0&&(nuevo/anterior>=10||anterior/nuevo>=10)){
+        const cu=costoDe(r);
+        alertas.push(`• ${nombreDe(r)}: ${fmtCant(anterior,unidadDe(r))} → ${fmtCant(nuevo,unidadDe(r))} (${nuevo>anterior?"×":"÷"}${(nuevo>anterior?nuevo/anterior:anterior/nuevo).toFixed(0)}). La línea pasa de ${fmt(anterior*cu)} a ${fmt(nuevo*cu)}.`);
+      }
+    }
+    if(alertas.length&&!confirm(`Revisa estos cambios en ${p.nombre}:\n\n${alertas.join("\n\n")}\n\n¿Guardar de todas formas?`))return;
+    setSaving(true);
+    const fallos=[];const aplicados=[];
+    for(const r of cambios){
+      const b=borrador[r.id];
+      const upd={cantidad:parseFloat(b.cantidad)||0,merma_pct:parseFloat(b.merma_pct)||0};
+      const res=await sbPatchE("recetas",r.id,upd);
+      if(res.error)fallos.push(`${nombreDe(r)}: ${res.error.message||"error desconocido"}`);
+      else aplicados.push({id:r.id,...upd});
+    }
+    if(aplicados.length){
+      const m=Object.fromEntries(aplicados.map(a=>[a.id,a]));
+      setRecetas(recetas.map(r=>m[r.id]?{...r,...m[r.id]}:r));
+    }
+    setSaving(false);
+    if(fallos.length){setMsgReceta({tipo:"error",txt:`No se guardaron ${fallos.length} de ${cambios.length} líneas: ${fallos.join(" · ")}`});return;}
+    const n=aplicados.length;
+    setBorrador({});setEditReceta(null);
+    setMsgReceta({tipo:"ok",txt:`${n} línea${n>1?"s":""} guardada${n>1?"s":""} en ${p.nombre}.`});
+  };
 
   const ventasSorted=ventas.slice().sort((a,b)=>new Date(b.fecha)-new Date(a.fecha)||new Date(b.created_at)-new Date(a.created_at));
   const canalBadge=(c)=>({mostrador:"info",ubereats:"success",rappi:"warning",didi:"purple"})[c]||"default";
@@ -2095,26 +2294,55 @@ function VentasSRView({productosVenta,setProductosVenta,productosInactivos,setPr
     const rend=parseFloat(p.rendimiento)||1;
     const precio=parseFloat(p.precio_venta)||0;
     const margen=precio>0?(precio/1.16-cR)/(precio/1.16)*100:0;
+    // v7.22: la receta sólo acepta cambios cuando se apretó "Editar receta".
+    const editando=editReceta===p.id;
+    const nCambios=editando?lineasCambiadas(p.id).length:0;
     return(<tr><td colSpan={colSpan} className="bg-teal-50/60 px-4 py-3 border-t border-teal-100">
-      <p className="text-xs font-bold text-teal-800 mb-2">Receta de {p.nombre}{esPrepDueno?` — ingredientes de UNA TANDA (rinde ${rend} ${p.unidad||"u"})`:" — consumo por unidad vendida"}</p>
+      <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+        <p className="text-xs font-bold text-teal-800">Receta de {p.nombre}{esPrepDueno?` — ingredientes de UNA TANDA (rinde ${rend} ${p.unidad||"u"})`:" — consumo por unidad vendida"}</p>
+        {editando
+          ?<div className="flex gap-1 items-center">
+             {nCambios>0&&<span className="text-xs text-amber-700 font-semibold mr-1">{nCambios} cambio{nCambios>1?"s":""} sin guardar</span>}
+             <button onClick={()=>guardarReceta(p)} disabled={saving} className="text-xs bg-emerald-500 text-white px-3 py-1 rounded font-semibold hover:bg-emerald-600 disabled:opacity-50">{saving?"Guardando...":"Guardar cambios"}</button>
+             <button onClick={cancelarEdicion} disabled={saving} className="text-xs bg-gray-200 text-gray-700 px-3 py-1 rounded font-semibold hover:bg-gray-300">Cancelar</button>
+           </div>
+          :<button onClick={()=>abrirEdicion(p)} className="text-xs bg-white border border-amber-300 text-amber-800 px-3 py-1 rounded font-semibold hover:bg-amber-50">✎ Editar receta</button>}
+      </div>
+      {msgReceta&&<div className={`mb-2 rounded-lg px-3 py-2 text-xs ${msgReceta.tipo==="ok"?"bg-emerald-50 border border-emerald-200 text-emerald-800":"bg-red-50 border border-red-200 text-red-800"}`}>{msgReceta.tipo==="ok"?"✓ ":"⚠ "}{msgReceta.txt}</div>}
+      {editando&&<div className="mb-2 rounded-lg px-3 py-2 text-xs bg-amber-50 border border-amber-200 text-amber-900">Estás editando. Nada se guarda hasta que aprietes <b>Guardar cambios</b>; <b>Cancelar</b> descarta todo. Ojo con las unidades: las preparaciones se miden en <b>litros y kilos</b>, así que 30 ml se escribe <b>0.03</b>.</div>}
       <table className="w-full text-xs mb-2"><thead><tr>{["Ingrediente","Cantidad","Unidad","Merma extra %","Costo unit.","Costo línea",""].map(h=><th key={h} className={`px-2 py-1 font-medium text-gray-500 ${["Cantidad","Merma extra %","Costo unit.","Costo línea"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}</tr></thead><tbody>
       {recetas.filter(r=>r.producto_venta_id===p.id).map(r=>{
         const esPrep=!!r.preparacion_id;
         const prep=esPrep?productosVenta.find(x=>x.id===r.preparacion_id):null;
         const ins=esPrep?null:(insumos.find(x=>x.id===r.insumo_id)||{});
         const cU=esPrep?(costoReceta(r.preparacion_id,recetas,invSucursal,catalogo,productosVenta)/(parseFloat(prep?.rendimiento)||1)):costoInsumo(r.insumo_id,invSucursal,catalogo);
-        const cL=(parseFloat(r.cantidad)||0)*(1+(parseFloat(r.merma_pct)||0)/100)*cU;
-        return(<tr key={r.id} className="border-t border-teal-100">
+        const b=editando?borrador[r.id]:null;
+        // En edición el costo de la línea sigue lo TECLEADO, para ver el efecto
+        // del cambio antes de guardarlo.
+        const qEf=b&&isFinite(parseFloat(b.cantidad))?parseFloat(b.cantidad):(parseFloat(r.cantidad)||0);
+        const mEf=b&&isFinite(parseFloat(b.merma_pct))?parseFloat(b.merma_pct):(parseFloat(r.merma_pct)||0);
+        const cL=qEf*(1+mEf/100)*cU;
+        const cambiada=b&&(qEf!==(parseFloat(r.cantidad)||0)||mEf!==(parseFloat(r.merma_pct)||0));
+        return(<tr key={r.id} className={`border-t border-teal-100 ${cambiada?"bg-amber-50":""}`}>
           <td className="px-2 py-1 font-medium text-gray-800">{esPrep?<span>{prep?.nombre||"?"} <Badge v="purple">prep</Badge></span>:(ins.nombre||"?")}</td>
-          <td className="px-2 py-1 text-right"><input type="number" min="0" step="0.001" className="w-20 text-right border border-gray-200 rounded px-1 py-0.5" defaultValue={r.cantidad} onBlur={e=>{const v=parseFloat(e.target.value)||0;if(v!==parseFloat(r.cantidad))updLinea(r.id,"cantidad",v);}}/></td>
+          <td className="px-2 py-1 text-right">{editando
+            ?<input type="number" min="0" step="0.001" className="w-20 text-right border border-amber-400 rounded px-1 py-0.5 bg-white" value={b?.cantidad??""} onChange={e=>tocarBorrador(r.id,"cantidad",e.target.value)}/>
+            :<span className="font-semibold text-gray-800">{fmtCant(parseFloat(r.cantidad)||0,"")}</span>}
+            {cambiada&&<span className="block text-[10px] text-amber-700">antes {fmtCant(parseFloat(r.cantidad)||0,"")}</span>}</td>
           <td className="px-2 py-1 text-gray-500">{esPrep?(prep?.unidad||"u"):ins.unidad_base}</td>
-          <td className="px-2 py-1 text-right"><input type="number" min="0" step="1" className="w-14 text-right border border-gray-200 rounded px-1 py-0.5" defaultValue={r.merma_pct} onBlur={e=>{const v=parseFloat(e.target.value)||0;if(v!==parseFloat(r.merma_pct))updLinea(r.id,"merma_pct",v);}}/></td>
+          <td className="px-2 py-1 text-right">{editando
+            ?<input type="number" min="0" step="1" className="w-14 text-right border border-amber-400 rounded px-1 py-0.5 bg-white" value={b?.merma_pct??""} onChange={e=>tocarBorrador(r.id,"merma_pct",e.target.value)}/>
+            :<span className="text-gray-600">{parseFloat(r.merma_pct)||0}</span>}</td>
           <td className="px-2 py-1 text-right text-gray-600">{fmt(cU)}{!esPrep&&(()=>{const o=origenCosto(r.insumo_id,invSucursal,catalogo);return o?<span className="text-amber-600 font-bold cursor-help ml-1" title={`Este costo viene del costo promedio de compra (${fmt(o.promedio)}/${ins.unidad_base||"u"}), que tiene prioridad sobre el catálogo. La presentación de compra da ${fmt(o.catalogo)}/${ins.unidad_base||"u"}. Si acabas de corregir la presentación, actualiza también el costo promedio en Inventario de sucursal.`}>⚠</span>:null;})()}</td>
-          <td className="px-2 py-1 text-right font-semibold text-teal-700">{fmt(cL)}</td>
-          <td className="px-2 py-1 text-right"><button onClick={()=>delLinea(r.id)} className="text-red-400 hover:text-red-600 px-1">✕</button></td>
+          <td className={`px-2 py-1 text-right font-semibold ${cambiada?"text-amber-700":"text-teal-700"}`}>{fmt(cL)}</td>
+          <td className="px-2 py-1 text-right">{editando?<button onClick={()=>delLinea(r.id)} className="text-red-400 hover:text-red-600 px-1" title="Quitar de la receta">✕</button>:null}</td>
         </tr>);})}
       </tbody></table>
-      <div className="flex gap-2 items-end flex-wrap">
+      {/* v7.22: agregar y quitar ingredientes también vive detrás de "Editar
+          receta", para que haya UNA sola puerta de cambio. Agregar sí escribe
+          de inmediato (es una línea nueva, explícita y con su propio botón);
+          lo que ya no ocurre en silencio es modificar lo que estaba. */}
+      {editando&&<div className="flex gap-2 items-end flex-wrap">
         <div className="flex-1"><label className="text-xs text-gray-500">Agregar ingrediente (escribe para buscar)</label>
         <BuscadorIngrediente key={p.id+"-"+recetas.filter(r=>r.producto_venta_id===p.id).length} placeholder="ej. pollo, salsa, crema…" onPick={(o)=>setNewLinea({...newLinea,ref:o.value})} opciones={[
           ...productosVenta.filter(x=>x.es_preparacion&&x.id!==p.id&&!recetas.some(r=>r.producto_venta_id===p.id&&r.preparacion_id===x.id)).map(x=>{const rx=parseFloat(x.rendimiento)||1;return{value:"prep:"+x.id,label:x.nombre,prep:true,extra:`${x.unidad||"u"} — ${fmt(costoReceta(x.id,recetas,invSucursal,catalogo,productosVenta)/rx)}`,usos:recetas.filter(r=>r.preparacion_id===x.id).length};}),
@@ -2123,7 +2351,7 @@ function VentasSRView({productosVenta,setProductosVenta,productosInactivos,setPr
         <div><label className="text-xs text-gray-500">Cantidad</label><input type="number" min="0" step="0.001" className="w-24 border border-gray-200 rounded-lg px-2 py-1.5 text-xs" value={newLinea.cantidad||""} onChange={e=>setNewLinea({...newLinea,cantidad:parseFloat(e.target.value)||0})}/></div>
         <div><label className="text-xs text-gray-500">Merma %</label><input type="number" min="0" step="1" className="w-16 border border-gray-200 rounded-lg px-2 py-1.5 text-xs" value={newLinea.merma_pct||""} onChange={e=>setNewLinea({...newLinea,merma_pct:parseFloat(e.target.value)||0})}/></div>
         <Btn onClick={addLinea} disabled={saving||!newLinea.ref||newLinea.cantidad<=0} color="purple">{saving?"...":"Agregar"}</Btn>
-      </div>
+      </div>}
       <div className="flex justify-between mt-2 text-sm">
         <span className="text-teal-800 font-medium">{esPrepDueno?<span>Costo de la tanda: <b>{fmt(cR)}</b> → costo por {p.unidad||"u"}: <b>{fmt(cR/rend)}</b></span>:<span>Costo total receta: <b>{fmt(cR)}</b></span>}</span>
         {!esPrepDueno&&precio>0&&<span className="text-gray-600">Precio {fmt(precio)} (con IVA) → margen bruto <b className={margen<50?"text-red-600":"text-emerald-600"}>{margen.toFixed(1)}%</b></span>}
@@ -2258,10 +2486,16 @@ function VentasSRView({productosVenta,setProductosVenta,productosInactivos,setPr
 
     {/* PRODUCTOS Y RECETAS */}
     {tab==="productos"&&<div>
+      {/* v7.21: explicar en pantalla de quién es cada dato, en vez de dejar editar
+          algo que el conector revierte a los 2 minutos sin decir nada. */}
+      <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2 mb-4 text-xs text-amber-900">
+        🔒 El <b>nombre</b>, el <b>precio</b> y el <b>grupo</b> de los productos que existen en SoftRestaurant los manda SR: el conector los vuelve a imponer cada 2 minutos, así que editarlos aquí no sirve — cámbialos en SoftRestaurant y se sincronizan solos.
+        <br/>Lo que sí es de FitTaste y puedes editar libremente: <b>las recetas</b>, la marca de <b>"no consume"</b>, las <b>preparaciones</b> y los productos que no existen en SR.
+      </div>
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <div className="flex gap-1">
-          <button onClick={()=>setVerTipo("platillos")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${verTipo==="platillos"?"bg-gray-800 text-white":"bg-white border border-gray-200 text-gray-500 hover:text-gray-700"}`}>Platillos ({productosVenta.filter(p=>!p.es_preparacion).length})</button>
-          <button onClick={()=>setVerTipo("preparaciones")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${verTipo==="preparaciones"?"bg-gray-800 text-white":"bg-white border border-gray-200 text-gray-500 hover:text-gray-700"}`}>Preparaciones ({productosVenta.filter(p=>p.es_preparacion).length})</button>
+          <button onClick={()=>{setVerTipo("platillos");setFiltroEst("todos");}} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${verTipo==="platillos"?"bg-gray-800 text-white":"bg-white border border-gray-200 text-gray-500 hover:text-gray-700"}`}>Platillos ({productosVenta.filter(p=>!p.es_preparacion).length})</button>
+          <button onClick={()=>{setVerTipo("preparaciones");setFiltroEst("todos");}} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${verTipo==="preparaciones"?"bg-gray-800 text-white":"bg-white border border-gray-200 text-gray-500 hover:text-gray-700"}`}>Preparaciones ({productosVenta.filter(p=>p.es_preparacion).length})</button>
         </div>
         {verTipo==="platillos"&&!addingProd&&<Btn onClick={()=>setAddingProd(true)} color="green">+ Nuevo producto</Btn>}
         {verTipo==="preparaciones"&&!addingPrep&&<Btn onClick={()=>setAddingPrep(true)} color="purple">+ Nueva preparación</Btn>}
@@ -2282,16 +2516,42 @@ function VentasSRView({productosVenta,setProductosVenta,productosInactivos,setPr
         <button onClick={()=>setAddingProd(false)} className="text-xs text-gray-500 px-2 py-1.5">Cancelar</button>
       </div></div>}
       {verTipo==="platillos"&&(()=>{const base=productosVenta.filter(p=>!p.es_preparacion);const cFalta=base.filter(p=>clasifProd(p)==="falta").length;const cCon=base.filter(p=>clasifProd(p)==="con").length;const cNo=base.filter(p=>clasifProd(p)==="noconsume").length;const chip=(id,l,n,col)=>(<button key={id} onClick={()=>setFiltroEst(id)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${filtroEst===id?"text-white border-transparent":"bg-white border-gray-200 text-gray-600 hover:text-gray-800"}`} style={filtroEst===id?{background:col}:{}}>{l} ({n})</button>);
+        // v7.22: el grupo de SR (WRAPS, BOWLS, MODS BEBIDAS…) como lista, no
+        // sólo escribiéndolo en el buscador. Cada opción trae cuántos le faltan
+        // receta, que es la razón práctica para filtrar por grupo.
+        const grupos=[...new Set(base.map(p=>p.grupo_sr).filter(Boolean))].sort();
         return(<div className="flex flex-col md:flex-row md:items-center gap-2 mb-3">
           <div className="relative flex-1"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">🔍</span><input className="w-full border border-gray-200 rounded-xl pl-9 pr-4 py-2 text-sm focus:ring-2 focus:ring-lime-400 focus:outline-none" placeholder="Buscar producto por nombre, código o grupo..." value={busqProd} onChange={e=>setBusqProd(e.target.value)}/></div>
+          <select className="border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white" value={filtroGrupo} onChange={e=>setFiltroGrupo(e.target.value)}>
+            <option value="">Todos los grupos ({grupos.length})</option>
+            {grupos.map(g=>{const enG=base.filter(p=>p.grupo_sr===g);const f=enG.filter(p=>clasifProd(p)==="falta").length;
+              return<option key={g} value={g}>{g} — {enG.length}{f>0?` (${f} sin receta)`:""}</option>;})}
+          </select>
           <div className="flex gap-1 flex-wrap">{chip("todos","Todos",base.length,"#2D2D2D")}{chip("falta","⚠ Falta receta",cFalta,"#bb4430")}{chip("con","Con receta",cCon,"#0e918b")}{chip("noconsume","No consume",cNo,"#9ca3af")}</div>
+        </div>);})()}
+      {/* v7.22: las preparaciones no tenían buscador ni filtro — 25 renglones
+          sin forma de acotar. El filtro "sin uso" señala las que no aparecen en
+          ninguna receta: duplicados y restos de captura. */}
+      {verTipo==="preparaciones"&&(()=>{const preps=productosVenta.filter(p=>p.es_preparacion);
+        const sinUso=preps.filter(p=>!recetas.some(r=>r.preparacion_id===p.id)).length;
+        const sinReceta=preps.filter(p=>!recetas.some(r=>r.producto_venta_id===p.id)).length;
+        const chipP=(id,l,n,col)=>(<button key={id} onClick={()=>setFiltroEst(id)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${filtroEst===id?"text-white border-transparent":"bg-white border-gray-200 text-gray-600 hover:text-gray-800"}`} style={filtroEst===id?{background:col}:{}}>{l} ({n})</button>);
+        return(<div className="flex flex-col md:flex-row md:items-center gap-2 mb-3">
+          <div className="relative flex-1"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">🔍</span><input className="w-full border border-gray-200 rounded-xl pl-9 pr-4 py-2 text-sm focus:ring-2 focus:ring-teal-400 focus:outline-none" placeholder="Buscar preparación por nombre..." value={busqPrep} onChange={e=>setBusqPrep(e.target.value)}/></div>
+          <div className="flex gap-1 flex-wrap">{chipP("todos","Todas",preps.length,"#2D2D2D")}{chipP("sinuso","Sin uso en recetas",sinUso,"#d6816c")}{chipP("sinreceta","⚠ Sin receta propia",sinReceta,"#bb4430")}</div>
         </div>);})()}
       {(()=>{let lista=productosVenta.filter(p=>verTipo==="preparaciones"?p.es_preparacion:!p.es_preparacion);
       if(verTipo==="platillos"){
-        if(filtroEst!=="todos")lista=lista.filter(p=>clasifProd(p)===filtroEst);
+        if(filtroEst!=="todos"&&["falta","con","noconsume"].includes(filtroEst))lista=lista.filter(p=>clasifProd(p)===filtroEst);
+        if(filtroGrupo)lista=lista.filter(p=>p.grupo_sr===filtroGrupo);
         if(busqProd.trim()){const q=nrmP(busqProd);lista=lista.filter(p=>nrmP(p.nombre).includes(q)||nrmP(p.codigo_sr).includes(q)||nrmP(p.grupo_sr).includes(q)||nrmP(p.categoria).includes(q));}
+      }else{
+        if(filtroEst==="sinuso")lista=lista.filter(p=>!recetas.some(r=>r.preparacion_id===p.id));
+        if(filtroEst==="sinreceta")lista=lista.filter(p=>!recetas.some(r=>r.producto_venta_id===p.id));
+        if(busqPrep.trim()){const q=nrmP(busqPrep);lista=lista.filter(p=>nrmP(p.nombre).includes(q));}
       }
-      return lista.length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400 mb-2">{verTipo==="preparaciones"?"Sin preparaciones":(busqProd||filtroEst!=="todos")?"Ningún producto coincide con el filtro":"Sin productos de venta"}</p><p className="text-xs text-gray-400">{verTipo==="preparaciones"?"Una preparación (salsa, arroz cocido, aderezo…) tiene su propia receta y los platillos la usan como un ingrediente más":(busqProd||filtroEst!=="todos")?"Cambia el filtro o la búsqueda":"Se crean automáticamente al importar tu primer reporte de SR, o agrégalos manualmente"}</p></div>
+      const hayFiltro=verTipo==="platillos"?(busqProd||filtroGrupo||filtroEst!=="todos"):(busqPrep||filtroEst!=="todos");
+      return lista.length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400 mb-2">{hayFiltro?(verTipo==="preparaciones"?"Ninguna preparación coincide con el filtro":"Ningún producto coincide con el filtro"):verTipo==="preparaciones"?"Sin preparaciones":"Sin productos de venta"}</p><p className="text-xs text-gray-400">{hayFiltro?"Cambia el filtro o la búsqueda":verTipo==="preparaciones"?"Una preparación (salsa, arroz cocido, aderezo…) tiene su propia receta y los platillos la usan como un ingrediente más":"Se crean automáticamente al importar tu primer reporte de SR, o agrégalos manualmente"}</p></div>
       :<div className="bg-white border border-gray-200 rounded-xl overflow-hidden overflow-x-auto"><table className="w-full text-sm"><thead className="bg-gray-50"><tr>
         {(verTipo==="preparaciones"?["Preparación","Se mide en","Rinde/tanda","Costo tanda","Costo unidad","Receta",""]:["Código SR","Producto","Grupo","Clasificación","Precio","Costo receta","Margen","Receta",""]).map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Precio","Costo receta","Margen","Rinde/tanda","Costo tanda","Costo unidad"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
       </tr></thead><tbody>{lista.map(p=>{
@@ -2308,23 +2568,34 @@ function VentasSRView({productosVenta,setProductosVenta,productosInactivos,setPr
           <td className="px-3 py-2 text-right">{isE?<input type="number" min="0" step="0.1" className="w-20 text-right border border-teal-400 rounded px-1 py-0.5 text-sm" value={prodData.rendimiento} onChange={e=>setProdData({...prodData,rendimiento:e.target.value})}/>:`${p.rendimiento||1} ${p.unidad||"u"}`}</td>
           <td className="px-3 py-2 text-right text-gray-600">{nRec>0?fmt(cR):<span className="text-gray-300">—</span>}</td>
           <td className="px-3 py-2 text-right font-semibold text-teal-700">{nRec>0?`${fmt(cR/rend)}/${p.unidad||"u"}`:"—"}</td>
-          <td className="px-3 py-2"><button onClick={()=>{setRecetaDe(openReceta?null:p.id);setNewLinea({ref:"",cantidad:0,merma_pct:0});}} className={`text-xs px-2 py-1 rounded font-medium ${nRec>0?"text-teal-700 hover:bg-teal-50":"text-red-500 hover:bg-red-50"}`}>{nRec>0?`${nRec} ingredientes ${openReceta?"▲":"▼"}`:"+ Crear receta"}</button></td>
+          <td className="px-3 py-2"><button onClick={()=>{if(editReceta&&lineasCambiadas(editReceta).length>0&&!confirm("Tienes cambios sin guardar en la receta abierta. ¿Descartarlos?"))return;cancelarEdicion();setRecetaDe(openReceta?null:p.id);setNewLinea({ref:"",cantidad:0,merma_pct:0});}} className={`text-xs px-2 py-1 rounded font-medium ${nRec>0?"text-teal-700 hover:bg-teal-50":"text-red-500 hover:bg-red-50"}`}>{nRec>0?`${nRec} ingredientes ${openReceta?"▲":"▼"}`:"+ Crear receta"}</button></td>
           <td className="px-3 py-2 text-right">{isE?<div className="flex gap-1 justify-end"><button onClick={()=>saveProd(p)} disabled={saving} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded">{saving?"...":"Guardar"}</button><button onClick={()=>setEditingProd(null)} className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded">X</button></div>:<div className="flex gap-1 justify-end"><button onClick={()=>{setEditingProd(p.id);setProdData({nombre:p.nombre,unidad:p.unidad||"kg",rendimiento:p.rendimiento||1});}} className="text-xs text-amber-700 hover:bg-amber-100 px-2 py-1 rounded">Editar</button><button onClick={()=>delProd(p)} className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded">✕</button></div>}</td>
         </tr>
         {openReceta&&recetaEditorRow(p,cR,7)}
         </React.Fragment>);}
         return(<React.Fragment key={p.id}><tr className={`border-t border-gray-100 ${isE||openReceta?"bg-lime-50/60":"hover:bg-gray-50"}`}>
           <td className="px-3 py-2 font-mono text-xs text-gray-500">{isE?<input className="w-20 border border-lime-400 rounded px-1 py-0.5 text-xs" value={prodData.codigo_sr||""} onChange={e=>setProdData({...prodData,codigo_sr:e.target.value})}/>:(p.codigo_sr||"—")}</td>
-          <td className="px-3 py-2 font-medium text-gray-900">{isE?<input className="w-full border border-lime-400 rounded px-1 py-0.5 text-sm" value={prodData.nombre} onChange={e=>setProdData({...prodData,nombre:e.target.value})}/>:p.nombre}</td>
+          {/* v7.21: el nombre y el precio de un producto que existe en SoftRestaurant
+              los MANDA SR: el conector los vuelve a imponer en cada ciclo, cada 2
+              minutos. Antes la pantalla dejaba editarlos y decía "actualizado", y el
+              cambio se revertía en silencio — se perdió tiempo capturando nombres que
+              nunca iban a quedar. Editable sólo lo que es de FitTaste. */}
+          <td className="px-3 py-2 font-medium text-gray-900">{isE
+            ?(p.codigo_sr
+              ?<span className="inline-flex items-center gap-1" title="El nombre viene de SoftRestaurant y el conector lo vuelve a imponer cada 2 minutos. Cámbialo en SR y se sincroniza solo.">{p.nombre}<span className="text-[10px] text-amber-600 font-normal">🔒 lo manda SR</span></span>
+              :<input className="w-full border border-lime-400 rounded px-1 py-0.5 text-sm" value={prodData.nombre} onChange={e=>setProdData({...prodData,nombre:e.target.value})}/>)
+            :p.nombre}</td>
           <td className="px-3 py-2 text-xs text-gray-500">{isE?<input className="w-20 border border-lime-400 rounded px-1 py-0.5 text-xs" value={prodData.categoria||""} onChange={e=>setProdData({...prodData,categoria:e.target.value})}/>:(p.grupo_sr||p.categoria||"—")}</td>
           <td className="px-3 py-2">{(()=>{const c=clasifProd(p);return c==="con"?<Badge v="success">Con receta</Badge>:c==="noconsume"?<Badge v="default">No consume</Badge>:<Badge v="danger">⚠ Falta receta</Badge>;})()}</td>
-          <td className="px-3 py-2 text-right">{isE?<input type="number" step="0.01" className="w-20 text-right border border-lime-400 rounded px-1 py-0.5 text-sm" value={prodData.precio_venta} onChange={e=>setProdData({...prodData,precio_venta:e.target.value})}/>:<span className="font-semibold">{fmt(p.precio_venta)}</span>}</td>
+          <td className="px-3 py-2 text-right">{isE&&!p.codigo_sr
+            ?<input type="number" step="0.01" className="w-20 text-right border border-lime-400 rounded px-1 py-0.5 text-sm" value={prodData.precio_venta} onChange={e=>setProdData({...prodData,precio_venta:e.target.value})}/>
+            :<span className="font-semibold" title={p.codigo_sr?"El precio viene de SoftRestaurant. Cámbialo en SR.":""}>{fmt(p.precio_venta)}{isE&&p.codigo_sr&&<span className="text-[10px] text-amber-600 font-normal ml-1">🔒</span>}</span>}</td>
           <td className="px-3 py-2 text-right text-gray-600">{nRec>0?fmt(cR):<span className="text-gray-300">—</span>}</td>
           <td className="px-3 py-2 text-right">{nRec>0&&precio>0?<Badge v={margen<50?"danger":margen<65?"warning":"success"}>{margen.toFixed(0)}%</Badge>:"—"}</td>
           <td className="px-3 py-2">{p.sin_insumos
             ?<button onClick={()=>toggleSinInsumos(p)} title="Marcado como instrucción sin consumo de insumos. Clic para quitarle la marca." className="text-xs px-2 py-1 rounded font-medium text-gray-400 hover:bg-gray-100">no consume ✓</button>
             :<span className="inline-flex items-center gap-1">
-              <button onClick={()=>{setRecetaDe(openReceta?null:p.id);setNewLinea({ref:"",cantidad:0,merma_pct:0});}} className={`text-xs px-2 py-1 rounded font-medium ${nRec>0?"text-teal-700 hover:bg-teal-50":"text-red-500 hover:bg-red-50"}`}>{nRec>0?`${nRec} insumos ${openReceta?"▲":"▼"}`:"+ Crear receta"}</button>
+              <button onClick={()=>{if(editReceta&&lineasCambiadas(editReceta).length>0&&!confirm("Tienes cambios sin guardar en la receta abierta. ¿Descartarlos?"))return;cancelarEdicion();setRecetaDe(openReceta?null:p.id);setNewLinea({ref:"",cantidad:0,merma_pct:0});}} className={`text-xs px-2 py-1 rounded font-medium ${nRec>0?"text-teal-700 hover:bg-teal-50":"text-red-500 hover:bg-red-50"}`}>{nRec>0?`${nRec} insumos ${openReceta?"▲":"▼"}`:"+ Crear receta"}</button>
               {nRec===0&&<button onClick={()=>toggleSinInsumos(p)} title="Marcar como instrucción de cocina que NO consume insumos (SIN CEBOLLA, PREPARADOS…). Deja de aparecer en la alarma de recetas." className="text-[10px] text-gray-400 hover:text-gray-600 underline px-1">no consume</button>}
             </span>}</td>
           <td className="px-3 py-2 text-right">{isE?<div className="flex gap-1 justify-end"><button onClick={()=>saveProd(p)} disabled={saving} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded">{saving?"...":"Guardar"}</button><button onClick={()=>setEditingProd(null)} className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded">X</button></div>:<div className="flex gap-1 justify-end"><button onClick={()=>{setEditingProd(p.id);setProdData({codigo_sr:p.codigo_sr||"",nombre:p.nombre,categoria:p.categoria||"",precio_venta:p.precio_venta});}} className="text-xs text-amber-700 hover:bg-amber-100 px-2 py-1 rounded">Editar</button><button onClick={()=>delProd(p)} className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded">✕</button></div>}</td>
@@ -2703,6 +2974,22 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
   const [soloDif,setSoloDif]=useState(false);
   const [cerrando,setCerrando]=useState(false);
   const [resConteo,setResConteo]=useState(null);
+  // v7.24: el PRIMER conteo establece la línea base y NO es merma.
+  //
+  // Antes del primer conteo las existencias están negativas (se vendió sin
+  // recepción registrada, y las recetas se fueron corrigiendo sobre la marcha).
+  // Contar sube esas existencias del negativo al número físico real, y esa
+  // diferencia se registraba como `entrada_ajuste`, que el estado de resultados
+  // lee como SOBRANTE y le resta a la merma del mes.
+  //
+  // Con las existencias de hoy, contar sólo los 18 insumos del piloto generaría
+  // un sobrante ficticio de ~$139,489 — y el mes cerraría con una utilidad
+  // inflada en esa cantidad. Contando todo el inventario, ~$243,379.
+  //
+  // Marcado como línea base, los movimientos se escriben igual (queda el
+  // rastro y el folio) pero el estado de resultados los excluye, tal como ya
+  // excluía la carga de "Inventario inicial".
+  const [esLineaBase,setEsLineaBase]=useState(false);
   const nrm=(s)=>String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toUpperCase();
 
   const rows=invSucursal.filter(i=>!sucId||i.sucursal_id===sucId).map(i=>({...i,ins:insumos.find(x=>x.id===i.insumo_id)||{}})).sort((a,b)=>(a.ins.nombre||"").localeCompare(b.ins.nombre||""));
@@ -2760,21 +3047,30 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
     const ymd=fecha.replace(/-/g,"");
     const nHoy=movSucursal.filter(m=>(m.nota||"").startsWith(`CONT-${ymd}`)).map(m=>parseInt((m.nota.match(/CONT-\d{8}-(\d+)/)||[])[1]||0)).reduce((a,b)=>Math.max(a,b),0);
     const folio=`CONT-${ymd}-${String(nHoy+1).padStart(2,"0")}`;
-    const nota=`${folio}${conteoNota?" · "+conteoNota:""}`;
-    let invLocal=[...invSucursal];const nuevosMov=[];
+    // La marca "línea base" viaja en la nota: el folio se conserva para el
+    // historial y el estado de resultados excluye los movientos marcados.
+    const nota=`${folio}${esLineaBase?" · línea base":""}${conteoNota?" · "+conteoNota:""}`;
+    let invLocal=[...invSucursal];const nuevosMov=[];const fallos=[];
     let faltante=0,sobrante=0;
     for(const c of cambios){
+      // v7.24: sbPatchE en lugar de sbPatch. El ajuste de existencia es lo
+      // único que no se puede perder en un conteo, y con sbPatch un fallo se
+      // reportaba como éxito: el kárdex diría que se ajustó y la existencia
+      // seguiría en el número viejo.
+      const r=await sbPatchE("inventario_sucursal",c.row.id,{existencia:c.fisico,updated_at:new Date().toISOString()});
+      if(r.error){fallos.push(`${c.row.ins?.nombre||"?"}: ${r.error.message||"error desconocido"}`);continue;}
       const mv=await sbPost("movimientos_sucursal",{sucursal_id:c.row.sucursal_id,insumo_id:c.row.insumo_id,tipo:c.diff>0?"entrada_ajuste":"salida_ajuste",cantidad:Math.abs(c.diff),costo_unitario:c.costo,fecha,nota,registrado_por:rol});
       if(mv&&mv[0])nuevosMov.push(mv[0]);
-      await sbPatch("inventario_sucursal",c.row.id,{existencia:c.fisico,updated_at:new Date().toISOString()});
       invLocal=invLocal.map(i=>i.id===c.row.id?{...i,existencia:c.fisico}:i);
       const val=Math.abs(c.diff)*c.costo;
       if(c.diff<0)faltante+=val;else sobrante+=val;
     }
     setInvSucursal(invLocal);
     if(nuevosMov.length)setMovSucursal(prev=>[...prev,...nuevosMov]);
-    setResConteo({folio,fecha,items:cambios.length,faltante:Math.round(faltante*100)/100,sobrante:Math.round(sobrante*100)/100,neto:Math.round((faltante-sobrante)*100)/100,detalle:cambios});
-    setConteo({});setConteoNota("");setSoloDif(false);setConteoBusq("");
+    const aplicados=cambios.length-fallos.length;
+    setResConteo({folio,fecha,items:aplicados,lineaBase:esLineaBase,faltante:Math.round(faltante*100)/100,sobrante:Math.round(sobrante*100)/100,neto:Math.round((faltante-sobrante)*100)/100,detalle:cambios.filter(c=>!fallos.some(f=>f.startsWith((c.row.ins?.nombre||"?")+":")))});
+    if(fallos.length)alert(`Se ajustaron ${aplicados} de ${cambios.length} insumos. NO se pudo ajustar:\n\n${fallos.join("\n")}\n\nVuelve a capturar esos renglones.`);
+    else{setConteo({});setConteoNota("");setSoloDif(false);setConteoBusq("");setEsLineaBase(false);}
     setCerrando(false);
   };
 
@@ -2905,11 +3201,32 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
           </tr>);})}</tbody></table>
       </div>}
 
-      <div className="bg-white border border-gray-200 rounded-xl p-4 mt-4 flex items-end gap-3 flex-wrap">
-        <div className="flex-1 min-w-48"><label className="text-xs text-gray-500 block mb-1">Nota del conteo (opcional)</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Ej. Conteo semanal de proteínas, cierre de mes…" value={conteoNota} onChange={e=>setConteoNota(e.target.value)}/></div>
-        <Btn onClick={cerrarConteo} disabled={cerrando||cDif===0} color="purple">{cerrando?"Guardando...":`Cerrar conteo${cDif>0?` (${cDif} ajuste${cDif>1?"s":""})`:""}`}</Btn>
+      {/* v7.24: sin esta casilla, el PRIMER conteo mete un sobrante ficticio
+          enorme al mes — las existencias venían negativas y subirlas al número
+          físico se leía como sobrante. */}
+      <div className={`rounded-xl p-4 mt-4 border-2 ${esLineaBase?"bg-teal-50 border-teal-300":"bg-white border-gray-200"}`}>
+        <label className="flex items-start gap-2 cursor-pointer mb-3">
+          <input type="checkbox" className="mt-0.5 w-4 h-4" checked={esLineaBase} onChange={e=>setEsLineaBase(e.target.checked)}/>
+          <span className="text-sm">
+            <b className="text-gray-800">Éste es el conteo inicial (línea base)</b>
+            <span className="block text-xs text-gray-600 mt-0.5">Marca esto la <b>primera</b> vez que cuentas un insumo. El inventario queda igual al físico y el movimiento se registra, pero <b>no cuenta como merma ni como sobrante</b> del mes: la diferencia contra el teórico no es una pérdida, es el saldo que nunca se había registrado.</span>
+          </span>
+        </label>
+        {(()=>{const negativos=conteoRows.filter(c=>c.valido&&c.teorico<0);
+          if(negativos.length===0||esLineaBase)return null;
+          // La cifra es el sobrante que SE REGISTRARÍA de verdad (la suma de las
+          // diferencias positivas), no el valor del saldo negativo: es lo que
+          // acabaría restándole a la merma del mes.
+          const ficticio=conteoRows.filter(c=>c.valido&&c.diff>0).reduce((s,c)=>s+c.diffVal,0);
+          return(<div className="rounded-lg px-3 py-2 mb-3 text-xs bg-amber-50 border border-amber-300 text-amber-900">
+            ⚠ {negativos.length} de los insumos que capturaste {negativos.length>1?"tienen":"tiene"} existencia <b>negativa</b>. Cerrar sin marcar "conteo inicial" registraría <b>{fmt(ficticio)}</b> de sobrante que reduciría la merma del mes y <b>inflaría la utilidad</b> en esa cantidad. Si es la primera vez que los cuentas, marca la casilla de arriba.
+          </div>);})()}
+        <div className="flex items-end gap-3 flex-wrap">
+          <div className="flex-1 min-w-48"><label className="text-xs text-gray-500 block mb-1">Nota del conteo (opcional)</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Ej. Conteo semanal de proteínas, cierre de mes…" value={conteoNota} onChange={e=>setConteoNota(e.target.value)}/></div>
+          <Btn onClick={cerrarConteo} disabled={cerrando||cDif===0} color="purple">{cerrando?"Guardando...":`Cerrar conteo${cDif>0?` (${cDif} ajuste${cDif>1?"s":""})`:""}`}</Btn>
+        </div>
       </div>
-      <p className="text-xs text-gray-400 mt-2">Solo se registran los insumos con diferencia. Los faltantes se contabilizan como merma del mes; los sobrantes la reducen. El inventario queda igual al conteo físico.</p>
+      <p className="text-xs text-gray-400 mt-2">Solo se registran los insumos con diferencia. El inventario queda igual al conteo físico. En un conteo normal los faltantes se contabilizan como merma del mes y los sobrantes la reducen; en un conteo de <b>línea base</b> no afectan el resultado del mes.</p>
 
       {conteosHist.length>0&&<div className="bg-white border border-gray-200 rounded-xl overflow-hidden mt-5">
         <div className="px-4 py-2 bg-gray-50 border-b border-gray-100"><h3 className="text-sm font-bold text-gray-700">Conteos anteriores</h3></div>
@@ -2996,9 +3313,16 @@ function EstadosView({ventas,mermas,gastosOp,comprasDirectas,cxp,pagos,inventari
   // Mermas del mes = mermas registradas + faltantes netos de conteo físico.
   // Los ajustes de conteo se guardan como entrada/salida_ajuste; la baja
   // (salida) es faltante/merma, la alta (entrada) es sobrante y la reduce.
-  // Se excluye el "Inventario inicial" (carga, no sobrante real).
+  //
+  // Se excluyen DOS cosas que son carga de saldos y no merma real:
+  //   · "Inventario inicial" — la carga masiva de existencias.
+  //   · los conteos marcados como "línea base" (v7.24) — el primer conteo sube
+  //     las existencias del negativo al número físico, y esa diferencia no es
+  //     un sobrante: es el saldo que nunca se había registrado. Sin excluirlo,
+  //     el primer conteo metía ~$243 mil de sobrante ficticio al mes.
+  const esCargaDeSaldos=(m)=>{const n=m.nota||"";return n==="Inventario inicial"||n.includes("línea base");};
   const mermaRegistrada=mermas.filter(m=>enMes(m.fecha||"")).reduce((s,m)=>s+parseFloat(m.costo_total||0),0);
-  const ajusteFaltante=movSucursal.filter(m=>enMes(m.fecha||"")&&(m.tipo==="salida_ajuste"||m.tipo==="entrada_ajuste")&&(m.nota||"")!=="Inventario inicial").reduce((s,m)=>{const val=(parseFloat(m.cantidad)||0)*(parseFloat(m.costo_unitario)||0);return s+(m.tipo==="salida_ajuste"?val:-val);},0);
+  const ajusteFaltante=movSucursal.filter(m=>enMes(m.fecha||"")&&(m.tipo==="salida_ajuste"||m.tipo==="entrada_ajuste")&&!esCargaDeSaldos(m)).reduce((s,m)=>{const val=(parseFloat(m.cantidad)||0)*(parseFloat(m.costo_unitario)||0);return s+(m.tipo==="salida_ajuste"?val:-val);},0);
   const mermaMes=Math.round((mermaRegistrada+ajusteFaltante)*100)/100;
   const gMes=gastosOp.filter(g=>enMes(g.fecha||g.created_at?.split("T")[0]||""));
   const gastosTotal=gMes.reduce((s,g)=>s+parseFloat(g.monto||0),0);
@@ -3583,7 +3907,11 @@ function App(){
   };
 
   // RECEPCIÓN DE MERCANCÍA
-  const handleRecibir=async(pedId,provId,estatus,items)=>{
+  // v7.23: `costos` = {pedido_detalle_id: costo_unitario} capturado en la
+  // pantalla de recepción. Se escribe en pedido_detalle.costo_real ANTES de
+  // meter la mercancía al inventario, así la entrada y el kárdex nacen con el
+  // precio de la factura y no con un estimado que después nada corrige.
+  const handleRecibir=async(pedId,provId,estatus,items,costos)=>{
     const res=await sbPost("recepciones",{pedido_id:pedId,proveedor_id:provId,estatus:estatus,recibido_por:"sucursal"});
     if(res&&res[0]){
       const recId=res[0].id;
@@ -3597,12 +3925,15 @@ function App(){
         await sbPatch("pedido_proveedor_estatus",pe.id,{estatus:newEst,fecha_completado:new Date().toISOString()});
         setProvEstatus(provEstatus.map(x=>x.id===pe.id?{...x,estatus:newEst}:x));
       }
-      // Update pedido_detalle with received quantities
+      // Cantidad recibida y costo de la factura, en un solo PATCH por línea.
       for(const item of items){
-        if(item.cantidad_recibida!==item.cantidad_esperada){
-          await sbPatch("pedido_detalle",item.pedido_detalle_id,{cantidad:item.cantidad_recibida});
-          setPedidoDetalle(prev=>prev.map(d=>d.id===item.pedido_detalle_id?{...d,cantidad:item.cantidad_recibida}:d));
-        }
+        const upd={};
+        if(item.cantidad_recibida!==item.cantidad_esperada)upd.cantidad=item.cantidad_recibida;
+        const cu=costos&&costos[item.pedido_detalle_id];
+        if(cu>0){upd.costo_real=cu;upd.capturado_por="sucursal";upd.fecha_captura=new Date().toISOString();}
+        if(Object.keys(upd).length===0)continue;
+        await sbPatch("pedido_detalle",item.pedido_detalle_id,upd);
+        setPedidoDetalle(prev=>prev.map(d=>d.id===item.pedido_detalle_id?{...d,...upd}:d));
       }
       setRecepciones([...recepciones,res[0]]);
       const detRes=await sbGet("recepcion_detalle",`recepcion_id=eq.${recId}`);
@@ -3624,7 +3955,9 @@ function App(){
           if(!cat?.insumo_id)continue;
           const ins=insumos.find(x=>x.id===cat.insumo_id);
           const contenido=parseFloat(cat.contenido)||1;
-          const costoPres=parseFloat(det.costo_real||det.costo_referencia)||0;
+          // El costo capturado al recibir manda sobre lo que traiga el
+          // pedido: es el de la factura que llegó con la mercancía.
+          const costoPres=parseFloat((costos&&costos[item.pedido_detalle_id])||det.costo_real||det.costo_referencia)||0;
           if(ins?.tipo_control==="gasto"){
             const monto=Math.round(item.cantidad_recibida*costoPres*100)/100;
             if(monto>0){const g=await sbPost("gastos_operativos",{categoria:ins.categoria_gasto||"Insumos generales",descripcion:`${cat.articulo} × ${item.cantidad_recibida} (recepción ${pedRec?.numero_pedido||""})`,monto,metodo_pago:"transferencia",fecha:new Date().toISOString().split("T")[0],registrado_por:"sistema",nota:"Auto: insumo tipo gasto"});if(g&&g[0])gastosNew.push(g[0]);}
@@ -3786,7 +4119,7 @@ function App(){
       }}/>}
       {view==="dashboard"&&<DashboardView pedidos={pedidos} catalogo={catalogo} proveedores={proveedores} pedidoDetalle={pedidoDetalle} inventario={inventario} comprasDirectas={comprasDirectas} gastosOp={gastosOp}/>}
       {view==="ventas_dash"&&["admin","compras","finanzas","sucursal"].includes(rol)&&<VentasDashboardView ventas={ventas} ventaDetalle={ventaDetalle} productosVenta={productosVenta} gastosOp={gastosOp}/>}
-      {view==="catalogo"&&rol==="admin"&&<CatalogoView catalogo={catalogo} setCatalogo={setCatalogo} proveedores={proveedores} setProveedores={setProveedores} unidades={unidades} inventario={inventario} flujos={flujos} insumos={insumos} setInsumos={setInsumos}/>}
+      {view==="catalogo"&&rol==="admin"&&<CatalogoView catalogo={catalogo} setCatalogo={setCatalogo} proveedores={proveedores} setProveedores={setProveedores} unidades={unidades} inventario={inventario} flujos={flujos} insumos={insumos} setInsumos={setInsumos} recetas={recetas}/>}
       {view==="recepcion"&&rol==="sucursal"&&<RecepcionView pedidos={pedidos} pedidoDetalle={pedidoDetalle} proveedores={proveedores} provEstatus={provEstatus} catalogo={catalogo} recepciones={recepciones} recepcionDetalle={recepcionDetalle} onRecibir={handleRecibir}/>}
       {view==="finanzas"&&["admin","compras","finanzas"].includes(rol)&&<FinanzasView cxp={cxp} setCxp={setCxp} pagos={pagos} setPagos={setPagos} pedidos={pedidos} proveedores={proveedores} pedidoDetalle={pedidoDetalle} catalogo={catalogo}/>}
       {view==="compras_directas"&&["sucursal","admin","compras","finanzas"].includes(rol)&&<ComprasDirectasView comprasDirectas={comprasDirectas} setComprasDirectas={setComprasDirectas} catalogo={catalogo} proveedores={proveedores} cxp={cxp} setCxp={setCxp} onEntrada={async(catId,cant,costoU)=>{

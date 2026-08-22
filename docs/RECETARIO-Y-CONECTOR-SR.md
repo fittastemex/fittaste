@@ -953,3 +953,352 @@ pero no el kárdex histórico. Las 2,775 bolsas que las recetas descontaron en s
 momento siguen descontadas, así que `BOLSA DE PAPEL CHICA` está en **−1,297** de
 existencia. Son ~1,257 bolsas de sobre-descuento acumulado; el conteo físico es lo
 que lo cuadra.
+
+## 12. Caída del conector — 17 al 19-ago-2026 (v7.20)
+
+**Síntoma:** 44 horas sin ventas registradas. El encargado reportaba que el conector
+"estaba activo" y mandó foto de la ventana abierta.
+
+Fueron **dos fallas encadenadas**, con causas distintas.
+
+### Falla 1 — el proceso se murió solo (17-ago ~17:00)
+
+Último ticket subido: `TKT-9104`, 17-ago **16:56**. Los días anteriores subía entre
+22:00 y 23:00, o sea al cierre — así que no terminó su jornada: el proceso murió a
+media operación. Es la **tercera** caída (29-jul, 7-ago, 17-ago), una cada 9 o 10
+días.
+
+Dirección aportó el dato que cerró el diagnóstico: **la PC nunca se apaga.** Entonces
+no eran reinicios; el proceso se estaba matando solo. Dos huecos en `sync.js`:
+
+1. **`await pool.close()` estaba al final de `sincronizar()`, no en un `finally`.** Si
+   algo tronaba antes, el pool de SQL Server quedaba abierto y el ciclo siguiente
+   reconectaba sobre un pool en mal estado.
+2. **Nadie escuchaba los errores del pool.** `mssql` emite un evento `'error'` cuando
+   se cae la conexión, y Node **mata el proceso** si ese evento no tiene oyente. Igual
+   con cualquier promesa rechazada sin manejar.
+
+Encaja con una PC siempre encendida: se cae la conexión de madrugada —mantenimiento de
+SQL Server, un reinicio de SR, un parpadeo de red— y el conector se va con ella.
+
+**La trampa que engañó al encargado:** el `.bat` termina con `pause`, así que cuando el
+proceso muere **la ventana no se cierra** — se queda mostrando "Presione una tecla para
+continuar". Una ventana titulada "Conector FitTaste" abierta **no significa que esté
+corriendo**. Durante 44 horas estuvo ahí, abierta y muerta.
+
+**Corregido en v7.20:** el pool se cierra en `finally`; hay oyentes para
+`unhandledRejection`, `uncaughtException` y el error del pool, de modo que el conector
+ya no muere sino que reintenta en el ciclo siguiente (seguro, porque
+`estado.ultimoCierre` sólo avanza cuando un ticket sube bien); y a los 3 ciclos
+fallidos seguidos imprime un bloque de asteriscos en lugar de una línea suelta.
+
+### Falla 2 — el permiso faltante impidió la recuperación (mío)
+
+Al reiniciarlo, el conector no pudo recuperarse: cada INSERT de `venta_detalle` moría
+con `42501: permission denied for table reglas_consumo_ticket`. El trigger de la v7.19c
+lee esa tabla y corre con el rol de quien inserta —`anon`—, y la tabla se creó sin
+GRANT para `anon`.
+
+**Por qué se escapó:** la tabla y el trigger se crearon y se probaron **como
+administrador**, nunca con el rol que los usa en producción. Con privilegios de
+`postgres` el permiso sobra y todo pasa. Es exactamente la contrapartida que se había
+anotado al elegir el trigger: *"un trigger que falla no grita"*.
+
+La verificación correcta, y de aquí en adelante obligatoria para toda tabla nueva que
+el conector o la app deban leer:
+
+```sql
+SET LOCAL ROLE anon;   -- y recién entonces insertar
+```
+
+**Recuperación:** en cuanto se otorgó el permiso, el conector se puso al corriente
+solo. El 18-ago completo (55 tickets) entró en 10 minutos y el 19 al corriente: **81
+tickets y $22,560** en los primeros 25 minutos, sin intervención en la PC.
+
+### Lo que sigue pendiente
+
+* **Reinicio automático** en el Programador de tareas de Windows. Tercera caída; con la
+  v7.20 el proceso ya no debería morir, pero sigue siendo el respaldo para cuando la PC
+  se reinicie por actualizaciones.
+* **Que la alarma salga de la PC.** El aviso rojo de la app (v7.14) funcionó —detecta a
+  las 6 horas— pero requiere abrir el Dashboard; y la consola del conector requiere
+  estar en el punto de venta. Ninguno de los dos buscó a dirección en 44 horas. El
+  problema es de **entrega**, no de detección.
+
+## 13. "Edito el nombre del producto y no se guarda" (v7.21)
+
+**Reporte (20-ago-2026):** Fernanda editó los nombres de arrachera y res y no se
+modificaron.
+
+**Los cambios sí se guardaban.** El conector los borraba a los dos minutos.
+
+`sync.js` sincroniza el menú de SoftRestaurant en cada ciclo y, si el nombre en
+FitTaste no coincide con el de SR, **lo regresa al de SR**:
+
+```js
+} else if (!prod.es_preparacion && (prod.nombre !== nombre || ...)) {
+  const upd = { nombre, updated_at: new Date().toISOString() };
+  await sbPatch("productos_venta", prod.id, upd);
+```
+
+Lo mismo con el **precio** y el **grupo**.
+
+La pista que lo confirmó fueron los `updated_at`: `100G ARRACHERA` y
+`WRAP 100G ARRACHERA` cambiaron con **un segundo de diferencia** (11:36:54 y
+11:36:55). Eso no es una persona editando de uno en uno — es el conector recorriendo
+el menú en lote. Los timestamps que parecían ser de Fernanda eran del conector
+sobreescribiéndola.
+
+**No era un bug del conector: era un diseño que la pantalla no comunicaba.** La
+sincronización del menú existe a propósito y sirve — mantiene los códigos alineados
+para que los tickets empaten y los productos nuevos aparezcan solos. El problema era
+que la app **dejaba editar un campo que no le pertenece**, decía "actualizado", y lo
+revertía en silencio.
+
+**Decisión de dirección:** SoftRestaurant sigue mandando. Una sola fuente de verdad
+para que el cajero, el ticket y el reporte digan lo mismo.
+
+**Corregido en v7.21** — la pantalla ahora dice de quién es cada dato:
+
+* Nombre y precio se muestran **de solo lectura con un candado 🔒** cuando el producto
+  tiene `codigo_sr`. Las preparaciones y los productos que no existen en SR siguen
+  editables, porque ésos sí son de FitTaste.
+* `saveProd` ya **no manda** `nombre` ni `precio_venta` para productos de SR: mandarlos
+  era escribir algo que se revierte solo.
+* Pasó de `sbPatch` a `sbPatchE`, así que un guardado que falle ahora avisa en lugar de
+  reportar éxito.
+* Aviso fijo en la pestaña que explica qué es de SR y qué es de FitTaste, en vez de
+  depender de un tooltip.
+
+Lo que Fernanda **sí** puede editar sin que nada lo revierta: las recetas, la marca de
+"no consume", las preparaciones, los insumos y las presentaciones de compra.
+
+---
+
+## 14. La receta se guarda en dos pasos (v7.22)
+
+Cuatro peticiones de dirección del 2026-08-22, más lo que salió al investigarlas.
+
+### 14.1 El autoguardado era la causa raíz, no un detalle de forma
+
+Petición: *"cuando queramos editar recetas y preparaciones que haya un botón de editar
+y después guardar para asegurar que no hay un error de dedo o modificación
+involuntaria."*
+
+Las casillas de cantidad y de merma se guardaban en **`onBlur`**: teclear y hacer clic
+afuera ya escribía en la base. Sin botón, sin confirmación y sin forma de deshacer.
+
+Eso conecta directo con el análisis de recetas de ese mismo día. Las cantidades absurdas
+que encontramos son todas del mismo tipo — nadie confirmó nada:
+
+| Receta | Decía | Debía decir |
+|---|---|---|
+| `CHOCOMENTA SHAKE` → ESENCIA MENTA | 0.001 ml | los ml reales |
+| `ENSALADA MIXTA` (182 uds) → VINAGRETA DULCE | **1 litro** ($71 por platillo) | ~0.03 lt |
+| `WRAP DE POLLO` (735 uds) → DIP DE AGUACATE | 0.01 kg (10 g) | ~0.03 kg |
+
+Los dos extremos —diminuto y absurdo— tienen el mismo origen. Y **el ⚠ no puede verlos**:
+sólo compara el costo promedio contra el catálogo, y la cantidad de la receta no entra en
+esa comparación.
+
+**Cómo quedó:**
+
+* Botón **✎ Editar receta**. En reposo las cantidades se muestran como texto: no hay
+  casilla que tocar por accidente.
+* Lo teclado vive en un borrador en memoria. **Nada** va a la base hasta apretar
+  **Guardar cambios**; **Cancelar** descarta todo.
+* Contador de "N cambios sin guardar", renglón resaltado en ámbar y "antes 30" debajo del
+  valor nuevo.
+* El costo de la línea se recalcula con lo teclado, para ver el efecto **antes** de
+  guardar.
+* **Dos candados al guardar**, que son la parte que evita repetir el problema:
+  * cantidad a **0** → avisa que el ingrediente deja de costear y que ninguna alarma lo ve;
+  * cambio de **×10 o más** (en cualquier dirección) → muestra `antes → después` con el
+    costo de la línea en cada caso. No bloquea: pregunta.
+* Agregar y quitar ingredientes también quedó detrás de "Editar receta", para que haya
+  una sola puerta de cambio.
+* Un solo `PATCH` por línea modificada, y las que no cambiaron no se tocan.
+* Cambiar de receta con cambios pendientes pregunta antes de descartarlos.
+* El acuse aparece **dentro** del editor, no en un banner al tope de la página (misma
+  lección que el popup de alta de insumo en v7.17).
+
+Nuevo `fmtCant`: hasta 4 decimales. `fmtQ` redondea a 2 y ahí un `0.001` se ve como `0`
+— justo las cantidades que hay que poder leer para detectar un parche.
+
+### 14.2 Filtros
+
+Petición: *"meter filtros en grupos de recetas, insumos, preparaciones."*
+
+* **Platillos**: lista de **grupo de SR**, y cada opción dice cuántos le faltan receta
+  (`WRAPS — 12 (3 sin receta)`). Antes el grupo sólo se alcanzaba escribiéndolo en el
+  buscador.
+* **Preparaciones**: no tenían **nada** — 25 renglones sin forma de acotar. Ahora hay
+  buscador y dos filtros: *sin uso en recetas* (duplicados y restos de captura, como
+  `SALSA MORITA` con receta completa y 0 usos) y *sin receta propia*.
+* **Insumos**: además del buscador, filtros por *inventariable* / *gasto directo*,
+  *sin presentación* (no se pueden pedir) y *sin uso en recetas* (los 47 candidatos a
+  baja antes del conteo físico). `recetas` se pasa como prop a `CatalogoView` para poder
+  calcular el uso.
+
+El filtro de estado se reinicia al cambiar entre platillos y preparaciones, porque no
+significa lo mismo en cada lista.
+
+### 14.3 Recibir primero y capturar el costo después
+
+Pregunta: *"¿los proveedores Yerina, Del Mar y Pollo tienen un proceso donde el costo
+unitario lo mete compras, pero puede ser que primero se reciba y después se meta costo?
+¿así lo soporta la app?"*
+
+Los tres están configurados como **Compra manual**, `quien_captura_precio = compras`,
+`costo_editable = true` — correcto para ese flujo.
+
+**Sí lo soporta, y ya ocurre.** Nada bloquea la recepción por falta de precio; hay
+recepciones así de Del Mar (10-ago), Yerina, Pollo y Juan Carlos Botello. Lo que entra al
+inventario es `costo_real || costo_referencia` (el precio del catálogo), y si ambos son 0
+el promedio **no se destruye**: `entradaSucursalDB` usa `costoU||costoPrev`, así que la
+entrada toma el promedio anterior. El cierre del pedido sí exige el precio: `closeBlockers`
+enumera *"N artículos sin precio real"*, así que la captura se acaba forzando.
+
+**Pero hay un hueco, y conviene tenerlo claro:** `capturarPrecio` sólo hace `PATCH` a
+`pedido_detalle`. **No recostea la entrada ya registrada.** El movimiento de kárdex y el
+`costo_promedio` se quedan con el precio estimado para siempre, y el P&L —que lee el
+kárdex— arrastra ese estimado. El promedio nunca aprende el precio real de ese lote.
+
+Pendiente de decisión: al capturar el precio de una línea cuyo pedido ya se recibió,
+ajustar la entrada (recostear el movimiento o registrar un movimiento de ajuste de costo).
+No se implementó en v7.22 porque toca inventario y el conteo físico está en curso.
+
+### 14.4 El tipo de la presentación
+
+Petición: *"necesitamos que en insumo sea modificable el tipo una vez que ya está creado."*
+
+El `tipo_control` del **insumo** (inventariable / gasto directo) ya era editable en la
+pestaña Insumos. Lo que **no** lo era es el `tipo_producto` de la **presentación**
+(PROTEINAS, EMPAQUE, VERDURA…): se elegía al crearla y se pintaba como una etiqueta fija,
+así que una presentación mal clasificada quedaba mal para siempre. Ahora es un `select`
+en modo edición. La lista incluye los tipos canónicos de `prefixMap` aunque no haya
+ninguna presentación con ese tipo — si no, un tipo sin uso no se podría elegir nunca.
+
+Nota: el tipo determina el prefijo del SKU al crear, pero **el SKU no se renombra** al
+cambiar el tipo. Es a propósito: el SKU ya está en pedidos y recepciones históricas.
+
+### 14.5 Pruebas
+
+`herramientas/prueba-e2e/e2e-editar-receta.js` — 18 verificaciones. Las que importan:
+
+* teclear **no** manda nada a la base (se cuentan los `PATCH`, no se asume);
+* `Cancelar` deja los valores originales;
+* un cambio ×10 y una cantidad en 0 **piden confirmación**, y al responder que no la
+  receta no cambia;
+* al guardar hay **un solo** `PATCH` para la línea que cambió, y la otra no se toca.
+
+`e2e.js` se actualizó: "Agregar ingrediente" ahora vive detrás de "Editar receta".
+
+Batería completa: **169 verificaciones** en 7 archivos.
+
+---
+
+## 15. El costo unitario se captura al recibir (v7.23)
+
+Decisión de dirección sobre el hueco documentado en §14.3: *"necesito que cuando reciban
+pongan el precio unitario para que se reciba con un costo."*
+
+La recepción ahora **exige el costo unitario** de cada artículo recibido, y con ese precio
+entra la mercancía al inventario. Ya no hay un "después" en el que capturar el precio —que
+era el problema, porque capturarlo después nunca recosteaba la entrada ya registrada.
+
+**Cómo quedó:**
+
+* Columna **Costo unitario s/IVA** en la pantalla de recepción, con el importe de la línea
+  al lado y el total sin IVA de lo recibido al pie.
+* **No se recibe sin costo.** El aviso nombra los artículos que faltan; no se crea la
+  recepción ni entra nada al inventario.
+* La casilla arranca **en blanco** salvo que ya se haya capturado un precio para ese
+  pedido. El precio de catálogo se muestra como referencia *debajo* de la casilla pero
+  **no se precarga**: precargarlo permitiría pasar de largo y recibir con un estimado,
+  que es justo lo que se quería evitar.
+* Aviso de magnitud, mismo criterio que en recetas: un precio **5× o más** arriba del de
+  catálogo se marca con *"¿es el unitario?"* — el error típico es capturar el importe
+  total de la línea en lugar del precio por unidad.
+* El costo se escribe en `pedido_detalle.costo_real` con `capturado_por = "sucursal"`
+  **antes** de meter la mercancía, así la entrada y el movimiento de kárdex nacen con el
+  precio de la factura.
+* **Excepción:** al proveedor de *Almacén interno* no se le pide precio — ahí costea el
+  sistema por PEPS y pedirlo a mano sería inventarlo. La celda lo dice.
+
+`handleRecibir` recibe un quinto argumento `costos = {pedido_detalle_id: costo_unitario}`.
+No se metió dentro de `items` porque ése se expande directo a `recepcion_detalle`, que no
+tiene columna de costo — el precio pertenece a `pedido_detalle.costo_real`.
+
+**Pruebas:** `herramientas/prueba-e2e/e2e-costo-al-recibir.js`, 18 verificaciones. La que
+importa: el catálogo dice $100/kg, la factura dice $130/kg, y se comprueba que el
+`costo_promedio` y el kárdex queden en **0.13/g** y no en 0.10.
+
+Batería completa: **187 verificaciones** en 8 archivos.
+
+---
+
+## 16. Qué detona "cerrar conteo", y por qué el primero es distinto (v7.24)
+
+Pregunta de dirección del 2026-08-22, hecha **antes** de apretar el botón. La respuesta
+descubrió un problema que habría falseado el mes.
+
+### 16.1 Qué hace hoy
+
+Para cada insumo con físico capturado **y** diferencia distinta de cero:
+
+1. Escribe un movimiento de kárdex: `entrada_ajuste` si sobra, `salida_ajuste` si falta,
+   por la diferencia absoluta, al costo actual del insumo.
+2. Pone `inventario_sucursal.existencia` **igual al físico**.
+3. Todo con un folio `CONT-YYYYMMDD-NN`.
+
+Los renglones en blanco se omiten (no se contaron) y los que coinciden no generan nada.
+**No** actualiza el `costo_promedio`, y **no** crea renglón en `mermas`: el estado de
+resultados lee los movimientos de ajuste directamente — los faltantes suman a la merma del
+mes, los sobrantes la restan.
+
+Sólo aparecen en la hoja los insumos que **ya tienen fila** de `inventario_sucursal`; los
+38 insumos activos sin fila no se pueden contar hasta que se les cree una.
+
+### 16.2 El problema del PRIMER conteo
+
+Antes de contar, las existencias están negativas: se vendió sin recepción registrada y las
+recetas se fueron corrigiendo sobre la marcha. Contar sube la existencia del negativo al
+número físico real, y esa diferencia se registraba como **sobrante** — que no es un
+sobrante: es el saldo que nunca se había registrado.
+
+Medido contra producción al 22-ago-2026:
+
+| Alcance | Insumos en negativo | Sobrante ficticio |
+|---|---|---|
+| Los 18 del conteo piloto | 17 de 18 | **$139,489** |
+| Todo el inventario | 113 de 152 | **$243,379** |
+
+Ese sobrante le resta a la merma del mes, así que agosto habría cerrado con la utilidad
+operativa inflada en esa cantidad. Nada en la pantalla lo advertía.
+
+### 16.3 Cómo quedó
+
+* Casilla **"Éste es el conteo inicial (línea base)"**. Marcada, la existencia queda igual
+  en el físico y el movimiento se escribe igual (queda el rastro y el folio), pero la nota
+  lleva la marca `· línea base` y el estado de resultados lo **excluye** de la merma del
+  mes — tal como ya excluía la carga de `"Inventario inicial"`.
+* **Aviso automático** cuando se captura el físico de un insumo con existencia negativa y
+  la casilla NO está marcada: dice cuántos son y **cuánto sobrante se registraría**, con la
+  cifra exacta que acabaría restándole a la merma.
+* `cerrarConteo` pasó de `sbPatch` a **`sbPatchE`**: el ajuste de existencia es lo único
+  que no se puede perder en un conteo, y con `sbPatch` un fallo se reportaba como éxito —
+  el kárdex diría que se ajustó y la existencia seguiría en el número viejo. Ahora si algo
+  falla se avisa cuáles renglones no se aplicaron y la captura **no se borra**, para poder
+  reintentar sólo esos.
+
+La marca viaja en la nota en lugar de una columna nueva para no migrar `movimientos_sucursal`
+a media operación; el folio se conserva intacto, así que el historial de conteos sigue
+agrupando igual.
+
+**Pruebas:** `herramientas/prueba-e2e/e2e-conteo-linea-base.js`, 14 verificaciones. POLLO en
+−50 kg contado en 10 kg: se comprueba que el movimiento de 60 kg **sí** se escriba, que la
+existencia **sí** quede en 10 kg, y que los $7,800 **no** lleguen al estado de resultados.
+Y en el mismo archivo, que un faltante normal (RES, $125) **sí** llegue.
+
+Batería completa: **201 verificaciones** en 9 archivos.

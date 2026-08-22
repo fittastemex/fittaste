@@ -229,10 +229,25 @@ function explotarReceta(prodId, cantidadVendida, recetas, productosVenta, consum
 
 // ---------- Un ciclo de sincronización ----------
 async function sincronizar() {
+  // v7.20: el cierre del pool va en `finally`. Antes, si algo tronaba entre el
+  // connect y el close, el pool quedaba abierto y el ciclo siguiente reconectaba
+  // sobre un pool en mal estado — el conector podía quedarse trabado para siempre.
+  let pool = null;
+  try {
+    return await unCiclo(() => pool, (p) => { pool = p; });
+  } finally {
+    if (pool) { try { await pool.close(); } catch (e) { /* ya estaba cerrado */ } }
+  }
+}
+
+async function unCiclo(getPool, setPool) {
   const estado = leerEstado();
   console.log(`[${new Date().toLocaleString("es-MX")}] Buscando tickets desde ${estado.ultimoCierre}...`);
 
   const pool = await sql.connect({ ...CONFIG.sqlServer });
+  setPool(pool);
+  // El pool avisa cuando se cae la conexión; sin este oyente Node mata el proceso.
+  pool.on?.("error", (e) => gritar("Error del pool de SQL Server", e));
   // Históricos: solo lo nuevo desde la última vez (por fecha de cierre)
   const tickets = (await pool.request().input("desde", sql.DateTime, new Date(estado.ultimoCierre)).query(SQL_TICKETS)).recordset.map((t) => ({ ...t, tabla: "hist" }));
   // Turno abierto: completo en cada ciclo (la dedup evita dobles)
@@ -281,7 +296,7 @@ async function sincronizar() {
     } catch (e) { console.log("  (Menú no sincronizado: " + e.message + " — se calibra el query SQL_MENU con la salida de explorar-sr.js)"); }
   }
 
-  if (tickets.length === 0) { console.log("  Sin tickets nuevos."); await pool.close(); return; }
+  if (tickets.length === 0) { console.log("  Sin tickets nuevos."); return; }
   // El estado solo avanza con tickets del HISTÓRICO (los del turno abierto se
   // re-revisan cada ciclo hasta que el corte los mueva; la dedup evita dobles).
   let subidos = 0;
@@ -410,16 +425,49 @@ async function sincronizar() {
   estado.ultimaCorrida = new Date().toISOString();
   estado.ultimoResultado = { subidos, fallidos: fallidos.length, revisados: tickets.length };
   guardarEstado(estado);
-  await pool.close();
 }
+
+// ---------- Red de seguridad del proceso (v7.20) ----------
+// Node MATA el proceso ante una promesa rechazada sin manejar o una excepción no
+// atrapada. Y `mssql` emite un evento 'error' en el pool cuando se cae la conexión
+// con SQL Server: si nadie lo escucha, Node lo convierte en excepción y el conector
+// muere. Eso explica las caídas del 29-jul, 7-ago y 17-ago en una PC que nunca se
+// apaga: se cae la conexión de madrugada y el proceso se va con ella.
+//
+// Cada ciclo es independiente y `estado.ultimoCierre` sólo avanza cuando un ticket
+// se sube bien, así que seguir vivo tras un error es seguro: en el siguiente ciclo
+// se reintenta desde el mismo punto. Morir, en cambio, cuesta días de ventas.
+const gritar = (que, e) => {
+  console.error(`\n${"!".repeat(60)}`);
+  console.error(`  ${que}: ${e && e.message ? e.message : e}`);
+  console.error(`  El conector NO se detuvo: reintenta en el próximo ciclo.`);
+  console.error(`${"!".repeat(60)}\n`);
+};
+process.on("unhandledRejection", (e) => gritar("Promesa rechazada sin manejar", e));
+process.on("uncaughtException", (e) => gritar("Excepción no atrapada", e));
+sql.on?.("error", (e) => gritar("Error del pool de SQL Server", e));
 
 // ---------- Main ----------
 (async () => {
   const daemon = process.argv.includes("--daemon");
   const intervalo = (CONFIG.intervaloMinutos || 2) * 60 * 1000;
+  let fallosSeguidos = 0;
   do {
-    try { await sincronizar(); }
-    catch (e) { console.error("Error en ciclo de sync:", e.message); }
+    try {
+      await sincronizar();
+      fallosSeguidos = 0;
+    } catch (e) {
+      fallosSeguidos++;
+      console.error(`Error en ciclo de sync (${fallosSeguidos} seguidos):`, e.message);
+      // Si falla ciclo tras ciclo, que se vea a simple vista desde lejos: la
+      // consola vive minimizada y nadie lee líneas sueltas.
+      if (fallosSeguidos >= 3) {
+        console.error(`\n${"*".repeat(60)}`);
+        console.error(`  ATENCIÓN: ${fallosSeguidos} ciclos seguidos fallando.`);
+        console.error(`  Las ventas NO están subiendo. Avisa a dirección.`);
+        console.error(`${"*".repeat(60)}\n`);
+      }
+    }
     if (daemon) await new Promise((r) => setTimeout(r, intervalo));
   } while (daemon);
 })();
