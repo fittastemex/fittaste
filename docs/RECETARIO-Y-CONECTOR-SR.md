@@ -1421,3 +1421,37 @@ en gramos son 30 como las de vainilla).
 Es el mismo patrón de v7.22: **corregir un denominador obliga a revisar las cantidades que
 se calibraron contra el denominador roto.** Ya corregido; el conteo era línea base, así que
 no llegó al resultado del mes.
+
+---
+
+## 18. Buscador en los dos inventarios (v7.26)
+
+Petición de dirección: *"en los inventarios tanto sucursal como almacén podemos poner una
+barra de búsqueda como la que tenemos en los insumos? para encontrar el producto sin
+necesidad de tanto scroll."*
+
+El almacén tiene ~90 SKU y el inventario de sucursal ~150 renglones —más las 25
+preparaciones que se sumaron en v7.25—. La pestaña de insumos y la hoja de conteo ya tenían
+buscador; las dos pantallas que más se consultan, no.
+
+* **Inventario de sucursal**: busca por nombre y unidad, y encuentra también las
+  preparaciones. Contador "N de M insumos" cuando hay filtro.
+* **Inventario de almacén**: busca por descripción y SKU.
+* Las dos: normalización **sin acentos ni mayúsculas** (`platano` encuentra `PLÁTANO`) y
+  botón ✕ para limpiar.
+* El vacío por búsqueda dice *"ningún producto coincide"* y **no** el mensaje de "sin
+  inventario", que sería falso: hay inventario, sólo que nada coincide.
+
+Detalle del almacén que costó una iteración: el grupo **base + variantes** se muestra
+completo si cualquiera de sus miembros coincide, **en las dos direcciones**. Buscar la base
+trae sus variantes y buscar una variante trae su base. La primera versión sólo miraba la
+raíz, así que buscar `bachoco` dejaba la variante suelta diciendo *"variante de PRO-001"*
+sin que PRO-001 estuviera a la vista — el grupo se leía partido y no se entendía.
+
+Se unificó el normalizador en un helper global `nrmB`: había tres copias locales (`norm`,
+`nrm`, `nrmP`) con la misma intención.
+
+**Pruebas:** `herramientas/prueba-e2e/e2e-busqueda-inventarios.js`, 19 verificaciones,
+incluidas las dos direcciones del grupo base/variante y que el vacío por búsqueda no mienta.
+
+Batería completa: **244 verificaciones** en 11 archivos.
