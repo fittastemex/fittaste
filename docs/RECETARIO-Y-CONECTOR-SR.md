@@ -1603,7 +1603,40 @@ Se ven errores en pantalla y las ventas se encolan, pero **no se pierde ninguna 
 descontar en silencio** — que es el modo de fallar que sí habría dolido. En cuanto la
 migración esté aplicada, la cola entra sola.
 
-### 20.5 Pendiente
+### 20.5 Dos bugs que sólo aparecieron probando contra la base real
+
+El arnés de pruebas del navegador simula la base y **no ejecuta triggers**, así que esto se
+verificó insertando ventas de prueba en producción dentro de transacciones que se revierten.
+Aparecieron dos fallas que ninguna revisión de código había detectado:
+
+**1. El candado de idempotencia se comía el ticket completo.** Los dos triggers corren sobre
+la misma sentencia y el orden es alfabético, así que `trg_consumo_por_ticket` (la bolsa) va
+**antes** que `trg_consumo_receta`. Y la bolsa escribe su movimiento con el mismo tipo,
+`salida_venta`. El candado la veía, concluía que la receta ya estaba descontada y se saltaba
+todo. En la prueba sólo aparecía el movimiento de la bolsa. Corregido excluyendo del candado
+los movimientos cuya nota empieza con `Consumo por ticket`.
+
+**2. El kárdex valuaba las preparaciones en $0.** `fn_costo_insumo` sólo mira el costo
+promedio y las presentaciones de compra, y un espejo de preparación no se compra: sin
+producciones ni conteo su costo promedio es 0. El costo por *línea* ya caía al teórico vía
+`fn_costo_linea`, pero el movimiento de kárdex usaba la función simple — y el estado de
+resultados lee el kárdex. Se agregó `fn_costo_insumo_o_espejo`, que para un espejo sin costo
+promedio usa el teórico de su receta.
+
+Verificación final con `WRAP DE POLLO` ×2 por UberEats: 9 movimientos de receta más el de la
+bolsa; `ARROZ AL VAPOR` a **$30/kg** y `DIP DE AGUACATE` a **$71.77/kg** —sus costos teóricos
+correctos— descontados como **espejo** y no como sus ingredientes; $31.00 de receta + $3.99 de
+bolsa = $35.00 en `ventas.costo_teorico`. Y un segundo INSERT sobre la misma venta no duplicó
+nada.
+
+**Supuesto asumido:** el trigger descuenta las líneas de la sentencia que lo disparó, y el
+candado es por venta. Si el detalle de un ticket llegara en dos INSERT separados, el segundo
+lote no se descontaría. En la práctica no ocurre —el conector y la app insertan todas las
+líneas en un solo POST— y el reintento del conector borra la venta completa (la cascada se
+lleva los movimientos) antes de volver a subirla, así que arranca limpio. Es el mismo supuesto
+que v7.19c ya había asumido para la bolsa.
+
+### 20.6 Pendiente
 
 La importación manual desde la app (`origen = 'importado_sr'`) sigue descontando por su
 cuenta en `index.html`. Funciona y no estorba, pero es la tercera copia que falta consolidar:

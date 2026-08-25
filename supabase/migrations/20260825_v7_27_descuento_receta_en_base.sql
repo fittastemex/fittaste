@@ -103,6 +103,27 @@ BEGIN
   RETURN v_lote / COALESCE(NULLIF(v_rend,0),1);
 END $$;
 
+-- v7.27 (corregido en pruebas): el costo que va al KÁRDEX.
+--
+-- `fn_costo_insumo` sólo mira el costo promedio y las presentaciones de compra, y
+-- un espejo de preparación no se compra: mientras no haya producciones ni conteo,
+-- su costo promedio es 0. El costo por LÍNEA ya caía al teórico vía
+-- `fn_costo_linea`, pero el movimiento de kárdex usaba la función simple y el
+-- kárdex quedaba subvaluado — y el estado de resultados lee el kárdex. Se detectó
+-- probando contra la base: ARROZ AL VAPOR y DIP DE AGUACATE salían en $0.
+CREATE OR REPLACE FUNCTION public.fn_costo_insumo_o_espejo(p_insumo uuid)
+RETURNS numeric LANGUAGE plpgsql STABLE AS $$
+DECLARE
+  v_cu   numeric;
+  v_prep uuid;
+BEGIN
+  v_cu := public.fn_costo_insumo(p_insumo);
+  IF v_cu > 0 THEN RETURN v_cu; END IF;
+  SELECT preparacion_id INTO v_prep FROM public.insumos WHERE id = p_insumo;
+  IF v_prep IS NULL THEN RETURN 0; END IF;
+  RETURN COALESCE(public.fn_costo_linea(NULL, v_prep), 0);
+END $$;
+
 -- Costo de la receta de UN producto vendido (por unidad).
 CREATE OR REPLACE FUNCTION public.fn_costo_receta(p_producto uuid)
 RETURNS numeric LANGUAGE sql STABLE AS $$
@@ -141,8 +162,16 @@ BEGIN
 
     -- Candado de idempotencia: si el conector reintenta el ticket, no se
     -- descuenta dos veces.
+    --
+    -- EXCLUYE los movimientos de la regla por ticket (la bolsa). Los dos triggers
+    -- corren sobre la misma sentencia y el orden es alfabético, así que
+    -- `trg_consumo_por_ticket` va ANTES; y la bolsa escribe con el mismo tipo
+    -- 'salida_venta'. La primera versión del candado la veía, creía que la receta
+    -- ya estaba descontada y se saltaba el ticket completo. Se detectó probando
+    -- contra la base: sólo aparecía el movimiento de la bolsa.
     IF EXISTS (SELECT 1 FROM public.movimientos_sucursal m
-                WHERE m.venta_id = v.venta_id AND m.tipo = 'salida_venta') THEN
+                WHERE m.venta_id = v.venta_id AND m.tipo = 'salida_venta'
+                  AND COALESCE(m.nota,'') NOT LIKE 'Consumo por ticket%') THEN
       CONTINUE;
     END IF;
 
@@ -169,13 +198,13 @@ BEGIN
       WHERE ins_id IS NOT NULL
       GROUP BY ins_id
     LOOP
-      v_cu := public.fn_costo_insumo(c.insumo_id);
+      v_cu := public.fn_costo_insumo_o_espejo(c.ins_id);
 
       SELECT id INTO v_inv FROM public.inventario_sucursal
-       WHERE sucursal_id = v_suc AND insumo_id = c.insumo_id;
+       WHERE sucursal_id = v_suc AND insumo_id = c.ins_id;
       IF v_inv IS NULL THEN
         INSERT INTO public.inventario_sucursal (sucursal_id, insumo_id, existencia, costo_promedio)
-        VALUES (v_suc, c.insumo_id, 0, v_cu)
+        VALUES (v_suc, c.ins_id, 0, v_cu)
         RETURNING id INTO v_inv;
       END IF;
 
@@ -187,7 +216,7 @@ BEGIN
 
       INSERT INTO public.movimientos_sucursal
         (sucursal_id, insumo_id, tipo, cantidad, costo_unitario, venta_id, fecha, nota, registrado_por)
-      VALUES (v_suc, c.insumo_id, 'salida_venta', ROUND(c.cant,3), v_cu, v.venta_id,
+      VALUES (v_suc, c.ins_id, 'salida_venta', ROUND(c.cant,3), v_cu, v.venta_id,
               v_fecha, 'Venta ' || v_folio, 'trigger-v7.27');
 
       v_total := v_total + ROUND(c.cant * v_cu, 2);
@@ -226,4 +255,5 @@ EXECUTE FUNCTION public.fn_consumo_receta();
 GRANT EXECUTE ON FUNCTION public.fn_costo_insumo(uuid)            TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.fn_costo_linea(uuid, uuid, int)  TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.fn_costo_receta(uuid)            TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_costo_insumo_o_espejo(uuid)   TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.fn_consumo_receta()              TO anon, authenticated;
