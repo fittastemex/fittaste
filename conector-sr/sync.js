@@ -350,6 +350,14 @@ async function unCiclo(getPool, setPool) {
       // no viene descontado y que le toca a él. El conector viejo escribe 'api'
       // y el trigger lo ignora, así que las dos versiones conviven sin doble
       // cobro y el orden de despliegue no importa.
+      //
+      // ORDEN OBLIGATORIO: la migración v7.27 va ANTES que este archivo. Y la
+      // base lo hace cumplir sola: sin la migración, 'api_v2' viola el CHECK de
+      // `ventas.origen`, el alta falla, el ticket se marca como fallido y se
+      // reintenta en el ciclo siguiente. Se ven errores en pantalla y las ventas
+      // se encolan, pero NO se pierde ninguna ni se deja de descontar en
+      // silencio — que es el modo de fallar que sí habría dolido. En cuanto la
+      // migración esté aplicada, la cola entra sola.
       sucursal_id: sucId, fecha, folio, origen: "api_v2", canal: detectarCanal(pagosSR),
       subtotal: r2(subtotal), iva: r2(iva), total: r2(parseFloat(t.total) || subtotal + iva),
       total_efectivo: r2(fp.efectivo), total_tarjeta: r2(fp.tarjeta),

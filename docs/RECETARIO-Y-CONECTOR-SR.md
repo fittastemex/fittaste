@@ -1593,7 +1593,17 @@ teórico —receta ÷ rendimiento— mientras no haya tandas) y `fn_costo_receta
 Queda **una** copia de la lógica de costeo —la de la base— en lugar de tres. Y cualquier
 cambio futuro de recetas o costeo ya no exige ir a la PC.
 
-### 20.4 Pendiente
+### 20.4 El orden lo hace cumplir la base
+
+La migración va **antes** que el archivo, y no hay que confiar en que alguien lo recuerde:
+sin la migración aplicada, `origen = 'api_v2'` viola el CHECK de `ventas.origen`, el alta de
+la venta falla, el ticket se marca como fallido y se reintenta en el ciclo siguiente.
+
+Se ven errores en pantalla y las ventas se encolan, pero **no se pierde ninguna ni se deja de
+descontar en silencio** — que es el modo de fallar que sí habría dolido. En cuanto la
+migración esté aplicada, la cola entra sola.
+
+### 20.5 Pendiente
 
 La importación manual desde la app (`origen = 'importado_sr'`) sigue descontando por su
 cuenta en `index.html`. Funciona y no estorba, pero es la tercera copia que falta consolidar:
