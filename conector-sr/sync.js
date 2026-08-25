@@ -187,45 +187,17 @@ function detectarCanal(pagos) {
   return "mostrador";
 }
 const r2 = (n) => Math.round(n * 100) / 100;
-const r3 = (n) => Math.round(n * 1000) / 1000;
-
-// ---------- Lógica de costeo (misma que el frontend, v7.2: insumos base) ----------
-function costoInsumo(insumoId, invSucursal, catalogo) {
-  const inv = invSucursal.find((i) => i.insumo_id === insumoId);
-  if (inv && parseFloat(inv.costo_promedio) > 0) return parseFloat(inv.costo_promedio);
-  const pres = catalogo.filter((c) => c.insumo_id === insumoId && parseFloat(c.costo_referencia) > 0);
-  if (pres.length === 0) return 0;
-  return Math.min(...pres.map((c) => parseFloat(c.costo_referencia) / (parseFloat(c.contenido) || 1)));
-}
-function costoReceta(prodId, recetas, invSucursal, catalogo, productosVenta, depth = 0) {
-  if (depth > 5) return 0;
-  return recetas
-    .filter((r) => r.producto_venta_id === prodId)
-    .reduce((s, r) => {
-      const q = (parseFloat(r.cantidad) || 0) * (1 + (parseFloat(r.merma_pct) || 0) / 100);
-      let cu = 0;
-      if (r.insumo_id) cu = costoInsumo(r.insumo_id, invSucursal, catalogo);
-      else if (r.preparacion_id) {
-        const prep = productosVenta.find((p) => p.id === r.preparacion_id);
-        const rend = parseFloat(prep?.rendimiento) || 1;
-        cu = costoReceta(r.preparacion_id, recetas, invSucursal, catalogo, productosVenta, depth + 1) / rend;
-      }
-      return s + q * cu;
-    }, 0);
-}
-// Explota una receta (incluyendo preparaciones/sub-recetas) a insumos del catálogo
-function explotarReceta(prodId, cantidadVendida, recetas, productosVenta, consumo, depth = 0) {
-  if (depth > 5) return consumo;
-  recetas.filter((r) => r.producto_venta_id === prodId).forEach((r) => {
-    const q = (parseFloat(r.cantidad) || 0) * (1 + (parseFloat(r.merma_pct) || 0) / 100) * cantidadVendida;
-    if (r.insumo_id) consumo[r.insumo_id] = (consumo[r.insumo_id] || 0) + q;
-    else if (r.preparacion_id) {
-      const rend = parseFloat(productosVenta.find((p) => p.id === r.preparacion_id)?.rendimiento) || 1;
-      explotarReceta(r.preparacion_id, q / rend, recetas, productosVenta, consumo, depth + 1);
-    }
-  });
-  return consumo;
-}
+// v7.27: aquí vivían `costoInsumo`, `costoReceta` y `explotarReceta` — una copia
+// de la lógica de costeo del frontend. Se borran a propósito, no sólo porque ya
+// no se usan: fue esa copia la que quedó atrás. Cuando v7.25 cambió la app para
+// que las ventas descontaran la PREPARACIÓN en lugar de sus ingredientes, esta
+// copia siguió reventando preparaciones, y como el conector escribe el 100% de
+// las ventas reales el cambio no se aplicó a ninguna. Dejarla aquí sin uso sería
+// dejar la misma trampa armada para el próximo cambio de costeo.
+//
+// Ahora el costeo y el descuento viven en UN solo lugar: el trigger
+// `trg_consumo_receta` de la base. El conector lee SoftRestaurant y sube la
+// venta; nada más.
 
 // ---------- Un ciclo de sincronización ----------
 async function sincronizar() {
@@ -321,13 +293,12 @@ async function unCiclo(getPool, setPool) {
     guardarEstado(estado);
   };
 
-  // Datos de FitTaste necesarios para explotar recetas
-  const [sucursales, recetas, catalogo] = await Promise.all([
-    sbGet("sucursales", "activa=eq.true&limit=1"),
-    sbGet("recetas"),
-    sbGet("catalogo"),
-  ]);
-  let invSucursal = await sbGet("inventario_sucursal");
+  // v7.27: el conector ya NO explota recetas ni descuenta inventario — lo hace el
+  // trigger `trg_consumo_receta` de la base, sobre las ventas con origen
+  // 'api_v2'. Por eso dejó de bajar recetas, catálogo e inventario: tres
+  // peticiones menos por ciclo y, sobre todo, una sola copia de la lógica de
+  // costeo en lugar de tres (app, conector, recosteo).
+  const sucursales = await sbGet("sucursales", "activa=eq.true&limit=1");
   const sucId = sucursales[0]?.id || null;
 
   for (const t of tickets) {
@@ -357,14 +328,17 @@ async function unCiclo(getPool, setPool) {
     }
     if (lineas.length === 0) { avanzar(t); continue; }
 
-    // Totales: SR maneja precios con IVA incluido
-    let subtotal = 0, iva = 0, costoTotal = 0;
+    // Totales: SR maneja precios con IVA incluido.
+    // v7.27: el costo va en 0. El trigger de la base lo llena —por línea y en el
+    // total de la venta— en cuanto se inserta el detalle. Antes se calculaba
+    // aquí con una copia de `costoReceta`, y esa copia se quedó atrás cuando la
+    // app cambió a descontar preparaciones en v7.25: las preparaciones nunca se
+    // descontaron y quedó un doble cobro latente contra el módulo de producción.
+    let subtotal = 0, iva = 0;
     const detRows = lineas.map((l) => {
       const sub = l.prod.aplica_iva !== false ? l.importe / 1.16 : l.importe;
       subtotal += sub; iva += l.importe - sub;
-      const cT = r2(costoReceta(l.prod.id, recetas, invSucursal, catalogo, prods) * l.cantidad);
-      costoTotal += cT;
-      return { producto_venta_id: l.prod.id, cantidad: l.cantidad, precio_unitario: r2(l.precio), importe: r2(l.importe), costo_teorico: cT };
+      return { producto_venta_id: l.prod.id, cantidad: l.cantidad, precio_unitario: r2(l.precio), importe: r2(l.importe), costo_teorico: 0 };
     });
     const fp = { efectivo: 0, tarjeta: 0, plataforma: 0, otros: 0 };
     pagosSR.forEach((p) => { fp[clasificarPago(p.descripcion)] += parseFloat(p.importe) || 0; });
@@ -372,11 +346,23 @@ async function unCiclo(getPool, setPool) {
 
     // Insertar venta + detalle (rollback si falla el detalle)
     const vRes = await sbPost("ventas", {
-      sucursal_id: sucId, fecha, folio, origen: "api", canal: detectarCanal(pagosSR),
+      // 'api_v2' es LA SEÑAL: le dice al trigger de la base que este ticket ya
+      // no viene descontado y que le toca a él. El conector viejo escribe 'api'
+      // y el trigger lo ignora, así que las dos versiones conviven sin doble
+      // cobro y el orden de despliegue no importa.
+      //
+      // ORDEN OBLIGATORIO: la migración v7.27 va ANTES que este archivo. Y la
+      // base lo hace cumplir sola: sin la migración, 'api_v2' viola el CHECK de
+      // `ventas.origen`, el alta falla, el ticket se marca como fallido y se
+      // reintenta en el ciclo siguiente. Se ven errores en pantalla y las ventas
+      // se encolan, pero NO se pierde ninguna ni se deja de descontar en
+      // silencio — que es el modo de fallar que sí habría dolido. En cuanto la
+      // migración esté aplicada, la cola entra sola.
+      sucursal_id: sucId, fecha, folio, origen: "api_v2", canal: detectarCanal(pagosSR),
       subtotal: r2(subtotal), iva: r2(iva), total: r2(parseFloat(t.total) || subtotal + iva),
       total_efectivo: r2(fp.efectivo), total_tarjeta: r2(fp.tarjeta),
       total_plataforma: r2(fp.plataforma), total_otros: r2(fp.otros),
-      costo_teorico: r2(costoTotal), registrado_por: "conector-sr",
+      costo_teorico: 0, registrado_por: "conector-sr",
     });
     if (!(vRes && vRes[0])) { console.error(`  ✗ No se pudo subir ${folio} — se reintenta en el próximo ciclo`); marcarFallido(t); fallidos.push(folio); continue; }
     const ventaId = vRes[0].id;
@@ -388,25 +374,10 @@ async function unCiclo(getPool, setPool) {
       continue;
     }
 
-    // Explosión de recetas (incluye sub-recetas) → descuento de inventario + kárdex
-    const consumo = {};
-    lineas.forEach((l) => explotarReceta(l.prod.id, l.cantidad, recetas, prods, consumo));
-    if (sucId) for (const [insId, cant] of Object.entries(consumo)) {
-      let row = invSucursal.find((i) => i.sucursal_id === sucId && i.insumo_id === insId);
-      const costoU = costoInsumo(insId, invSucursal, catalogo);
-      if (!row) {
-        const res = await sbPost("inventario_sucursal", { sucursal_id: sucId, insumo_id: insId, existencia: 0, costo_promedio: costoU });
-        if (res && res[0]) { row = res[0]; invSucursal.push(row); } else continue;
-      }
-      const nueva = r3((parseFloat(row.existencia) || 0) - cant);
-      await sbPatch("inventario_sucursal", row.id, { existencia: nueva, updated_at: new Date().toISOString() });
-      invSucursal = invSucursal.map((i) => (i.id === row.id ? { ...i, existencia: nueva } : i));
-      await sbPost("movimientos_sucursal", {
-        sucursal_id: sucId, insumo_id: insId, tipo: "salida_venta",
-        cantidad: r3(cant), costo_unitario: costoU, venta_id: ventaId,
-        fecha, nota: `Venta ${folio}`, registrado_por: "conector-sr",
-      });
-    }
+    // v7.27: aquí iba la explosión de recetas y el descuento de inventario. Ahora
+    // lo hace el trigger `trg_consumo_receta` al insertarse el detalle, junto con
+    // la regla de la bolsa que ya vivía ahí desde v7.19c. El conector se quedó con
+    // una sola responsabilidad: leer SoftRestaurant y subir la venta.
 
     console.log(`  ✓ ${folio}: $${r2(parseFloat(t.total) || 0)} (${detRows.length} productos)`);
     subidos++;

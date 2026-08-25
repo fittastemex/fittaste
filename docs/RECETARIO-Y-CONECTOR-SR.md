@@ -1455,3 +1455,190 @@ Se unificó el normalizador en un helper global `nrmB`: había tres copias local
 incluidas las dos direcciones del grupo base/variante y que el vacío por búsqueda no mienta.
 
 Batería completa: **244 verificaciones** en 11 archivos.
+
+---
+
+## 19. Primera medición real, y lo que reveló (25-ago-2026)
+
+Dirección preguntó, tras el primer pesaje: *"¿está funcionando bien el descuento vs
+recetas? ¿qué opinas?"*. La revisión encontró tres cosas distintas, y una de ellas es un
+hueco de diseño propio.
+
+### 19.1 El motor de descuento sí funciona
+
+Se recalculó desde cero el consumo teórico de los 111 tickets del 23 al 25 de agosto y se
+comparó contra lo que el sistema descontó. **En los insumos de compra cuadra exacto.** El
+caso de POLLO lo confirma por otra vía: físico del sábado 6,680 g, vendido 10,200 g en ~2.5
+días = 4,080 g/día, contra el ritmo histórico de jul–ago de 4,354 g/día.
+
+### 19.2 El conteo del sábado no fue un conteo
+
+Hubo **dos** cierres el 22-ago:
+
+| Folio | Hora | Insumos | Línea base | Nota |
+|---|---|---|---|---|
+| `CONT-20260822-01` | 20:39 | 16 | sí | "Conteo inicial 22/08/26" |
+| `CONT-20260822-02` | 20:59 | 132 | **no** | **"Ajuste Angel"** |
+
+El segundo puso **130 de 132 insumos en cero** — AGUA, LECHE, ARROZ, CEBOLLA, LECHUGA,
+QUESO PANELA, JITOMATE. Físicamente imposible. La nota dice *"Ajuste"*: se usó la hoja de
+conteo para limpiar los negativos, no para capturar pesajes.
+
+Sin la marca de línea base, esos 132 movimientos entraron al estado de resultados como
+**$128,874 de sobrante**, restándole a la merma y sumándole a la utilidad de agosto:
+
+| | Antes | Corregido |
+|---|---|---|
+| Merma del mes | +$128,874 | **$0** |
+| Utilidad de agosto | $312,928 | **$184,054** |
+
+**Corrección aplicada:** se agregó `· línea base` a la nota de los 132 movimientos, para que
+el estado de resultados los salte igual que los del primer conteo. **No se tocó ninguna
+existencia ni se borró ningún movimiento** — verificado después: 118 negativos y $22,654 de
+valor de inventario, idénticos a antes. Reversible quitando la marca de la nota.
+
+Que la misma pantalla sirva para *contar* y para *ajustar* es el problema de fondo. Pendiente:
+avisar cuando se capturan muchos ceros seguidos (*"vas a poner 130 insumos en cero — ¿es un
+conteo real o querías limpiar los negativos?"*); un conteo legítimo casi nunca es 130 ceros.
+
+### 19.3 Todavía no hay medición válida de merma
+
+Requiere tres condiciones y no se cumplió ninguna: conteo inicial bueno, recepciones
+capturadas, y un segundo conteo. Desde el sábado hay **0 pedidos y 0 recepciones** contra
+111 tickets, así que todo deriva a negativo por aritmética (118 insumos hoy). El food cost
+de agosto, 48.3%, va a bajar cuando entren las recepciones que faltan.
+
+### 19.4 El hueco de diseño: v7.25 no aplica a las ventas reales
+
+`conector-sr/sync.js` tiene su **propia copia** de `explotarReceta` y `costoReceta`, y sigue
+reventando las preparaciones hasta sus ingredientes. El conector escribe el 100% de las
+ventas reales, así que el cambio de v7.25 —que vive en `index.html`— **no se aplica a
+ninguna venta**. En el kárdex del 23 al 25: `ADEREZO RANCH` 0, `DIP DE AGUACATE` 0,
+`ARROZ AL VAPOR` 0, `MEZCLA WAFFLE` 0.
+
+Tres consecuencias:
+
+1. Las preparaciones nunca se descuentan, así que contarlas hoy no dice nada.
+2. **Doble cobro latente:** en cuanto cocina registre una producción, los ingredientes
+   saldrían dos veces — una en la producción y otra en la venta, vía el conector.
+3. El `costo_teorico` que escribe el conector usa el cálculo teórico, mientras la app ya lee
+   el costo promedio del espejo. Las dos pantallas discreparán en cuanto haya producciones.
+
+**Es el mismo error que v7.19c ya había resuelto y que aquí se repitió.** Dirección lo había
+señalado en agosto —*"¿por qué cambia el conector, no es algo que puedes hacer a partir de
+que llega?"*— y la conclusión fue poner la regla en la base, donde llegan los datos. En
+v7.25 la lógica se puso en la app, y la app no es quien escribe las ventas.
+
+**Arreglo pendiente:** mover el descuento por receta al trigger de `venta_detalle`, donde ya
+vive la regla de la bolsa. Cubre las dos puertas (conector e importación manual), no exige
+ir a la PC del punto de venta, y deja **una** copia de la lógica en lugar de tres. Mientras
+no esté, cocina **no debe usar la pantalla de Producción**.
+## 20. El descuento por receta se muda a la base (v7.27)
+
+Arreglo del hueco de §19.4. Dirección eligió mover la lógica a la base en lugar de parchar
+la copia del conector, con una condición: **no puede ir a la PC del punto de venta hasta
+dentro de una semana.**
+
+### 20.1 Cómo se migra sin ventana de riesgo
+
+La señal de "quién descuenta" viaja **en los datos**, en `ventas.origen`:
+
+| origen | Quién descuenta | Qué hace el trigger |
+|---|---|---|
+| `api` (conector viejo) | el conector | **nada** |
+| `api_v2` (conector nuevo) | el trigger | descuenta, escribe kárdex y costos |
+
+Con eso el orden de despliegue deja de importar y no hay nada que activar a mano:
+
+* **Al aplicar la migración**: todas las ventas siguen entrando como `api`, el trigger las
+  ignora, y el comportamiento es **idéntico** al de hoy. La semana de espera es inofensiva.
+* **El día que se reemplace `sync.js`**: los tickets entran como `api_v2` y el trigger toma
+  el relevo solo, ticket por ticket. Para volver atrás basta restaurar el `sync.js` viejo.
+
+No se usó un candado del tipo *"¿ya existen movimientos de esta venta?"* porque **el conector
+inserta `venta_detalle` antes de descontar**: cuando corre el trigger todavía no hay
+movimientos, así que ese candado no distinguiría una versión de la otra.
+
+### 20.2 Lo que hace el trigger
+
+`trg_consumo_receta`, sentencia con tabla de transición, hermano del de la bolsa:
+
+* Descuenta el insumo de cada línea de receta. Una línea de **preparación** descuenta su
+  **espejo**, no sus ingredientes — los ingredientes salen cuando cocina registra la
+  producción (v7.25). Eso es lo que cierra el doble cobro latente.
+* Llena `venta_detalle.costo_teorico` por línea, que es lo que alimenta la rentabilidad por
+  ticket de v7.19.
+* **Suma** a `ventas.costo_teorico` en lugar de asignarlo, igual que el de la bolsa. Sumando,
+  el orden entre los dos triggers deja de importar.
+* Candado de idempotencia por `salida_venta` existente, para que un reintento del conector no
+  descuente dos veces.
+
+Tres funciones nuevas replican el criterio de costeo de la app: `fn_costo_insumo` (costo
+promedio de sucursal y, si no hay, la presentación más barata por unidad base),
+`fn_costo_linea` (para una preparación toma el costo promedio real de su espejo y se cae al
+teórico —receta ÷ rendimiento— mientras no haya tandas) y `fn_costo_receta`.
+
+### 20.3 El conector se queda con una sola responsabilidad
+
+`conector-sr/sync.js` pasó de 473 a 436 líneas:
+
+* Fuera el bloque de explosión de recetas y descuento de inventario.
+* `origen: "api_v2"` y `costo_teorico: 0` — el trigger los llena.
+* Dejó de bajar `recetas`, `catalogo` e `inventario_sucursal`: **tres peticiones menos por
+  ciclo.**
+* **Se borraron `costoInsumo`, `costoReceta` y `explotarReceta`**, aunque bastaba con dejarlas
+  sin uso. Fue precisamente esa copia la que quedó atrás en v7.25; dejarla ahí sería dejar la
+  misma trampa armada para el próximo cambio de costeo.
+
+Queda **una** copia de la lógica de costeo —la de la base— en lugar de tres. Y cualquier
+cambio futuro de recetas o costeo ya no exige ir a la PC.
+
+### 20.4 El orden lo hace cumplir la base
+
+La migración va **antes** que el archivo, y no hay que confiar en que alguien lo recuerde:
+sin la migración aplicada, `origen = 'api_v2'` viola el CHECK de `ventas.origen`, el alta de
+la venta falla, el ticket se marca como fallido y se reintenta en el ciclo siguiente.
+
+Se ven errores en pantalla y las ventas se encolan, pero **no se pierde ninguna ni se deja de
+descontar en silencio** — que es el modo de fallar que sí habría dolido. En cuanto la
+migración esté aplicada, la cola entra sola.
+
+### 20.5 Dos bugs que sólo aparecieron probando contra la base real
+
+El arnés de pruebas del navegador simula la base y **no ejecuta triggers**, así que esto se
+verificó insertando ventas de prueba en producción dentro de transacciones que se revierten.
+Aparecieron dos fallas que ninguna revisión de código había detectado:
+
+**1. El candado de idempotencia se comía el ticket completo.** Los dos triggers corren sobre
+la misma sentencia y el orden es alfabético, así que `trg_consumo_por_ticket` (la bolsa) va
+**antes** que `trg_consumo_receta`. Y la bolsa escribe su movimiento con el mismo tipo,
+`salida_venta`. El candado la veía, concluía que la receta ya estaba descontada y se saltaba
+todo. En la prueba sólo aparecía el movimiento de la bolsa. Corregido excluyendo del candado
+los movimientos cuya nota empieza con `Consumo por ticket`.
+
+**2. El kárdex valuaba las preparaciones en $0.** `fn_costo_insumo` sólo mira el costo
+promedio y las presentaciones de compra, y un espejo de preparación no se compra: sin
+producciones ni conteo su costo promedio es 0. El costo por *línea* ya caía al teórico vía
+`fn_costo_linea`, pero el movimiento de kárdex usaba la función simple — y el estado de
+resultados lee el kárdex. Se agregó `fn_costo_insumo_o_espejo`, que para un espejo sin costo
+promedio usa el teórico de su receta.
+
+Verificación final con `WRAP DE POLLO` ×2 por UberEats: 9 movimientos de receta más el de la
+bolsa; `ARROZ AL VAPOR` a **$30/kg** y `DIP DE AGUACATE` a **$71.77/kg** —sus costos teóricos
+correctos— descontados como **espejo** y no como sus ingredientes; $31.00 de receta + $3.99 de
+bolsa = $35.00 en `ventas.costo_teorico`. Y un segundo INSERT sobre la misma venta no duplicó
+nada.
+
+**Supuesto asumido:** el trigger descuenta las líneas de la sentencia que lo disparó, y el
+candado es por venta. Si el detalle de un ticket llegara en dos INSERT separados, el segundo
+lote no se descontaría. En la práctica no ocurre —el conector y la app insertan todas las
+líneas en un solo POST— y el reintento del conector borra la venta completa (la cascada se
+lleva los movimientos) antes de volver a subirla, así que arranca limpio. Es el mismo supuesto
+que v7.19c ya había asumido para la bolsa.
+
+### 20.6 Pendiente
+
+La importación manual desde la app (`origen = 'importado_sr'`) sigue descontando por su
+cuenta en `index.html`. Funciona y no estorba, pero es la tercera copia que falta consolidar:
+lo natural es que también pase por el trigger, marcándola con su propio origen. No se hizo en
+v7.27 para no mezclar dos cambios de costeo en el mismo despliegue.
