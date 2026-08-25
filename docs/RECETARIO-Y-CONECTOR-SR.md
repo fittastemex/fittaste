@@ -1455,3 +1455,81 @@ Se unificó el normalizador en un helper global `nrmB`: había tres copias local
 incluidas las dos direcciones del grupo base/variante y que el vacío por búsqueda no mienta.
 
 Batería completa: **244 verificaciones** en 11 archivos.
+
+---
+
+## 19. Primera medición real, y lo que reveló (25-ago-2026)
+
+Dirección preguntó, tras el primer pesaje: *"¿está funcionando bien el descuento vs
+recetas? ¿qué opinas?"*. La revisión encontró tres cosas distintas, y una de ellas es un
+hueco de diseño propio.
+
+### 19.1 El motor de descuento sí funciona
+
+Se recalculó desde cero el consumo teórico de los 111 tickets del 23 al 25 de agosto y se
+comparó contra lo que el sistema descontó. **En los insumos de compra cuadra exacto.** El
+caso de POLLO lo confirma por otra vía: físico del sábado 6,680 g, vendido 10,200 g en ~2.5
+días = 4,080 g/día, contra el ritmo histórico de jul–ago de 4,354 g/día.
+
+### 19.2 El conteo del sábado no fue un conteo
+
+Hubo **dos** cierres el 22-ago:
+
+| Folio | Hora | Insumos | Línea base | Nota |
+|---|---|---|---|---|
+| `CONT-20260822-01` | 20:39 | 16 | sí | "Conteo inicial 22/08/26" |
+| `CONT-20260822-02` | 20:59 | 132 | **no** | **"Ajuste Angel"** |
+
+El segundo puso **130 de 132 insumos en cero** — AGUA, LECHE, ARROZ, CEBOLLA, LECHUGA,
+QUESO PANELA, JITOMATE. Físicamente imposible. La nota dice *"Ajuste"*: se usó la hoja de
+conteo para limpiar los negativos, no para capturar pesajes.
+
+Sin la marca de línea base, esos 132 movimientos entraron al estado de resultados como
+**$128,874 de sobrante**, restándole a la merma y sumándole a la utilidad de agosto:
+
+| | Antes | Corregido |
+|---|---|---|
+| Merma del mes | +$128,874 | **$0** |
+| Utilidad de agosto | $312,928 | **$184,054** |
+
+**Corrección aplicada:** se agregó `· línea base` a la nota de los 132 movimientos, para que
+el estado de resultados los salte igual que los del primer conteo. **No se tocó ninguna
+existencia ni se borró ningún movimiento** — verificado después: 118 negativos y $22,654 de
+valor de inventario, idénticos a antes. Reversible quitando la marca de la nota.
+
+Que la misma pantalla sirva para *contar* y para *ajustar* es el problema de fondo. Pendiente:
+avisar cuando se capturan muchos ceros seguidos (*"vas a poner 130 insumos en cero — ¿es un
+conteo real o querías limpiar los negativos?"*); un conteo legítimo casi nunca es 130 ceros.
+
+### 19.3 Todavía no hay medición válida de merma
+
+Requiere tres condiciones y no se cumplió ninguna: conteo inicial bueno, recepciones
+capturadas, y un segundo conteo. Desde el sábado hay **0 pedidos y 0 recepciones** contra
+111 tickets, así que todo deriva a negativo por aritmética (118 insumos hoy). El food cost
+de agosto, 48.3%, va a bajar cuando entren las recepciones que faltan.
+
+### 19.4 El hueco de diseño: v7.25 no aplica a las ventas reales
+
+`conector-sr/sync.js` tiene su **propia copia** de `explotarReceta` y `costoReceta`, y sigue
+reventando las preparaciones hasta sus ingredientes. El conector escribe el 100% de las
+ventas reales, así que el cambio de v7.25 —que vive en `index.html`— **no se aplica a
+ninguna venta**. En el kárdex del 23 al 25: `ADEREZO RANCH` 0, `DIP DE AGUACATE` 0,
+`ARROZ AL VAPOR` 0, `MEZCLA WAFFLE` 0.
+
+Tres consecuencias:
+
+1. Las preparaciones nunca se descuentan, así que contarlas hoy no dice nada.
+2. **Doble cobro latente:** en cuanto cocina registre una producción, los ingredientes
+   saldrían dos veces — una en la producción y otra en la venta, vía el conector.
+3. El `costo_teorico` que escribe el conector usa el cálculo teórico, mientras la app ya lee
+   el costo promedio del espejo. Las dos pantallas discreparán en cuanto haya producciones.
+
+**Es el mismo error que v7.19c ya había resuelto y que aquí se repitió.** Dirección lo había
+señalado en agosto —*"¿por qué cambia el conector, no es algo que puedes hacer a partir de
+que llega?"*— y la conclusión fue poner la regla en la base, donde llegan los datos. En
+v7.25 la lógica se puso en la app, y la app no es quien escribe las ventas.
+
+**Arreglo pendiente:** mover el descuento por receta al trigger de `venta_detalle`, donde ya
+vive la regla de la bolsa. Cubre las dos puertas (conector e importación manual), no exige
+ir a la PC del punto de venta, y deja **una** copia de la lógica en lugar de tres. Mientras
+no esté, cocina **no debe usar la pantalla de Producción**.
