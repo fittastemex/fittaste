@@ -361,9 +361,13 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   check("6b.4 utilidad bruta ≈ $1,011.10 (venta SIN IVA − costo MP)",approx(utilDash,1011.10,0.05),utilDash);
   check("6b.5 mix y formas de pago visibles",dashTxt.includes("Mix de venta")&&dashTxt.includes("Formas de pago"),null);
   check("6b.6 top productos: BOWL DE PRUEBA listado",dashTxt.includes("Top 10 productos")&&dashTxt.includes("BOWL DE PRUEBA"),null);
-  // v7.14: la última venta del conector es de 2020 → el aviso debe salir y decir "días"
-  check("6b.7 avisa que el conector no sube ventas",dashTxt.includes("El conector de SoftRestaurant no ha subido ventas"),null);
-  check("6b.8 el aviso cuantifica la antigüedad en días",/no ha subido ventas en \d+ días/.test(dashTxt),dashTxt.match(/no ha subido ventas en [^\n]*/)?.[0]);
+  // v7.14: la última venta del conector es de 2020 → el aviso debe salir y decir "días".
+  // v7.28 reemplazó ese aviso por <SemaforoConector/>, que prefiere el latido del
+  // conector y sólo cae a la última venta cuando la PC todavía no late — que es
+  // el caso aquí (esta base no tiene tabla conector_latido). Se comprueba el
+  // comportamiento, no la redacción: que avise y que lo diga en días.
+  check("6b.7 avisa que el conector no sube ventas",/conector no sube ventas/i.test(dashTxt),dashTxt.match(/conector[^\n]{0,80}/)?.[0]||null);
+  check("6b.8 el aviso cuantifica la antigüedad en días",/conector no sube ventas hace \d+ días/i.test(dashTxt),dashTxt.match(/conector no sube ventas[^\n]*/)?.[0]);
   check("6b.9 el aviso dice que los tickets no se pierden",dashTxt.includes("no se pierden"),null);
   if(process.env.E2E_SHOT)await page.screenshot({path:process.env.E2E_SHOT,fullPage:true});
 

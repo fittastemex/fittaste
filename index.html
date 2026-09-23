@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.26";
+const V="7.28";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -1081,7 +1081,92 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
 }
 
 // ======================== DASHBOARD FINANCIERO ========================
-function DashboardView({pedidos,catalogo,proveedores,pedidoDetalle,inventario,comprasDirectas,gastosOp}){
+// v7.28 — Semáforo del conector.
+//
+// El conector murió el 13-sep a las 15:44 y nos enteramos el 23-sep. Diez
+// días. No falló el código: se apagó la PC un domingo y nadie lo volvió a
+// abrir. Lo que hizo que durara diez días y no diez minutos es que desde
+// fuera un conector muerto se ve EXACTAMENTE igual que un día flojo de
+// ventas. Este recuadro rompe ese empate.
+//
+// Vive en el dashboard y no en una pantalla de sistema a propósito: el
+// tablero es lo que dirección abre todos los días. Una alarma que hay que ir
+// a buscar no es una alarma.
+function SemaforoConector({ventas}){
+  const [latido,setLatido]=useState(undefined); // undefined = cargando, null = nunca ha latido
+  useEffect(()=>{
+    let vivo=true;
+    const leer=async()=>{const f=await sbGet("conector_latido","limit=1");if(vivo)setLatido(f[0]||null);};
+    leer();
+    // Un minuto: suficiente para enterarse, poco suficiente para no pesar.
+    const t=setInterval(leer,60000);
+    return()=>{vivo=false;clearInterval(t);};
+  },[]);
+
+  if(latido===undefined)return null;
+
+  const cuantoHace=(m)=>m<60?`hace ${m} min`
+    :m<1440?`hace ${Math.floor(m/60)} h`
+    :`hace ${Math.floor(m/1440)} días`;
+
+  // ---- Respaldo mientras el latido no llega a la PC ----
+  // El latido sólo existe desde v7.28, y la PC se actualiza cuando alguien va
+  // físicamente a la sucursal. Hasta entonces la única señal es la venta.
+  //
+  // Se miran TODOS los orígenes de conector, no sólo 'api'. La alarma anterior
+  // filtraba `origen==="api"` y eso la habría apagado en silencio el día que
+  // instaláramos el sync v7.27, que escribe 'api_v2': habría dejado de avisar
+  // justo después de que nos costara diez días de ventas.
+  if(latido===null){
+    const ult=(ventas||[]).filter(v=>String(v.origen||"").startsWith("api"))
+      .reduce((m,v)=>(v.created_at&&v.created_at>m?v.created_at:m),"");
+    if(!ult)return null;
+    const mins=Math.floor((Date.now()-new Date(ult).getTime())/60000);
+    // 6 horas y no 15 minutos: sin latido hay que tolerar un servicio entero
+    // sin ventas (una mañana floja) antes de gritar.
+    if(mins<360)return null;
+    return(<div className="mb-4 border rounded-xl px-4 py-2.5 flex items-center gap-3 text-sm bg-red-50 border-red-200 text-red-800">
+      <span className="w-2.5 h-2.5 rounded-full shrink-0 bg-red-500 animate-pulse"/>
+      <div className="flex-1">
+        <b>El conector no sube ventas {cuantoHace(mins)}.</b> Hay que ir a la PC de la sucursal
+        y abrir el Conector FitTaste. Los tickets no se pierden: al reiniciarlo recupera todo
+        lo pendiente desde el último corte.
+        <span className="opacity-60"> · Esta PC todavía no reporta latido; me estoy guiando por la última venta.</span>
+      </div>
+    </div>);
+  }
+
+  const mins=Math.floor((Date.now()-new Date(latido.visto_en).getTime())/60000);
+  // 15 minutos = siete ciclos de dos minutos. Suficiente para no dar falsas
+  // alarmas por una red lenta, y muy por debajo de un turno.
+  const mudo=mins>=15;
+  const res=latido.ultimo_resultado||{};
+  const atorado=!mudo&&res.ok===false;
+
+  const tono=mudo?"bg-red-50 border-red-200 text-red-800"
+           :atorado?"bg-amber-50 border-amber-200 text-amber-800"
+           :"bg-emerald-50 border-emerald-200 text-emerald-800";
+  const punto=mudo?"bg-red-500":atorado?"bg-amber-500":"bg-emerald-500";
+
+  return(<div className={`mb-4 border rounded-xl px-4 py-2.5 flex items-center gap-3 text-sm ${tono}`}>
+    <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${punto} ${mudo?"animate-pulse":""}`}/>
+    <div className="flex-1">
+      {mudo?<>
+        <b>El conector lleva {cuantoHace(mins)} sin dar señal.</b> Las ventas NO están subiendo.
+        Hay que ir a la PC de la sucursal y abrir el Conector FitTaste.
+      </>:atorado?<>
+        <b>El conector está vivo pero no puede trabajar</b> ({res.fallos_seguidos||1} intentos fallidos).
+        No es la PC: revisa SoftRestaurant o la red. {res.error&&<span className="opacity-70">— {res.error}</span>}
+      </>:<>
+        <b>Conector activo</b> — visto {cuantoHace(mins)}
+        {res.subidos>0&&<> · {res.subidos} ticket{res.subidos===1?"":"s"} en el último ciclo</>}
+        <span className="opacity-60"> · {latido.version||"?"}</span>
+      </>}
+    </div>
+  </div>);
+}
+
+function DashboardView({pedidos,catalogo,proveedores,pedidoDetalle,inventario,comprasDirectas,gastosOp,ventas}){
   const [mesOffset,setMesOffset]=useState(0);
   const now=new Date();
   const mesActual=new Date(now.getFullYear(),now.getMonth()-mesOffset,1);
@@ -1142,6 +1227,8 @@ function DashboardView({pedidos,catalogo,proveedores,pedidoDetalle,inventario,co
         <button onClick={()=>setMesOffset(Math.max(0,mesOffset-1))} disabled={mesOffset===0} className="px-3 py-1.5 rounded-lg text-sm border border-gray-200 hover:bg-gray-100 disabled:opacity-30">→</button>
       </div>
     </div>
+
+    <SemaforoConector ventas={ventas}/>
 
     {/* KPIs principales */}
     <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
@@ -2874,17 +2961,16 @@ function VentasDashboardView({ventas,ventaDetalle,productosVenta,gastosOp}){
   const pct=(x,t)=>t>0?`${Math.round((x/t)*100)}%`:"0%";
   const Kpi=({titulo,valor,sub,color})=><div className="bg-white border border-gray-200 rounded-xl p-4"><p className="text-xs text-gray-500">{titulo}</p><p className="text-2xl font-bold mt-1" style={color?{color}:{color:"#0b0b0b"}}>{valor}</p>{sub&&<p className="text-xs text-gray-400 mt-1">{sub}</p>}</div>;
   const rangoTxt=desde===hasta?etiquetaDia(desde):`${etiquetaDia(desde)} — ${etiquetaDia(hasta)}`;
-  // v7.14: el conector se cayó el 29-jul y nadie lo notó en 3 días porque su
-  // única señal de vida es una consola en la PC del POS. Este aviso vigila la
-  // última venta recibida por el conector y grita cuando se queda callado.
-  const ultimaApi=ventas.filter(v=>v.origen==="api").reduce((m,v)=>(v.created_at&&v.created_at>m?v.created_at:m),"");
-  const horasSinConector=ultimaApi?(Date.now()-new Date(ultimaApi).getTime())/3600000:null;
-  const conectorMudo=horasSinConector!=null&&horasSinConector>=6;
+  // v7.14 puso aquí un aviso que miraba la última venta con origen 'api'.
+  // v7.28 lo movió a <SemaforoConector/>, que vive en las dos pantallas y mira
+  // el latido del conector en vez de la venta. Dos razones para mudarlo:
+  //   - Sólo estaba en esta pantalla. El 13-sep el conector murió, el aviso se
+  //     encendió correctamente y nadie lo vio: dirección abre otras pantallas.
+  //     Diez días después preguntó por qué no subían las ventas.
+  //   - Filtraba `origen==="api"`, y el sync v7.27 escribe 'api_v2'. La alarma
+  //     se habría apagado sola el día del despliegue, sin que nadie lo notara.
   return(<div>
-    {conectorMudo&&<div className="bg-red-50 border border-red-300 rounded-xl p-4 mb-4">
-      <p className="text-sm font-bold text-red-800">⚠️ El conector de SoftRestaurant no ha subido ventas en {horasSinConector>=48?`${Math.floor(horasSinConector/24)} días`:`${Math.floor(horasSinConector)} horas`}</p>
-      <p className="text-xs text-red-700 mt-1">Última venta recibida: {new Date(ultimaApi).toLocaleString("es-MX")}. Revisa que la ventana del Conector FitTaste siga abierta en la computadora del punto de venta. Los tickets no se pierden: al reiniciarlo recupera todo lo pendiente desde el último corte.</p>
-    </div>}
+    <SemaforoConector ventas={ventas}/>
     <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
       <div><h2 className="text-lg font-bold text-gray-800">Dashboard de ventas</h2><p className="text-xs text-gray-400">{rangoTxt} · {vSel.length} tickets</p></div>
       <div className="flex gap-1 flex-wrap">{PERIODOS.map(p=><button key={p.id} onClick={()=>setPeriodo(p.id)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${periodo===p.id?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={periodo===p.id?{background:"#2D2D2D"}:{}}>{p.l}</button>)}</div>
@@ -4427,7 +4513,7 @@ function App(){
         setPedidoDetalle(pedidoDetalle.map(d=>{if(d.pedido_id===pedId&&proveedores.find(pr=>pr.id===d.proveedor_id)?.tipo_flujo==="Almacen interno"){return{...d,cantidad:cantSurtida[d.id]||0};}return d;}));
         alert("Pedido surtido con PEPS — lotes e inventario actualizados");
       }}/>}
-      {view==="dashboard"&&<DashboardView pedidos={pedidos} catalogo={catalogo} proveedores={proveedores} pedidoDetalle={pedidoDetalle} inventario={inventario} comprasDirectas={comprasDirectas} gastosOp={gastosOp}/>}
+      {view==="dashboard"&&<DashboardView pedidos={pedidos} catalogo={catalogo} proveedores={proveedores} pedidoDetalle={pedidoDetalle} inventario={inventario} comprasDirectas={comprasDirectas} gastosOp={gastosOp} ventas={ventas}/>}
       {view==="ventas_dash"&&["admin","compras","finanzas","sucursal"].includes(rol)&&<VentasDashboardView ventas={ventas} ventaDetalle={ventaDetalle} productosVenta={productosVenta} gastosOp={gastosOp}/>}
       {view==="catalogo"&&rol==="admin"&&<CatalogoView catalogo={catalogo} setCatalogo={setCatalogo} proveedores={proveedores} setProveedores={setProveedores} unidades={unidades} inventario={inventario} flujos={flujos} insumos={insumos} setInsumos={setInsumos} recetas={recetas}/>}
       {view==="recepcion"&&rol==="sucursal"&&<RecepcionView pedidos={pedidos} pedidoDetalle={pedidoDetalle} proveedores={proveedores} provEstatus={provEstatus} catalogo={catalogo} recepciones={recepciones} recepcionDetalle={recepcionDetalle} onRecibir={handleRecibir}/>}

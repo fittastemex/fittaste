@@ -1642,3 +1642,106 @@ La importación manual desde la app (`origen = 'importado_sr'`) sigue descontand
 cuenta en `index.html`. Funciona y no estorba, pero es la tercera copia que falta consolidar:
 lo natural es que también pase por el trigger, marcándola con su propio origen. No se hizo en
 v7.27 para no mezclar dos cambios de costeo en el mismo despliegue.
+
+---
+
+## 21. El conector se murió diez días y la alarma sí sonó (v7.28)
+
+**23-sep-2026.** Dirección: *"Hola veo que no ha actualizado las ventas el conector, pasó algo?"*
+
+Sí: murió el domingo 13-sep a las 15:44. Diez días, ~500 tickets, ~$140,000 de venta sin subir.
+Ninguno se perdió — `estado-sync.json` quedó parado en ese instante y el conector recupera desde
+ahí — pero durante diez días el inventario y el estado de resultados estuvieron ciegos.
+
+### 21.1 No fue el código
+
+El domingo 13 fue un servicio **completo y normal**, de hecho el mejor de los últimos cuatro
+domingos:
+
+| Domingo | Primer ticket | Último | Tickets | Venta |
+|---|---|---|---|---|
+| 23-ago | 08:59 | 16:32 | 36 | $10,314 |
+| 30-ago | 08:59 | 16:16 | 32 | $10,370 |
+| 06-sep | 08:48 | 16:33 | 34 | $10,132 |
+| **13-sep** | 08:33 | **15:44** | 32 | **$11,801** |
+
+No se atragantó con un ticket ni tronó a media comida: subió el turno entero y se apagó al
+cierre. Lo que no hizo fue volver el lunes. Es la cuarta vez (29-jul, 7-ago, 17-ago, 13-sep) y
+siempre por lo mismo: `iniciar-conector.bat` abría una ventana que alguien tenía que mantener
+abierta a mano, y nada la volvía a abrir.
+
+Ese archivo además terminaba en `pause`: si node tronaba, la ventana se quedaba en *"Presione
+una tecla para continuar"*. Se veía viva estando muerta.
+
+### 21.2 La alarma no falló — y aun así no sirvió
+
+Conviene decirlo con precisión, porque la conclusión cambia según el diagnóstico. La alarma de
+v7.14 **existía, estaba en la pantalla de aterrizaje del rol admin y estaba encendida**. Lo más
+probable es que sea justo como dirección lo notó.
+
+Lo que faltaba no era detección: era que *algo trajera al conector de vuelta*. Detectar sin
+reparar sólo convierte la falla en una molestia recurrente. Por eso el grueso de v7.28 no es la
+alarma sino `vigilante.bat` y las dos tareas programadas.
+
+### 21.3 Pero la alarma se iba a apagar sola
+
+Al revisarla apareció una bomba de tiempo:
+
+```js
+const ultimaApi=ventas.filter(v=>v.origen==="api")...
+```
+
+El sync v7.27 escribe `origen: 'api_v2'`. **El día que lo instaláramos, esa alarma se habría
+roto en silencio** — justo después de que la falta de aviso costara diez días. Un detector
+acoplado al valor exacto de un campo que estábamos a punto de cambiar.
+
+v7.28 la reemplaza por `<SemaforoConector/>`, que acepta cualquier origen que empiece con `api`
+y, sobre todo, deja de mirar la venta.
+
+### 21.4 Mirar el latido, no la venta
+
+La ambigüedad de fondo: **un conector muerto y un día flojo se ven igual desde fuera.** En los
+dos entran pocas ventas. Por eso la alarma de v7.14 necesitaba seis horas de silencio antes de
+atreverse a gritar — no podía distinguirlos.
+
+Un latido sí. `conector_latido` (una fila, upsert por ciclo) separa tres estados que antes se
+confundían en uno:
+
+| Señal | Qué significa | A dónde manda |
+|---|---|---|
+| latido fresco, `ok:true` | trabajando | a ningún lado |
+| latido fresco, `ok:false` | vivo pero atorado | SoftRestaurant o la red |
+| latido viejo (≥15 min) | el proceso no existe | a la PC de la sucursal |
+
+El ámbar contra el rojo es lo que de verdad se gana: mandan a lugares distintos. Confundirlos
+hace que alguien maneje a la sucursal para mirar una ventana que estaba perfectamente abierta.
+
+Y al viajar la `version` en el latido, se puede saber desde fuera qué código corre en la PC.
+Llevábamos un mes sin poder contestar si v7.27 había llegado; averiguarlo requería ir
+físicamente. (No había llegado: las 1,871 ventas seguían con `origen='api'`.)
+
+### 21.5 El latido de v7.14 ya existía
+
+`sync.js` guardaba `estado.ultimaCorrida` en `estado-sync.json` desde v7.14, con un comentario
+que decía exactamente para qué: *"distinguir el conector vivo sin ventas del conector muerto"*.
+La intención era correcta. El destino era un archivo en el disco de la PC de la sucursal.
+
+El conector estuvo muerto diez días con su latido escribiéndose puntualmente donde nadie iba a
+mirarlo. **Una señal de diagnóstico que no sale de la máquina que diagnostica no es una señal.**
+
+### 21.6 Respaldo mientras la PC no late
+
+El latido sólo existe desde v7.28 y la PC se actualiza cuando alguien va a la sucursal. Hasta
+entonces el semáforo cae a la última venta con la regla de seis horas. Sirve desde hoy, sin
+esperar al despliegue, y se apaga solo en cuanto llega el primer latido real.
+
+### 21.7 Pendiente
+
+El conteo del 11-sep (`CONT-20260911-01`) metió **$1,277,491** de inventario ficticio: se pesó
+en gramos y se capturó en campos que miden kilos (ENELDO 1,300 kg, SALSA WINGS GUACAMOLE
+3,800 lt, AJO MOLIDO 900 kg, HARINA 4,300 kg). Aparte, siete insumos en g/ml arrastran el
+precio del **paquete** como costo por gramo — el mismo residuo de `contenido = 1` del ISO
+PROTEIN CHOCOLATE. Se marcó como línea base, así que el estado de resultados está limpio; lo
+inflado es la valuación. Falta confirmar las cantidades reales con cocina antes de corregir, y
+falta poner la unidad **pegada al campo** de la hoja de conteo, donde hoy aparece en gris a
+tres columnas de distancia.
