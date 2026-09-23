@@ -23,6 +23,11 @@ const sql = require("mssql");
 const CONFIG = JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "utf8"));
 const STATE_FILE = path.join(__dirname, "estado-sync.json");
 
+// Versión del conector. Viaja en el latido: llevamos un mes sin poder saber
+// desde fuera si la PC tenía el sync nuevo o el viejo, y averiguarlo requería
+// ir físicamente a la sucursal.
+const VERSION = "v7.28";
+
 // Candado de instancia única: dos conectores a la vez suben datos dobles (o
 // con versiones distintas del código). Si el puerto ya está tomado, hay otro
 // conector vivo en esta PC y este se retira.
@@ -162,6 +167,49 @@ async function sbPatch(t, id, data) {
   return r.ok;
 }
 
+// ---------- Latido remoto (v7.28) ----------
+// El latido de v7.14 se guardaba en estado-sync.json: la intención era buena
+// ("distinguir el conector vivo sin ventas del conector muerto") pero el
+// archivo vive en la PC de la sucursal, donde nadie lo lee. El conector
+// estuvo muerto 10 días con su latido escribiéndose puntualmente en un disco
+// que nadie iba a mirar. Ahora late en Supabase, que sí se ve desde fuera.
+//
+// Late SIEMPRE, incluso cuando el ciclo falló, y por eso `ok` viaja aparte:
+// un latido fresco con ok=false dice "el conector vive pero algo le impide
+// trabajar" (SQL Server caído, red), que manda a un lugar muy distinto que
+// un latido viejo ("el proceso no existe, ve a la PC"). Confundir esos dos
+// casos es lo que nos costó los 10 días.
+// La sucursal se resuelve una vez y se recuerda: el latido tiene que poder
+// salir aunque el ciclo haya reventado antes de llegar a buscarla.
+let SUC_ID = null;
+async function sucursalId() {
+  if (!SUC_ID) SUC_ID = (await sbGet("sucursales", "activa=eq.true&limit=1"))[0]?.id || null;
+  return SUC_ID;
+}
+
+async function latir(datos) {
+  try {
+    const suc = await sucursalId();
+    if (!suc) return; // sin sucursal no hay a qué fila latir; no vale tumbar el ciclo
+    const r = await fetch(`${SB}/conector_latido`, {
+      method: "POST",
+      headers: { ...H, Prefer: "resolution=merge-duplicates" },
+      body: JSON.stringify({
+        sucursal_id: suc,
+        visto_en: new Date().toISOString(),
+        version: VERSION,
+        host: require("os").hostname(),
+        ...datos,
+      }),
+    });
+    if (!r.ok) console.error("  ⚠ No se pudo registrar el latido:", r.status, await r.text());
+  } catch (e) {
+    // Un latido perdido NO puede tumbar el ciclo: el trabajo real es subir
+    // ventas, y avisar de que se está trabajando vale menos que trabajar.
+    console.error("  ⚠ No se pudo registrar el latido:", e.message);
+  }
+}
+
 // ---------- Estado local (hasta dónde vamos) ----------
 function leerEstado() {
   try { return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); }
@@ -298,8 +346,7 @@ async function unCiclo(getPool, setPool) {
   // 'api_v2'. Por eso dejó de bajar recetas, catálogo e inventario: tres
   // peticiones menos por ciclo y, sobre todo, una sola copia de la lógica de
   // costeo en lugar de tres (app, conector, recosteo).
-  const sucursales = await sbGet("sucursales", "activa=eq.true&limit=1");
-  const sucId = sucursales[0]?.id || null;
+  const sucId = await sucursalId();
 
   for (const t of tickets) {
     const folio = `TKT-${t.numcheque || t.folio}`;
@@ -396,6 +443,12 @@ async function unCiclo(getPool, setPool) {
   estado.ultimaCorrida = new Date().toISOString();
   estado.ultimoResultado = { subidos, fallidos: fallidos.length, revisados: tickets.length };
   guardarEstado(estado);
+
+  // v7.28: el mismo latido, pero donde sí se ve desde fuera.
+  await latir({
+    ultimo_cierre: estado.ultimoCierre,
+    ultimo_resultado: { ok: true, subidos, fallidos: fallidos.length, revisados: tickets.length },
+  });
 }
 
 // ---------- Red de seguridad del proceso (v7.20) ----------
@@ -430,6 +483,10 @@ sql.on?.("error", (e) => gritar("Error del pool de SQL Server", e));
     } catch (e) {
       fallosSeguidos++;
       console.error(`Error en ciclo de sync (${fallosSeguidos} seguidos):`, e.message);
+      // Latir también al fallar es el punto entero del cambio: así el tablero
+      // puede decir "vivo pero atorado en SQL Server" en vez de callarse, que
+      // desde fuera se ve idéntico a estar muerto.
+      await latir({ ultimo_resultado: { ok: false, fallos_seguidos: fallosSeguidos, error: String(e.message).slice(0, 300) } });
       // Si falla ciclo tras ciclo, que se vea a simple vista desde lejos: la
       // consola vive minimizada y nadie lee líneas sueltas.
       if (fallosSeguidos >= 3) {

@@ -25,7 +25,31 @@ Programa pequeño que sube los tickets cobrados de SR a FitTaste cada 2 minutos 
    - `sqlServer`: instancia (normalmente `localhost\NATIONALSOFT`), nombre de la base (ej. `softrestaurant11`), usuario y contraseña de SQL Server. *Si no los tienes, te los da tu distribuidor de National Soft.*
    - `supabase.apiKey`: la clave anon del proyecto (la misma que usa `index.html`).
 5. Prueba manual: `node sync.js` — debe listar los tickets del día y subirlos.
-6. Déjalo corriendo siempre: `node sync.js --daemon`, y prográmalo para arrancar con Windows usando el **Programador de tareas** (acción: `node C:\fittaste\conector-sr\sync.js --daemon`, desencadenador: al iniciar sesión).
+6. Clic derecho en **`instalar-arranque-automatico.bat`** → *Ejecutar como administrador*. Una sola vez. Deja el conector arrancando solo y lo mantiene vivo.
+
+## Que no se vuelva a morir (v7.28)
+
+El conector se murió cuatro veces: 29-jul, 7-ago, 17-ago y 13-sep. **Ninguna fue culpa del código.** Vivía en una ventana negra que alguien abría a mano; se apagaba la PC un domingo y nadie la volvía a abrir. La última vez tardamos diez días en notarlo: ~500 tickets y ~$140,000 de venta.
+
+`instalar-arranque-automatico.bat` cubre las tres formas en que se ha muerto:
+
+| Qué pasa | Qué lo levanta | En cuánto |
+|---|---|---|
+| node truena | el bucle de `vigilante.bat` | 30 segundos |
+| reinician la PC | tarea *Conector FitTaste*, al iniciar sesión | al arrancar |
+| cierran la ventana | tarea *Conector FitTaste revisión*, cada 15 min | ≤ 15 minutos |
+
+Ya no se usa `iniciar-conector.bat`: terminaba en `pause`, así que cuando node tronaba la ventana se quedaba en *"Presione una tecla para continuar"* — se veía viva estando muerta.
+
+**Y además avisa.** Cada ciclo el conector escribe su latido en la tabla `conector_latido`, y el semáforo del Dashboard de ventas lo pinta:
+
+- 🟢 **verde** — visto hace menos de 15 min, trabajando.
+- 🟠 **ámbar** — está vivo pero algo le impide trabajar (SQL Server caído, red). **No vayas a la PC**: el problema está en SoftRestaurant o en la red.
+- 🔴 **rojo** — lleva ≥ 15 min sin dar señal. El proceso no existe: hay que ir a la PC.
+
+Esa distinción entre ámbar y rojo es el punto: mandan a lugares distintos.
+
+Si algo falla, el registro está en `conector.log` (junto a `sync.js`; se corta solo a los 5 MB).
 
 ## Si algo no coincide con tu versión de SR
 
