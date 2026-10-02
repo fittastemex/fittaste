@@ -1,0 +1,39 @@
+-- v7.29 — `capturado_por` admite 'sucursal' y 'direccion'
+--
+-- ============================================================
+-- POR QUÉ
+-- ============================================================
+-- Hallado el 01-oct-2026 mientras se capturaban recepciones atrasadas: el
+-- CHECK de `pedido_detalle.capturado_por` sólo admitía 'proveedor', 'compras'
+-- y 'sistema', pero `handleRecibir` en index.html escribe:
+--
+--   if(cu>0){upd.costo_real=cu;upd.capturado_por="sucursal";...}
+--   await sbPatch("pedido_detalle",item.pedido_detalle_id,upd);
+--
+-- Es decir: CADA vez que alguien recibía y capturaba el precio unitario, ese
+-- PATCH violaba el constraint y fallaba. `sbPatch` devuelve r.ok y nadie lo
+-- revisa, así que fallaba EN SILENCIO.
+--
+-- El efecto no era obvio, y por eso duró: el costo capturado sí llegaba al
+-- inventario, porque `entradaSucursalDB` lo recibe por memoria en la misma
+-- llamada. Lo que nunca quedaba era el registro en el pedido — `costo_real`
+-- se quedaba vacío o en 0. Así que el inventario quedaba bien y el histórico
+-- de compras quedaba ciego: imposible comparar precio de referencia contra
+-- precio de factura, que es justo para lo que se pidió la función en v7.23
+-- ("si necesito que cuando reciban pongan el precio unitario para que se
+-- reciba con un costo").
+--
+-- ============================================================
+-- CÓMO
+-- ============================================================
+-- Se extiende el constraint en lugar de cambiar el código a 'sistema'. La
+-- sucursal ES quien captura ese precio, y esa procedencia vale: distingue el
+-- precio que vio quien recibió la mercancía del que puso compras desde la
+-- oficina. Cambiar el código a 'sistema' habría hecho pasar la escritura
+-- borrando el dato de quién fue.
+--
+-- 'direccion' se agrega por la captura retroactiva del 01-oct-2026, para que
+-- esas líneas no se confundan con una captura normal de sucursal.
+ALTER TABLE public.pedido_detalle DROP CONSTRAINT IF EXISTS pedido_detalle_capturado_por_check;
+ALTER TABLE public.pedido_detalle ADD CONSTRAINT pedido_detalle_capturado_por_check
+  CHECK (capturado_por::text = ANY (ARRAY['proveedor','compras','sistema','sucursal','direccion']::text[]));

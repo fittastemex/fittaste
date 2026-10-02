@@ -1745,3 +1745,100 @@ PROTEIN CHOCOLATE. Se marcó como línea base, así que el estado de resultados 
 inflado es la valuación. Falta confirmar las cantidades reales con cocina antes de corregir, y
 falta poner la unidad **pegada al campo** de la hoja de conteo, donde hoy aparece en gris a
 tres columnas de distancia.
+
+---
+
+## 22. Las recepciones atrasadas y el costo que nunca se guardaba (v7.29)
+
+**01-oct-2026.** Dirección: *"ayúdame a recibir completos esos pedidos, no quiero tener
+recepciones pendientes ahorita… siempre y cuando no se haya pedido ayer, porque eso realmente
+no se ha entregado."*
+
+### 22.1 El hallazgo que lo motivó
+
+Al revisar el primer mes de pesajes apareció que **el inventario no podía cuadrar**: en 19 días
+el consumo por recetas fue $78,901 contra $50,048 de compras capturadas. La diferencia, $28,853,
+era casi idéntica al valor del inventario negativo (−$25,255). No era coincidencia: el faltante
+de compras *era* el negativo.
+
+La causa no fue la que supuse primero. Escribí que "todo lo fresco nunca entra" y dirección lo
+corrigió: queso panela, claras, res y arrachera sí se compran y sí se recibieron durante meses.
+El dato real es otro, y tiene fecha:
+
+| Mes | Líneas de Botello | Recibidas | % |
+|---|---|---|---|
+| abr–jun | 833 | 0 | 0% |
+| jul | 281 | 60 | 21% |
+| **ago** | **273** | **229** | **84%** |
+| **sep** | **221** | **25** | **11%** |
+
+**Agosto funcionó.** El proceso existe y se podía. Se rompió el **31-ago** y, salvo un día
+(7-sep), no se retomó. El sistema nunca falló: se dejó de usar.
+
+### 22.2 Qué se capturó
+
+Siete pedidos, del 31-ago al 25-sep. Los del 29 y 30-sep se dejaron pendientes a petición de
+dirección porque la mercancía todavía no llegaba — recibir lo que no ha llegado habría sido
+exactamente el inventario ficticio que v7.24 vino a evitar.
+
+| | Líneas | Monto |
+|---|---|---|
+| A inventario | 182 | $38,012 |
+| A gastos operativos | 27 | $2,826 |
+| Sin cantidad (pedidas en 0) | 2 | — |
+
+Se replicó `handleRecibir` exactamente: cantidad en unidad base (`cantidad × contenido`), costo
+por unidad base (`costo_pres / contenido`), los insumos `tipo_control = 'gasto'` a
+`gastos_operativos` y no al inventario, y el promedio ponderado con su guarda —
+`existencia > 0 AND costo_promedio > 0` o manda el costo entrante. Esa guarda importaba más que
+de costumbre: 53 insumos recibieron entrada y muchos venían en negativo, donde ponderar habría
+dado un costo sin sentido.
+
+Los movimientos se fecharon con la fecha del pedido, no con la de captura, para que la compra
+caiga en el mes en que de verdad ocurrió.
+
+Resultado: negativos de **64 a 31**, valor del negativo de **−$25,255 a −$12,849**.
+
+Los 31 que quedan se parten en dos: los que **nunca han entrado** (hielo, tortillas de nopal,
+agua — el hueco de los 22 insumos que no existen en ningún pedido) y los que **se reciben pero
+no alcanzan**, que es el residuo normal que resuelve un conteo físico.
+
+### 22.3 El bug que apareció de paso
+
+Al escribir `capturado_por = 'direccion'` el constraint lo rechazó. Sólo admitía 'proveedor',
+'compras' y 'sistema'. Pero `handleRecibir` escribe:
+
+```js
+if(cu>0){upd.costo_real=cu;upd.capturado_por="sucursal";upd.fecha_captura=...}
+await sbPatch("pedido_detalle",item.pedido_detalle_id,upd);
+```
+
+**Cada recepción con precio capturado violaba el constraint y fallaba.** `sbPatch` devuelve
+`r.ok` y nadie lo revisa: fallaba en silencio, desde v7.23.
+
+Duró porque el síntoma no se veía donde se buscaba. El costo capturado SÍ llegaba al inventario
+—`entradaSucursalDB` lo recibe por memoria en la misma llamada— así que el valor del inventario
+quedaba bien. Lo que nunca quedaba era el registro en el pedido: `costo_real` vacío o en 0. El
+histórico de compras quedaba ciego justo para lo que se pidió la función: comparar precio de
+referencia contra precio de factura.
+
+Se extendió el constraint en lugar de cambiar el código a 'sistema'. La sucursal **es** quien
+captura ese precio, y esa procedencia distingue el precio que vio quien recibió la mercancía del
+que puso compras desde la oficina; mandar 'sistema' habría hecho pasar la escritura borrando el
+dato de quién fue.
+
+### 22.4 Lo que esto deja dicho
+
+Dos veces en este mismo trabajo di por falta de sistema lo que era falta de uso, y las dos veces
+el dato me corrigió: la alarma del conector **sí** estaba encendida (§21.2), y las compras de
+fresco **sí** se capturaban, hasta el 31-ago. Antes de concluir que algo no existe conviene
+buscar el mes en que sí funcionó: si lo hay, el problema es de operación, y el arreglo es
+distinto.
+
+### 22.5 Pendiente
+
+- Los 5 pedidos del 29 y 30-sep ($23,422), cuando llegue la mercancía.
+- Los **22 insumos que no existen en ningún pedido** ($11,247/mes). Hielo, tortillas de nopal y
+  agua son $8,442 de eso. Mientras no entren por algún lado, el inventario no puede cuadrar.
+- Los 7 tamaños de paquete con `contenido = 1` ($266,692 inflados).
+- v7.28 sigue sin instalarse en la PC: 0 latidos, 0 ventas `api_v2`.
