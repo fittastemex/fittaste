@@ -1772,8 +1772,39 @@ El dato real es otro, y tiene fecha:
 | **ago** | **273** | **229** | **84%** |
 | **sep** | **221** | **25** | **11%** |
 
-**Agosto funcionó.** El proceso existe y se podía. Se rompió el **31-ago** y, salvo un día
-(7-sep), no se retomó. El sistema nunca falló: se dejó de usar.
+**Agosto funcionó.** Pero la primera lectura de ese cuadro —"se dejó de usar"— era falsa, y
+dirección la corrigió en el acto: *"¿entonces realmente sí capturaron la recepción y fue error
+nuestro?"*. Al verificarlo:
+
+| Mes | Recepciones capturadas por sucursal | Sin llegar a inventario |
+|---|---|---|
+| abr–jun | 108 | 108 |
+| jul | 53 | 49 |
+| **ago** | **42** | **0** |
+| **sep** | **35** | **1** |
+
+Desde agosto, **77 de 78 recepciones capturadas movieron inventario**. El sistema no se tragó
+nada. (Las de abril a junio son reales pero nacieron antes de v7.2, cuando la entrada automática
+al inventario no existía.)
+
+Y sucursal recibió **todos los pedidos, de todos los proveedores**, cada vez. Lo que nunca se
+abrió fue **una pestaña**:
+
+| Pedido | Botello | Walmart | Meli | Pollo | Almacén | Office Max |
+|---|---|---|---|---|---|---|
+| 31-ago | **nunca** | ✓ | ✓ | ✓ | | |
+| 04-sep | **nunca** | ✓ | ✓ | ✓ | ✓ | |
+| 07-sep | ✓ | ✓ | ✓ | ✓ | | ✓ |
+| 11-sep | **nunca** | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 17-sep | **nunca** | ✓ | ✓ | ✓ | ✓ | |
+| 21-sep | **nunca** | ✓ | ✓ | ✓ | | |
+| 25-sep | **nunca** | ✓ | ✓ | ✓ | ✓ | |
+
+Un solo proveedor —el de más líneas, 24 a 42 por pedido, y el que trae lo fresco— y Yerina una
+vez. Quien recibe estaba haciendo el trabajo completo.
+
+La pregunta útil no es "¿por qué dejaron de recibir?" sino **"¿por qué esa pestaña?"**. Esa la
+contesta la operación, no la base de datos.
 
 ### 22.2 Qué se capturó
 
@@ -1829,11 +1860,18 @@ dato de quién fue.
 
 ### 22.4 Lo que esto deja dicho
 
-Dos veces en este mismo trabajo di por falta de sistema lo que era falta de uso, y las dos veces
-el dato me corrigió: la alarma del conector **sí** estaba encendida (§21.2), y las compras de
-fresco **sí** se capturaban, hasta el 31-ago. Antes de concluir que algo no existe conviene
-buscar el mes en que sí funcionó: si lo hay, el problema es de operación, y el arreglo es
-distinto.
+Tres veces en este trabajo afirmé un fallo más grande del que había, y las tres veces el dato
+me corrigió: la alarma del conector **sí** estaba encendida (§21.2); las compras de fresco **sí**
+se capturaban; y las recepciones **sí** se hacían —todas, de todos los proveedores menos uno.
+
+El patrón de mi error es el mismo las tres veces: medí una parte y describí el todo. Conté las
+líneas de Botello y escribí "el proceso se dejó de hacer", sin mirar las otras cinco pestañas que
+habrían desmentido la frase en la misma consulta. Decir "se dejó de usar" es además una acusación
+sobre personas, y eso pide más evidencia que una cifra agregada, no menos.
+
+La regla que queda: antes de concluir que algo no se hace, buscar dónde **sí** se hizo. Si existe
+un mes, un proveedor o un día que funcionó, el problema no es el sistema ni la disciplina general
+— es algo mucho más específico, y el arreglo también.
 
 ### 22.5 Pendiente
 
