@@ -2022,3 +2022,100 @@ La guarda atrapa el error de magnitud. No atrapa dos cosas que mañana siguen pr
 Las 15 verificaciones usan los números reales del 11-sep: 1,300 kg de eneldo sobre 1.3, y 3,800
 lt de salsa sobre 3.8. Incluyen que un faltante normal **no** dispare nada, que cancelar no
 escriba un solo movimiento, y que al corregir las cantidades el conteo sí cierre.
+
+---
+
+## 25. La app tardaba un minuto en abrir (v7.31)
+
+**03-oct-2026.** Cocina, por dirección: *"la app tarda mucho en cargar, no es responsiva para
+móvil, se amontonan los iconos"*. Y una petición: que compras directas busque escribiendo, como
+el inventario.
+
+### 25.1 La carga: 135 peticiones en fila
+
+El arranque bajaba 27 tablas **una tras otra** (`for ... await`) y **sin filtro de fecha**, con
+`sbGet` paginando de 1000 en 1000:
+
+| Tabla | Filas | Peticiones encadenadas |
+|---|---|---|
+| `movimientos_sucursal` | 104,028 | **105** |
+| `venta_detalle` | 22,470 | 23 |
+| `ventas` | 4,613 | 5 |
+
+En un celular con wifi de restaurante eso es casi un minuto — y empeoraba **una petición por día
+para siempre**, porque cada línea de cada ticket escribe un movimiento.
+
+El dato que resuelve el problema: **`salida_venta` es el 99% del kárdex** (102,890 de 104,028).
+Todo lo demás —recepciones, ajustes, mermas, producciones— son ~1,100 filas juntas.
+
+Y nadie necesitaba esas 102,890 filas una por una en el navegador. El estado de resultados sólo
+las quería para sumar el COGS del mes. Eso ahora lo hace la base:
+
+```sql
+CREATE VIEW public.v_cogs_mensual AS
+SELECT to_char(fecha,'YYYY-MM') AS mes, sucursal_id,
+       SUM(cantidad*COALESCE(costo_unitario,0)) AS cogs, COUNT(*) AS movimientos
+  FROM public.movimientos_sucursal WHERE tipo='salida_venta' GROUP BY 1,2;
+```
+
+**Cuatro filas en lugar de 102,890.** Del kárdex se bajan los movimientos que no son venta, más
+las últimas 300 ventas para la pantalla de movimientos recientes. Ventas y su detalle se acotan a
+90 días, que cubre de sobra el periodo más viejo que ofrece el dashboard ("mes pasado"). Y todo
+sale en paralelo con `Promise.all`.
+
+De ~135 peticiones en serie a ~20 en paralelo.
+
+Un detalle que casi se escapa: escribir `["ventas", await sbGet(...)]` dentro del arreglo evalúa
+el `await` **mientras se arma el arreglo** — es decir, en serie — y `Promise.all` recibe valores
+ya resueltos. Hay que pasar funciones async invocadas para que las promesas estén en vuelo.
+
+Los permisos de la vista se verificaron con `SET LOCAL ROLE anon` antes de darla por buena, junto
+con los tres filtros nuevos. Es la lección de v7.20, que costó 44 horas de ventas.
+
+### 25.2 El menú en celular
+
+Los 5 grupos vivían en una fila `flex-wrap` junto al logo. A 390px eso se apila en tres renglones
+de botones diminutos sobre fondo oscuro — "se amontonan los iconos", literal.
+
+Ahora en celular hay un solo botón que abre un panel a todo lo ancho con los grupos y sus
+pantallas, con área de toque cómoda. De `md` en adelante no cambia nada.
+
+### 25.3 Iconos
+
+Dos problemas distintos, y el segundo lo señaló dirección después de ver el primero resuelto.
+
+**Uno**: los emoji los dibuja el sistema operativo. Cambian de tamaño, color y estilo entre
+Android, iPhone y Windows, y sobre el menú oscuro algunos se ven como calcomanías pegadas. Se
+reemplazaron los 17 emoji a color del sistema (📈 🛒 📦 💰 🗂 🔍 🔒 📋 🖨) por trazos SVG que heredan
+`currentColor`. Quedan sólo glifos tipográficos (✓ ✕ ⚠ ★ →), que son texto y se ven igual en todos
+lados — ésos ya eran la opción minimalista.
+
+**Dos**: la primera versión de esos iconos usaba trazo de 1.75px con puntas **redondeadas**, que
+es el estilo por omisión de las librerías populares y, por lo mismo, el que sale de cualquier
+generador. Dirección lo notó: *"que sean más minimalistas y no como iconos de IA"*. Tenía razón.
+
+La versión final usa trazo de 1.4px, puntas **cuadradas** y esquinas en inglete, y quita el
+detalle ilustrativo: el carrito se volvió una bolsa sin ruedas, la caja isométrica se volvió un
+rectángulo con un entrepaño, la carpeta se volvió un índice de tres líneas. Lee como plano
+técnico en vez de set de aplicación.
+
+Vale decir qué NO se verificó: el entorno de esta sesión no alcanza el CDN de Tailwind, así que
+el render real no se pudo mirar desde aquí. Las pruebas cubren el árbol del DOM y las clases;
+el aspecto se revisó en el navegador.
+
+### 25.4 Compras directas
+
+Eran 269 artículos en una lista desplegable; encontrar uno exigía recorrerla entera. Ahora usa el
+mismo `BuscadorIngrediente` del inventario y del recetario: ignora acentos y mayúsculas, prioriza
+los que EMPIEZAN con lo tecleado, y al elegir trae el costo de referencia.
+
+### 25.5 Qué cubre la prueba y qué no
+
+Las 19 verificaciones miran el **contrato de red** —que el kárdex nunca se pida entero, que ventas
+y detalle lleven ventana, que el COGS venga agregado, que las peticiones salgan en ráfaga— porque
+ahí es donde una regresión sería invisible: quitar un filtro no rompe nada visible, sólo vuelve a
+hacer la app lenta, y meses después.
+
+Lo que **no** cubre: el aspecto. El simulador deja Tailwind en blanco, así que medir alturas de
+toque o desbordes ahí daría lo mismo con el encabezado viejo. Se verifica el árbol (qué existe en
+el DOM y cuándo) y las clases del punto de quiebre; el render se revisa en un navegador de verdad.

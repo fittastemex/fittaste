@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.30";
+const V="7.31";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -224,43 +224,77 @@ const fmtCant=(n,u)=>`${Number(n).toLocaleString("es-MX",{maximumFractionDigits:
 // encuentra "JITOMATE" y "platano" encuentra "PLÁTANO".
 const nrmB=(x)=>String(x==null?"":x).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
 
-// v7.30 \u2014 Guarda del contenido de una presentaci\u00f3n.
+// v7.31 — Iconos de trazo en lugar de emoji.
+//
+// Dos problemas distintos. Uno: los emoji los dibuja el sistema operativo, así
+// que cambian de tamaño, color y estilo entre Android, iPhone y Windows, y
+// sobre el menú oscuro algunos se ven como calcomanías pegadas.
+//
+// Dos, el que señaló dirección: la primera versión de estos iconos usaba trazo
+// de 1.75px con puntas REDONDEADAS, que es el estilo por omisión de las
+// librerías populares y, por lo mismo, el que sale de cualquier generador. Se
+// veía genérico. Esta versión usa trazo delgado, puntas CUADRADAS y esquinas en
+// inglete, sin detalles ilustrativos: nada de ruedas en el carrito ni caras en
+// perspectiva en la caja. Lee como plano técnico, no como set de aplicación.
+const ICONOS={
+  ventas:   "M3 17l6-6 4 4 8-8",                              // línea que sube, sin punta de flecha
+  compras:  "M5 8h14l-1.2 12H6.2L5 8M9 8V6.4a3 3 0 016 0V8",  // bolsa
+  almacen:  "M4 6h16v14H4zM4 11h16",                          // caja con un entrepaño
+  finanzas: "M12 3v18M16 7H10a3 3 0 000 6h4a3 3 0 010 6H8",   // signo de pesos
+  catalogo: "M4 6h16M4 11h16M4 16h10",                        // índice
+  buscar:   "M10.5 17a6.5 6.5 0 100-13 6.5 6.5 0 000 13M19 19l-3.9-3.9",
+  candado:  "M6 11h12v9H6zM9 11V8a3 3 0 016 0v3",
+  kardex:   "M5 4h14v16H5zM8 9h8M8 13h8M8 17h5",
+  imprimir: "M7 9V4h10v5M7 18H5v-6h14v6h-2M8 15h8v5H8z",
+  alerta:   "M12 4l9 16H3zM12 10v3.5M12 17h.01",
+  menu:     "M4 7h16M4 12h16M4 17h16",
+  cerrar:   "M6 6l12 12M18 6L6 18",
+};
+const Icono=({n,size=16,className=""})=>(
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="1.4" strokeLinecap="square" strokeLinejoin="miter"
+       className={`inline-block shrink-0 ${className}`} aria-hidden="true">
+    <path d={ICONOS[n]||""}/>
+  </svg>
+);
+
+// v7.30 — Guarda del contenido de una presentación.
 //
 // Tres veces el mismo error en dos meses: ISO PROTEIN CHOCOLATE valuado en
 // $1,300,398 (ago), las unidades del conteo del 11-sep, y siete presentaciones
 // con `contenido = 1` que inflaron el inventario $260,000 (oct). Siempre la
-// misma confusi\u00f3n: el PAQUETE y la UNIDAD BASE se miden distinto, y `contenido`
+// misma confusión: el PAQUETE y la UNIDAD BASE se miden distinto, y `contenido`
 // es justo el puente entre los dos.
 //
-// De d\u00f3nde salen: `saveNew` crea el insumo con unidad_base = unidad de compra y
-// contenido = 1, lo cual es correcto (1 kg por kg). El da\u00f1o ocurre despu\u00e9s, al
-// re-apuntar esa presentaci\u00f3n a un insumo que se mide en GRAMOS \u2014 el contenido
-// se queda en 1 y el sistema cree que el paquete trae un gramo. De ah\u00ed or\u00e9gano
+// De dónde salen: `saveNew` crea el insumo con unidad_base = unidad de compra y
+// contenido = 1, lo cual es correcto (1 kg por kg). El daño ocurre después, al
+// re-apuntar esa presentación a un insumo que se mide en GRAMOS — el contenido
+// se queda en 1 y el sistema cree que el paquete trae un gramo. De ahí orégano
 // a $85 el gramo.
 //
 // No bloquea: devuelve el aviso y quien guarda decide. Un contenido raro puede
-// ser leg\u00edtimo (una pieza que pesa 1 g), y una guarda que impide guardar se
+// ser legítimo (una pieza que pesa 1 g), y una guarda que impide guardar se
 // vuelve un estorbo que la gente aprende a esquivar.
 const UNIDADES_CHICAS={g:1,ml:1};
 const UNIDADES_GRANDES={kg:1000,lt:1000,l:1000};
 function avisoContenido(unidadBase,unidadCompra,contenido,precio){
   const cont=parseFloat(contenido),pre=parseFloat(precio)||0;
   const ub=String(unidadBase||"").toLowerCase(),uc=String(unidadCompra||"").toLowerCase();
-  if(!(cont>0))return null; // el "debe ser mayor a 0" ya lo cubre su propia validaci\u00f3n
-  if(!UNIDADES_CHICAS[ub])return null; // s\u00f3lo aplica a insumos medidos en g/ml
+  if(!(cont>0))return null; // el "debe ser mayor a 0" ya lo cubre su propia validación
+  if(!UNIDADES_CHICAS[ub])return null; // sólo aplica a insumos medidos en g/ml
 
   // Caso 1: se compra en kg/lt y se mide en g/ml. El contenido TIENE que traer
   // el factor 1000; cualquier cosa por debajo de 100 es el factor olvidado.
   if(UNIDADES_GRANDES[uc]&&cont<100){
-    return `Se compra en ${uc} pero el insumo se mide en ${ub}. \u00bfEl contenido no deber\u00eda ser `
-         +`${cont*UNIDADES_GRANDES[uc]} ${ub}? Tal como est\u00e1, ${cont} ${uc} = ${cont} ${ub}.`;
+    return `Se compra en ${uc} pero el insumo se mide en ${ub}. ¿El contenido no debería ser `
+         +`${cont*UNIDADES_GRANDES[uc]} ${ub}? Tal como está, ${cont} ${uc} = ${cont} ${ub}.`;
   }
   // Caso 2: el costo por unidad base queda absurdo. $5 por gramo son $5,000 el
-  // kilo \u2014 no hay insumo de cocina ah\u00ed. Es la se\u00f1al que delat\u00f3 a los siete.
+  // kilo — no hay insumo de cocina ahí. Es la señal que delató a los siete.
   const porUnidad=pre/cont;
   if(pre>0&&porUnidad>5){
-    return `Cada ${ub} costar\u00eda ${fmt(porUnidad)} (${fmt(porUnidad*1000)} por ${ub==="g"?"kg":"lt"}). `
-         +`Si el paquete de ${fmt(pre)} trae m\u00e1s de ${cont} ${ub}, corrige el contenido.`;
+    return `Cada ${ub} costaría ${fmt(porUnidad)} (${fmt(porUnidad*1000)} por ${ub==="g"?"kg":"lt"}). `
+         +`Si el paquete de ${fmt(pre)} trae más de ${cont} ${ub}, corrige el contenido.`;
   }
   return null;
 }
@@ -731,7 +765,7 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
     if(totalLote>200000)
       avisos.push(`El lote completo suma ${fmt(totalLote)}.`);
     if(avisos.length>0){
-      const ok=confirm(`⚠️ Revisa el costo antes de guardar\n\n${avisos.join("\n\n")}\n\nRecuerda: el campo es el costo POR ${(prodL?.unidad_clave||"unidad").toUpperCase()}, no el total de la factura.\nSi la factura fue de ${fmt(nLote.costo_unitario)} por ${fmtQ(nLote.cantidad,prodL?.unidad_clave||"")}, el costo unitario sería ${fmt(nLote.costo_unitario/nLote.cantidad)}.\n\n¿Guardar de todas formas?`);
+      const ok=confirm(`⚠ Revisa el costo antes de guardar\n\n${avisos.join("\n\n")}\n\nRecuerda: el campo es el costo POR ${(prodL?.unidad_clave||"unidad").toUpperCase()}, no el total de la factura.\nSi la factura fue de ${fmt(nLote.costo_unitario)} por ${fmtQ(nLote.cantidad,prodL?.unidad_clave||"")}, el costo unitario sería ${fmt(nLote.costo_unitario/nLote.cantidad)}.\n\n¿Guardar de todas formas?`);
       if(!ok)return;
     }
     setSavingLote(true);
@@ -835,7 +869,7 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
     {tab==="inventario"&&<div>
       {isAdmin&&<div className="mb-3 flex justify-end">{addingInv?<div className="bg-white border-2 border-teal-300 rounded-xl p-3 w-full"><h3 className="text-sm font-bold text-teal-800 mb-2">Agregar producto al almacén</h3><div className="flex gap-2 items-end flex-wrap"><div><label className="text-xs text-gray-500 block mb-1">SKU <span className="text-teal-600">(auto)</span></label><input className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm w-28 bg-gray-50 text-gray-600" value={newInv.sku} readOnly/></div><div className="flex-1"><label className="text-xs text-gray-500 block mb-1">Descripción</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="NOMBRE DEL PRODUCTO" value={newInv.descripcion} onChange={e=>setNewInv({...newInv,descripcion:e.target.value})}/></div><div><label className="text-xs text-gray-500 block mb-1">Unidad</label><select className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newInv.unidad_clave} onChange={e=>setNewInv({...newInv,unidad_clave:e.target.value})}><option value="kg">kg</option><option value="pz">pz</option><option value="lt">lt</option><option value="paq">paq</option></select></div><Btn onClick={handleAddInv} disabled={savingInv} color="purple">{savingInv?"Guardando...":"Agregar"}</Btn><button onClick={()=>setAddingInv(false)} className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1.5">Cancelar</button></div></div>:<Btn onClick={()=>{setNewInv({sku:genInvSku(),descripcion:"",unidad_clave:"kg"});setAddingInv(true);}} color="purple">+ Agregar producto</Btn>}</div>}
       {(()=>{const nOcultos=inventario.filter(p=>p.activo===false).length;return isAdmin&&nOcultos>0?<div className="mb-2 flex justify-end"><label className="text-xs text-gray-500 flex items-center gap-1.5 cursor-pointer select-none"><input type="checkbox" checked={verOcultos} onChange={e=>setVerOcultos(e.target.checked)}/> Ver ocultos ({nOcultos})</label></div>:null;})()}
-      <div className="mb-3 relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">🔍</span>
+      <div className="mb-3 relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none"><Icono n="buscar" size={14}/></span>
         <input className="w-full border border-gray-200 rounded-xl pl-9 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-teal-400 focus:outline-none" placeholder="Buscar producto por nombre o SKU..." value={busqAlm} onChange={e=>setBusqAlm(e.target.value)}/>
         {busqAlm&&<button onClick={()=>setBusqAlm("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-sm" title="Limpiar">✕</button>}
       </div>
@@ -899,7 +933,7 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
           <td className="px-3 py-2 text-right"><span className={`text-xs font-medium ${prodLotes.length>0?"text-teal-600":"text-gray-400"}`}>{prodLotes.length}</span></td>
           <td className="px-3 py-2">{p.existencia===0?<Badge v="danger">Agotado</Badge>:low?<Badge v="warning">Bajo</Badge>:<Badge v="success">OK</Badge>}</td>
           <td className="px-3 py-2 text-right whitespace-nowrap">
-            <button onClick={()=>abrirKardex(p)} className="text-xs text-teal-600 hover:text-teal-800 hover:bg-teal-50 px-2 py-1 rounded font-medium" title="Ver kardex (entradas y salidas)">📋 Kardex</button>
+            <button onClick={()=>abrirKardex(p)} className="text-xs text-teal-600 hover:text-teal-800 hover:bg-teal-50 px-2 py-1 rounded font-medium" title="Ver kardex (entradas y salidas)"><Icono n="kardex" size={13}/> Kardex</button>
             {isAdmin&&misVariantes.length===0&&<button onClick={()=>setAgrupando(p)} className="text-xs text-sky-600 hover:text-sky-800 hover:bg-sky-50 px-2 py-1 rounded ml-1" title={esVariante?"Cambiar o quitar la agrupación":"Agrupar como variante de otro SKU (se surten juntos)"}>{esVariante?"⇄ Agrupación":"⇄ Agrupar"}</button>}
             {isAdmin&&(oculto
               ?<button onClick={()=>handleRestoreInv(p.id)} className="text-xs text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 px-2 py-1 rounded ml-1" title="Restaurar producto">↩ Restaurar</button>
@@ -975,7 +1009,7 @@ function AlmacenView({inventario,setInventario,movimientos,setMovimientos,pedido
       </div>}
       {/* Pedidos ya surtidos — con botón imprimir */}
       {pedidosSurtidos.length>0&&<div className="rounded-xl p-4 border border-emerald-200 bg-emerald-50 mt-4"><h3 className="text-sm font-bold text-emerald-800 mb-3">Pedidos surtidos</h3>
-        {pedidosSurtidos.map((p,i)=>{const items=pedidoDetalle.filter(d=>d.pedido_id===p.id&&proveedores.find(pr=>pr.id===d.proveedor_id)?.tipo_flujo==="Almacen interno");return(<div key={i} className="bg-white rounded-xl p-3 mb-2 border border-emerald-200 flex justify-between items-center"><div><span className="font-bold text-gray-900">Pedido {p.numero_pedido||"#"+p.id}</span><span className="text-xs text-gray-500 ml-2">{new Date(p.fecha||p.created_at).toLocaleDateString("es-MX")}</span><span className="text-xs text-emerald-600 ml-2">{items.length} artículos</span></div><button onClick={()=>handlePrint(p.id)} className="text-sm font-medium bg-white border border-emerald-300 text-emerald-700 hover:bg-emerald-100 px-3 py-1.5 rounded-lg">🖨 Imprimir</button></div>);})}
+        {pedidosSurtidos.map((p,i)=>{const items=pedidoDetalle.filter(d=>d.pedido_id===p.id&&proveedores.find(pr=>pr.id===d.proveedor_id)?.tipo_flujo==="Almacen interno");return(<div key={i} className="bg-white rounded-xl p-3 mb-2 border border-emerald-200 flex justify-between items-center"><div><span className="font-bold text-gray-900">Pedido {p.numero_pedido||"#"+p.id}</span><span className="text-xs text-gray-500 ml-2">{new Date(p.fecha||p.created_at).toLocaleDateString("es-MX")}</span><span className="text-xs text-emerald-600 ml-2">{items.length} artículos</span></div><button onClick={()=>handlePrint(p.id)} className="text-sm font-medium bg-white border border-emerald-300 text-emerald-700 hover:bg-emerald-100 px-3 py-1.5 rounded-lg"><Icono n="imprimir" size={13}/> Imprimir</button></div>);})}
       </div>}
     </div>}
 
@@ -1675,7 +1709,7 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
     {/* ===== PRODUCTOS TAB ===== */}
     {catTab==="productos"&&<div>
     <div className="flex gap-2 mb-4">
-      <div className="relative flex-1"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">🔍</span><input className="w-full border border-gray-200 rounded-xl pl-9 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-amber-400" placeholder="Buscar presentación por nombre, SKU, tipo, insumo o proveedor..." value={filter} onChange={e=>setFilter(e.target.value)}/></div>
+      <div className="relative flex-1"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none"><Icono n="buscar" size={14}/></span><input className="w-full border border-gray-200 rounded-xl pl-9 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-amber-400" placeholder="Buscar presentación por nombre, SKU, tipo, insumo o proveedor..." value={filter} onChange={e=>setFilter(e.target.value)}/></div>
       <select className="border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-white" value={filterProv} onChange={e=>setFilterProv(e.target.value)}>
         <option value="">Todos los proveedores</option>
         {proveedores.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
@@ -1756,7 +1790,7 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
         sinuso:insumos.filter(sinUso).length};
       const chipI=(id,l,col)=>(<button key={id} onClick={()=>setFiltroIns(id)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${filtroIns===id?"text-white border-transparent":"bg-white border-gray-200 text-gray-600 hover:text-gray-800"}`} style={filtroIns===id?{background:col}:{}}>{l} ({cuenta[id]})</button>);
       return(<div className="flex flex-col md:flex-row md:items-center gap-2 mb-4">
-      <div className="relative flex-1"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">🔍</span><input className="w-full border border-gray-200 rounded-xl pl-9 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-teal-400" placeholder="Buscar insumo por nombre o unidad..." value={filterIns} onChange={e=>setFilterIns(e.target.value)}/></div>
+      <div className="relative flex-1"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none"><Icono n="buscar" size={14}/></span><input className="w-full border border-gray-200 rounded-xl pl-9 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-teal-400" placeholder="Buscar insumo por nombre o unidad..." value={filterIns} onChange={e=>setFilterIns(e.target.value)}/></div>
       <div className="flex gap-1 flex-wrap">{chipI("todos","Todos","#2D2D2D")}{chipI("inventariable","De compra","#0e918b")}{chipI("preparacion","Preparaciones","#7c5cbf")}{chipI("gasto","Gasto directo","#9ca3af")}{chipI("sinpres","⚠ Sin presentación","#bb4430")}{chipI("sinuso","Sin uso en recetas","#d6816c")}</div>
       </div>);})()}
     {(()=>{const insFiltrados=insumos.filter(x=>{
@@ -1778,7 +1812,7 @@ function CatalogoView({catalogo,setCatalogo,proveedores,setProveedores,unidades,
         // cambiarles el tipo los desconectaría del inventario.
         const esEspejo=!!x.preparacion_id;
         return(<tr key={x.id} className={`border-t border-gray-100 ${isE?"bg-teal-50":esEspejo?"bg-purple-50/40 hover:bg-purple-50":"hover:bg-gray-50"}`}>
-          <td className="px-3 py-2 font-medium text-gray-900">{isE?<input className="w-full border border-teal-400 rounded px-1 py-0.5 text-sm bg-teal-50" value={editInsData.nombre} onChange={e=>setEditInsData({...editInsData,nombre:e.target.value})}/>:<span>{x.nombre}{esEspejo&&<span className="ml-1 text-purple-500" title="Es una preparación: su nombre y su unidad se editan en Ventas → Productos y recetas">🔒</span>}</span>}</td>
+          <td className="px-3 py-2 font-medium text-gray-900">{isE?<input className="w-full border border-teal-400 rounded px-1 py-0.5 text-sm bg-teal-50" value={editInsData.nombre} onChange={e=>setEditInsData({...editInsData,nombre:e.target.value})}/>:<span>{x.nombre}{esEspejo&&<span className="ml-1 text-purple-500" title="Es una preparación: su nombre y su unidad se editan en Ventas → Productos y recetas"><Icono n="candado" size={12}/></span>}</span>}</td>
           <td className="px-3 py-2">{isE?<select className="border border-teal-400 rounded px-1 py-0.5 text-xs bg-teal-50" value={editInsData.unidad_base} onChange={e=>setEditInsData({...editInsData,unidad_base:e.target.value})}>{["ml","g","kg","lt","pz","paq","porcion"].map(u=><option key={u} value={u}>{u}</option>)}</select>:<span className="text-gray-600">{x.unidad_base}</span>}</td>
           <td className="px-3 py-2">{isE?<select className="border border-teal-400 rounded px-1 py-0.5 text-xs bg-teal-50" value={editInsData.tipo_control} onChange={e=>setEditInsData({...editInsData,tipo_control:e.target.value})}><option value="inventariable">Inventariable</option><option value="gasto">Gasto directo</option></select>:<Badge v={x.tipo_control==="gasto"?"default":x.tipo_control==="preparacion"?"purple":"almacen"}>{x.tipo_control==="gasto"?"Gasto directo":x.tipo_control==="preparacion"?"Preparación":"De compra"}</Badge>}</td>
           <td className="px-3 py-2">{isE&&editInsData.tipo_control==="gasto"?<input className="w-24 border border-teal-400 rounded px-1 py-0.5 text-xs bg-teal-50" placeholder="Limpieza" value={editInsData.categoria_gasto||""} onChange={e=>setEditInsData({...editInsData,categoria_gasto:e.target.value})}/>:<span className="text-xs text-gray-500">{x.tipo_control==="gasto"?(x.categoria_gasto||"—"):"—"}</span>}</td>
@@ -2139,6 +2173,10 @@ function ComprasDirectasView({comprasDirectas,setComprasDirectas,catalogo,provee
   const [form,setForm]=useState({catalogo_id:"",proveedor_id:"",cantidad:0,costo_unitario:0,metodo_pago:"efectivo",nota:""});
   const [saving,setSaving]=useState(false);
   const [filter,setFilter]=useState("");
+  // v7.31: BuscadorIngrediente guarda su propio texto. Al limpiar el formulario
+  // hay que remontarlo o se queda con el último artículo escrito; este contador
+  // es su `key` y sólo cambia al guardar, no en cada selección.
+  const [nBusq,setNBusq]=useState(0);
 
   const total=form.cantidad*form.costo_unitario;
   const recientes=comprasDirectas.slice().sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).slice(0,20);
@@ -2159,6 +2197,7 @@ function ComprasDirectasView({comprasDirectas,setComprasDirectas,catalogo,provee
         alert("Compra registrada — CxP generada (crédito)");
       }else{alert("Compra registrada");}
       setForm({catalogo_id:"",proveedor_id:"",cantidad:0,costo_unitario:0,metodo_pago:"efectivo",nota:""});
+      setNBusq(n=>n+1);
     }else{alert("Error al registrar");}
     setSaving(false);
   };
@@ -2173,7 +2212,23 @@ function ComprasDirectasView({comprasDirectas,setComprasDirectas,catalogo,provee
       <h3 className="text-sm font-bold text-gray-700 mb-3">Nueva compra directa</h3>
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
         <div><label className="text-xs text-gray-500 block mb-1">Proveedor</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={form.proveedor_id} onChange={e=>setForm({...form,proveedor_id:e.target.value})}><option value="">Seleccionar...</option>{proveedores.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}</select></div>
-        <div><label className="text-xs text-gray-500 block mb-1">Artículo</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={form.catalogo_id} onChange={e=>{const cat=catalogo.find(c=>c.id===e.target.value);setForm({...form,catalogo_id:e.target.value,costo_unitario:cat?.costo_referencia||0});}}><option value="">Seleccionar...</option>{catalogo.map(c=><option key={c.id} value={c.id}>{c.articulo} ({c.unidad_clave})</option>)}</select></div>
+        {/* v7.31: eran 269 artículos en una lista desplegable — encontrar uno
+            exigía recorrerla entera. Ahora se escribe y filtra, igual que el
+            buscador del inventario: ignora acentos y mayúsculas, y prioriza los
+            que EMPIEZAN con lo tecleado sobre los que sólo lo contienen. */}
+        <div><label className="text-xs text-gray-500 block mb-1">Artículo</label>
+          <BuscadorIngrediente key={nBusq}
+            placeholder="Escribe para buscar el artículo…"
+            opciones={catalogo.slice().sort((a,b)=>a.articulo.localeCompare(b.articulo)).map(c=>({
+              value:c.id, label:c.articulo,
+              extra:`${c.unidad_clave}${c.costo_referencia>0?" · "+fmt(c.costo_referencia):""}`,
+            }))}
+            onPick={o=>{const cat=catalogo.find(c=>c.id===o.value);
+              setForm(f=>({...f,catalogo_id:o.value,costo_unitario:cat?.costo_referencia||0,
+                proveedor_id:f.proveedor_id||cat?.proveedor_id||""}));}}/>
+          {form.catalogo_id&&(()=>{const c=catalogo.find(x=>x.id===form.catalogo_id);
+            return c?<p className="text-xs text-teal-700 mt-1">Seleccionado: <b>{c.articulo}</b> ({c.unidad_clave})</p>:null;})()}
+        </div>
         <div><label className="text-xs text-gray-500 block mb-1">Cantidad</label><input type="number" min="0" step="0.25" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={form.cantidad||""} onChange={e=>setForm({...form,cantidad:parseFloat(e.target.value)||0})}/></div>
       </div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
@@ -2699,7 +2754,7 @@ function VentasSRView({productosVenta,setProductosVenta,productosInactivos,setPr
       {/* v7.21: explicar en pantalla de quién es cada dato, en vez de dejar editar
           algo que el conector revierte a los 2 minutos sin decir nada. */}
       <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2 mb-4 text-xs text-amber-900">
-        🔒 El <b>nombre</b>, el <b>precio</b> y el <b>grupo</b> de los productos que existen en SoftRestaurant los manda SR: el conector los vuelve a imponer cada 2 minutos, así que editarlos aquí no sirve — cámbialos en SoftRestaurant y se sincronizan solos.
+        <Icono n="candado" size={12}/> El <b>nombre</b>, el <b>precio</b> y el <b>grupo</b> de los productos que existen en SoftRestaurant los manda SR: el conector los vuelve a imponer cada 2 minutos, así que editarlos aquí no sirve — cámbialos en SoftRestaurant y se sincronizan solos.
         <br/>Lo que sí es de FitTaste y puedes editar libremente: <b>las recetas</b>, la marca de <b>"no consume"</b>, las <b>preparaciones</b> y los productos que no existen en SR.
       </div>
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
@@ -2731,7 +2786,7 @@ function VentasSRView({productosVenta,setProductosVenta,productosInactivos,setPr
         // receta, que es la razón práctica para filtrar por grupo.
         const grupos=[...new Set(base.map(p=>p.grupo_sr).filter(Boolean))].sort();
         return(<div className="flex flex-col md:flex-row md:items-center gap-2 mb-3">
-          <div className="relative flex-1"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">🔍</span><input className="w-full border border-gray-200 rounded-xl pl-9 pr-4 py-2 text-sm focus:ring-2 focus:ring-lime-400 focus:outline-none" placeholder="Buscar producto por nombre, código o grupo..." value={busqProd} onChange={e=>setBusqProd(e.target.value)}/></div>
+          <div className="relative flex-1"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none"><Icono n="buscar" size={14}/></span><input className="w-full border border-gray-200 rounded-xl pl-9 pr-4 py-2 text-sm focus:ring-2 focus:ring-lime-400 focus:outline-none" placeholder="Buscar producto por nombre, código o grupo..." value={busqProd} onChange={e=>setBusqProd(e.target.value)}/></div>
           <select className="border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white" value={filtroGrupo} onChange={e=>setFiltroGrupo(e.target.value)}>
             <option value="">Todos los grupos ({grupos.length})</option>
             {grupos.map(g=>{const enG=base.filter(p=>p.grupo_sr===g);const f=enG.filter(p=>clasifProd(p)==="falta").length;
@@ -2747,7 +2802,7 @@ function VentasSRView({productosVenta,setProductosVenta,productosInactivos,setPr
         const sinReceta=preps.filter(p=>!recetas.some(r=>r.producto_venta_id===p.id)).length;
         const chipP=(id,l,n,col)=>(<button key={id} onClick={()=>setFiltroEst(id)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${filtroEst===id?"text-white border-transparent":"bg-white border-gray-200 text-gray-600 hover:text-gray-800"}`} style={filtroEst===id?{background:col}:{}}>{l} ({n})</button>);
         return(<div className="flex flex-col md:flex-row md:items-center gap-2 mb-3">
-          <div className="relative flex-1"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">🔍</span><input className="w-full border border-gray-200 rounded-xl pl-9 pr-4 py-2 text-sm focus:ring-2 focus:ring-teal-400 focus:outline-none" placeholder="Buscar preparación por nombre..." value={busqPrep} onChange={e=>setBusqPrep(e.target.value)}/></div>
+          <div className="relative flex-1"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none"><Icono n="buscar" size={14}/></span><input className="w-full border border-gray-200 rounded-xl pl-9 pr-4 py-2 text-sm focus:ring-2 focus:ring-teal-400 focus:outline-none" placeholder="Buscar preparación por nombre..." value={busqPrep} onChange={e=>setBusqPrep(e.target.value)}/></div>
           <div className="flex gap-1 flex-wrap">{chipP("todos","Todas",preps.length,"#2D2D2D")}{chipP("sinuso","Sin uso en recetas",sinUso,"#d6816c")}{chipP("sinreceta","⚠ Sin receta propia",sinReceta,"#bb4430")}</div>
         </div>);})()}
       {(()=>{let lista=productosVenta.filter(p=>verTipo==="preparaciones"?p.es_preparacion:!p.es_preparacion);
@@ -2792,14 +2847,14 @@ function VentasSRView({productosVenta,setProductosVenta,productosInactivos,setPr
               nunca iban a quedar. Editable sólo lo que es de FitTaste. */}
           <td className="px-3 py-2 font-medium text-gray-900">{isE
             ?(p.codigo_sr
-              ?<span className="inline-flex items-center gap-1" title="El nombre viene de SoftRestaurant y el conector lo vuelve a imponer cada 2 minutos. Cámbialo en SR y se sincroniza solo.">{p.nombre}<span className="text-[10px] text-amber-600 font-normal">🔒 lo manda SR</span></span>
+              ?<span className="inline-flex items-center gap-1" title="El nombre viene de SoftRestaurant y el conector lo vuelve a imponer cada 2 minutos. Cámbialo en SR y se sincroniza solo.">{p.nombre}<span className="text-[10px] text-amber-600 font-normal"><Icono n="candado" size={11}/> lo manda SR</span></span>
               :<input className="w-full border border-lime-400 rounded px-1 py-0.5 text-sm" value={prodData.nombre} onChange={e=>setProdData({...prodData,nombre:e.target.value})}/>)
             :p.nombre}</td>
           <td className="px-3 py-2 text-xs text-gray-500">{isE?<input className="w-20 border border-lime-400 rounded px-1 py-0.5 text-xs" value={prodData.categoria||""} onChange={e=>setProdData({...prodData,categoria:e.target.value})}/>:(p.grupo_sr||p.categoria||"—")}</td>
           <td className="px-3 py-2">{(()=>{const c=clasifProd(p);return c==="con"?<Badge v="success">Con receta</Badge>:c==="noconsume"?<Badge v="default">No consume</Badge>:<Badge v="danger">⚠ Falta receta</Badge>;})()}</td>
           <td className="px-3 py-2 text-right">{isE&&!p.codigo_sr
             ?<input type="number" step="0.01" className="w-20 text-right border border-lime-400 rounded px-1 py-0.5 text-sm" value={prodData.precio_venta} onChange={e=>setProdData({...prodData,precio_venta:e.target.value})}/>
-            :<span className="font-semibold" title={p.codigo_sr?"El precio viene de SoftRestaurant. Cámbialo en SR.":""}>{fmt(p.precio_venta)}{isE&&p.codigo_sr&&<span className="text-[10px] text-amber-600 font-normal ml-1">🔒</span>}</span>}</td>
+            :<span className="font-semibold" title={p.codigo_sr?"El precio viene de SoftRestaurant. Cámbialo en SR.":""}>{fmt(p.precio_venta)}{isE&&p.codigo_sr&&<span className="text-[10px] text-amber-600 font-normal ml-1"><Icono n="candado" size={12}/></span>}</span>}</td>
           <td className="px-3 py-2 text-right text-gray-600">{nRec>0?fmt(cR):<span className="text-gray-300">—</span>}</td>
           <td className="px-3 py-2 text-right">{nRec>0&&precio>0?<Badge v={margen<50?"danger":margen<65?"warning":"success"}>{margen.toFixed(0)}%</Badge>:"—"}</td>
           <td className="px-3 py-2">{p.sin_insumos
@@ -3503,7 +3558,7 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
         const rowsTodos=rows.filter(r=>!r.sinFila);
         const rowsInv=q?rowsTodos.filter(r=>nrmB(r.ins.nombre).includes(q)||nrmB(r.ins.unidad_base).includes(q)):rowsTodos;
         return(<>
-      <div className="mb-3 relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">🔍</span>
+      <div className="mb-3 relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none"><Icono n="buscar" size={14}/></span>
         <input className="w-full border border-gray-200 rounded-xl pl-9 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-teal-400 focus:outline-none" placeholder="Buscar insumo o preparación por nombre..." value={busqInv} onChange={e=>setBusqInv(e.target.value)}/>
         {busqInv&&<button onClick={()=>setBusqInv("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-sm" title="Limpiar">✕</button>}
       </div>
@@ -3774,7 +3829,7 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
 // Estado de resultados y flujo de efectivo del mes, integrando: ventas de SR,
 // costo de ventas por recetas (kárdex de sucursal), merma, gastos operativos,
 // CxP/pagos y valor de inventarios. Cifras de venta sin IVA (subtotal).
-function EstadosView({ventas,mermas,gastosOp,comprasDirectas,cxp,pagos,inventario,invSucursal,movSucursal,catalogo}){
+function EstadosView({ventas,mermas,gastosOp,comprasDirectas,cxp,pagos,inventario,invSucursal,movSucursal,catalogo,cogsMensual}){
   const [mesOffset,setMesOffset]=useState(0);
   const now=new Date();
   const mesActual=new Date(now.getFullYear(),now.getMonth()-mesOffset,1);
@@ -3790,7 +3845,13 @@ function EstadosView({ventas,mermas,gastosOp,comprasDirectas,cxp,pagos,inventari
   const porCanal={};vMes.forEach(v=>{const k=v.canal||"otro";porCanal[k]=(porCanal[k]||0)+parseFloat(v.total||0);});
 
   // Costo de ventas: kárdex (salida_venta con costo); si no hay movimientos usa el costo teórico de las ventas
-  const cogsKardex=movSucursal.filter(m=>m.tipo==="salida_venta"&&enMes(m.fecha||"")).reduce((s,m)=>s+(parseFloat(m.cantidad)||0)*(parseFloat(m.costo_unitario)||0),0);
+  // v7.31: el COGS del mes viene de la vista `v_cogs_mensual`, que lo agrega en
+  // la base. Antes se sumaba aquí filtrando las 102,890 filas de salida_venta,
+  // que había que bajar enteras al navegador sólo para producir un número por
+  // mes. La vista devuelve cuatro filas y da exactamente el mismo total.
+  const mesClave=mesInicio.slice(0,7);
+  const cogsKardex=(cogsMensual||[]).filter(c=>c.mes===mesClave)
+    .reduce((s,c)=>s+(parseFloat(c.cogs)||0),0);
   const cogsTeorico=vMes.reduce((s,v)=>s+parseFloat(v.costo_teorico||0),0);
   const costoVentas=cogsKardex>0?cogsKardex:cogsTeorico;
 
@@ -3937,6 +3998,8 @@ function App(){
   const [view,setView]=useState("bandeja");
   const [subview,setSubview]=useState(null);
   const [menuAbierto,setMenuAbierto]=useState(null);
+  // v7.31: panel de navegación en celular (md hacia abajo).
+  const [navMovil,setNavMovil]=useState(false);
   const [loading,setLoading]=useState(true);
   const [loadMsg,setLoadMsg]=useState("Iniciando...");
   const [error,setError]=useState(null);
@@ -3977,6 +4040,9 @@ function App(){
   // v7.19: insumos que se consumen por TICKET y no por platillo (bolsas, servilletas).
   const [reglasTicket,setReglasTicket]=useState([]);
   const [producciones,setProducciones]=useState([]);
+  // v7.31: COGS del mes agregado en la base (vista v_cogs_mensual), para no
+  // bajar las 102,890 filas de salida_venta sólo para sumarlas.
+  const [cogsMensual,setCogsMensual]=useState([]);
 
   // Check URL for provider token
   useEffect(()=>{
@@ -4020,10 +4086,53 @@ function App(){
         return;
       }
 
-      const tables=["catalogo","proveedores","tipos_flujo_costo","unidades_medida","inventario_almacen","pedidos","pedido_detalle","pedido_proveedor_estatus","lotes_almacen","recepciones","recepcion_detalle","cuentas_por_pagar","pagos","compras_directas","gastos_operativos","categorias_gastos","sucursales","productos_venta","recetas","inventario_sucursal","ventas","venta_detalle","mermas","movimientos_sucursal","insumos","reglas_consumo_ticket","producciones"];
+      // v7.31 — La carga pasó de ~135 peticiones en serie a ~20 en paralelo.
+      //
+      // Cocina reportó que la app tarda muchísimo en abrir. La causa: 27 tablas
+      // bajadas UNA TRAS OTRA (`for ... await`) y sin filtro de fecha, con
+      // sbGet paginando de 1000 en 1000. A octubre:
+      //
+      //   movimientos_sucursal  104,028 filas → 105 peticiones encadenadas
+      //   venta_detalle          22,470 filas →  23
+      //   ventas                  4,613 filas →   5
+      //
+      // En un celular con wifi de restaurante eso es casi un minuto, y empeora
+      // ~1 petición por día para siempre.
+      //
+      // Tres cambios, por orden de impacto:
+      //
+      // 1) `salida_venta` es el 99% del kárdex (102,890 de 104,028) y nadie
+      //    necesita esas filas una por una en el navegador: el estado de
+      //    resultados las quería sólo para sumar el COGS del mes, y eso ahora
+      //    lo da la vista `v_cogs_mensual` en cuatro filas. Del kárdex se bajan
+      //    los movimientos que NO son venta (recepciones, ajustes, mermas,
+      //    producciones: ~1,100 en total) más las últimas 300 ventas para la
+      //    vista de movimientos recientes.
+      // 2) Ventas y su detalle se acotan a 90 días. El dashboard de ventas no
+      //    ofrece ningún periodo más viejo que "mes pasado".
+      // 3) Todo lo demás baja en paralelo con Promise.all en vez de en fila.
+      const hace90=new Date(Date.now()-90*864e5).toISOString().split("T")[0];
+      const CHICAS=["catalogo","proveedores","tipos_flujo_costo","unidades_medida","inventario_almacen","pedidos","pedido_detalle","pedido_proveedor_estatus","lotes_almacen","recepciones","recepcion_detalle","cuentas_por_pagar","pagos","compras_directas","gastos_operativos","categorias_gastos","sucursales","productos_venta","recetas","inventario_sucursal","mermas","insumos","reglas_consumo_ticket","producciones"];
+      setLoadMsg("Cargando datos...");
       const results={};
-      for(const t of tables){setLoadMsg(`Cargando ${t}...`);results[t]=await sbGet(t);}
-      
+      // Ojo con la forma: cada entrada tiene que ser una PROMESA ya en vuelo.
+      // Escribirlas como ["ventas", await sbGet(...)] evalúa el await mientras
+      // se arma el arreglo —es decir, en serie— y Promise.all recibiría valores
+      // ya resueltos. Por eso van como funciones async invocadas.
+      const pedir=(k,t,q)=>(async()=>[k,await sbGet(t,q)])();
+      const pares=await Promise.all([
+        ...CHICAS.map(t=>pedir(t,t)),
+        pedir("ventas","ventas",`fecha=gte.${hace90}`),
+        pedir("venta_detalle","venta_detalle",`created_at=gte.${hace90}`),
+        pedir("cogs_mensual","v_cogs_mensual"),
+        // El kárdex, en dos pedazos: todo lo que no es venta, y una cola de
+        // ventas recientes para que la pantalla de movimientos siga completa.
+        pedir("mov_no_venta","movimientos_sucursal","tipo=neq.salida_venta"),
+        pedir("mov_venta_top","movimientos_sucursal","tipo=eq.salida_venta&order=created_at.desc&limit=300"),
+      ]);
+      pares.forEach(([k,v])=>{results[k]=v;});
+      results.movimientos_sucursal=[...(results.mov_no_venta||[]),...(results.mov_venta_top||[])];
+
       if(results.catalogo.length===0){setError("Sin datos. Verifica SQL y permisos.");setLoading(false);return;}
 
       const uMap={};(results.unidades_medida||[]).forEach(u=>{uMap[u.id]=u;});
@@ -4056,6 +4165,7 @@ function App(){
       setVentaDetalle(results.venta_detalle||[]);
       setMermas((results.mermas||[]).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)));
       setMovSucursal(results.movimientos_sucursal||[]);
+      setCogsMensual(results.cogs_mensual||[]);
       setInsumos((results.insumos||[]).filter(i=>i.activo!==false));
       setReglasTicket(results.reglas_consumo_ticket||[]);
       setProducciones((results.producciones||[]).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)));
@@ -4520,52 +4630,76 @@ function App(){
   // reorganizan en grupos desplegables. La visibilidad por rol es la misma que
   // tenían las tabs planas, más el nuevo Dashboard de ventas.
   const MENU=[
-    {id:"g_ventas",l:"Ventas",icon:"📈",items:[
+    {id:"g_ventas",l:"Ventas",icon:"ventas",items:[
       {id:"ventas_dash",l:"Dashboard de ventas",roles:["admin","compras","finanzas","sucursal"]},
       {id:"ventas",l:"Ventas SR · recetas",roles:["admin","compras","finanzas","sucursal"]},
     ]},
-    {id:"g_compras",l:"Compras",icon:"🛒",items:[
+    {id:"g_compras",l:"Compras",icon:"compras",items:[
       {id:"bandeja",l:rol==="sucursal"||rol==="proveedor"?"Mis pedidos":"Pedidos",roles:["admin","compras","sucursal","proveedor","almacen"]},
       {id:"recepcion",l:"Recepción",roles:["sucursal"]},
       {id:"compras_directas",l:"Compras directas",roles:["sucursal","admin","compras","finanzas"]},
       {id:"dashboard",l:"Dashboard de compras",roles:["admin","compras","finanzas"]},
     ]},
-    {id:"g_almacen",l:"Almacén",icon:"📦",items:[
+    {id:"g_almacen",l:"Almacén",icon:"almacen",items:[
       {id:"almacen",l:"Inventario almacén",roles:["admin","compras","almacen"]},
       {id:"inv_sucursal",l:"Inventario sucursal · merma",roles:["admin","compras","sucursal"]},
     ]},
-    {id:"g_finanzas",l:"Finanzas",icon:"💰",items:[
+    {id:"g_finanzas",l:"Finanzas",icon:"finanzas",items:[
       {id:"finanzas",l:"Cuentas por pagar",roles:["admin","compras","finanzas"]},
       {id:"gastos",l:"Gastos",roles:["sucursal","admin","compras","finanzas"]},
       {id:"estados",l:"Estados financieros",roles:["admin","compras","finanzas"]},
     ]},
-    {id:"g_catalogos",l:"Catálogos",icon:"🗂",items:[
+    {id:"g_catalogos",l:"Catálogos",icon:"catalogo",items:[
       {id:"catalogo",l:"Catálogo e insumos",roles:["admin"]},
       {id:"recetario",l:"Productos y recetas",roles:["admin","compras","finanzas","sucursal"]},
     ]},
   ].map(g=>({...g,items:g.items.filter(i=>i.roles.includes(rol))})).filter(g=>g.items.length>0);
-  const irA=(id)=>{setView(id);setSelectedPedido(null);setSubview(null);setMenuAbierto(null);};
+  const irA=(id)=>{setView(id);setSelectedPedido(null);setSubview(null);setMenuAbierto(null);setNavMovil(false);};
 
   const currentDetalle=selectedPedido?pedidoDetalle.filter(d=>d.pedido_id===selectedPedido.id):[];
   const currentProvEst=selectedPedido?provEstatus.filter(x=>x.pedido_id===selectedPedido.id):[];
   const pedidosAlm=pedidos.filter(p=>provEstatus.some(pe=>pe.pedido_id===p.id&&pe.estatus==="enviado"&&proveedores.find(pr=>pr.id===pe.proveedor_id)?.tipo_flujo==="Almacen interno")).map(p=>({...p,articulos:pedidoDetalle.filter(d=>d.pedido_id===p.id&&proveedores.find(pr=>pr.id===d.proveedor_id)?.tipo_flujo==="Almacen interno").length}));
 
   return(<div className="min-h-screen" style={{background:"#FAFAF8"}}>
-    <div className="border-b border-gray-200" style={{background:"#2D2D2D"}}><div className="max-w-6xl mx-auto px-4"><div className="flex items-center justify-between py-3">
-      <div className="flex items-center gap-3"><Logo size={32}/><div><h1 className="text-sm font-bold text-white leading-tight">Fit Taste Roma{ENTORNOS[ENV_ID].etiqueta&&<span className="ml-2 text-xs font-bold px-2 py-0.5 rounded bg-orange-500 text-white align-middle">{ENTORNOS[ENV_ID].etiqueta}</span>}</h1><p className="text-xs text-emerald-400">{rol} — {catalogo.length} productos</p></div></div>
-      <div className="flex items-center gap-1 flex-wrap">
+    {/* v7.31 — Encabezado con dos formas.
+        Cocina reportó que "se amontonan los iconos". Era cierto: los 5 grupos
+        vivían en una fila flex-wrap junto al logo, y a 390px de ancho eso se
+        apila en tres renglones de botones diminutos sobre fondo oscuro.
+        Ahora en celular hay un solo botón de menú que abre un panel a todo lo
+        ancho, con los grupos y sus pantallas listados y con área de toque
+        cómoda. De md en adelante no cambia nada: la barra de siempre. */}
+    <div className="border-b border-gray-200" style={{background:"#2D2D2D"}}><div className="max-w-6xl mx-auto px-4"><div className="flex items-center justify-between py-3 gap-2">
+      <div className="flex items-center gap-3 min-w-0"><Logo size={32}/><div className="min-w-0"><h1 className="text-sm font-bold text-white leading-tight truncate">Fit Taste Roma{ENTORNOS[ENV_ID].etiqueta&&<span className="ml-2 text-xs font-bold px-2 py-0.5 rounded bg-orange-500 text-white align-middle">{ENTORNOS[ENV_ID].etiqueta}</span>}</h1><p className="text-xs text-emerald-400 truncate">{rol} — {catalogo.length} productos</p></div></div>
+
+      {/* ---- Celular: un botón y un panel ---- */}
+      <button onClick={()=>setNavMovil(v=>!v)} className="md:hidden flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-gray-200 hover:text-white shrink-0" aria-label="Menú" aria-expanded={navMovil}>
+        <Icono n={navMovil?"cerrar":"menu"} size={20}/>
+      </button>
+
+      {/* ---- Escritorio: la barra de siempre ---- */}
+      <div className="hidden md:flex items-center gap-1">
         {menuAbierto&&<div className="fixed inset-0 z-40" onClick={()=>setMenuAbierto(null)}/>}
         {MENU.map(g=>{const activo=g.items.some(i=>i.id===view);
-          if(g.items.length===1){const i=g.items[0];return<button key={g.id} onClick={()=>irA(i.id)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${view===i.id?"text-gray-900":"text-gray-400 hover:text-white"}`} style={view===i.id?{background:"#e2a52a"}:{}}>{g.icon} {g.l}</button>;}
+          if(g.items.length===1){const i=g.items[0];return<button key={g.id} onClick={()=>irA(i.id)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${view===i.id?"text-gray-900":"text-gray-400 hover:text-white"}`} style={view===i.id?{background:"#e2a52a"}:{}}><Icono n={g.icon}/> {g.l}</button>;}
           return<div key={g.id} className="relative">
-            <button onClick={()=>setMenuAbierto(menuAbierto===g.id?null:g.id)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${activo?"text-gray-900":"text-gray-400 hover:text-white"}`} style={activo?{background:"#e2a52a"}:{}}>{g.icon} {g.l} <span className="text-[10px] align-middle">{menuAbierto===g.id?"▲":"▼"}</span></button>
+            <button onClick={()=>setMenuAbierto(menuAbierto===g.id?null:g.id)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${activo?"text-gray-900":"text-gray-400 hover:text-white"}`} style={activo?{background:"#e2a52a"}:{}}><Icono n={g.icon}/> {g.l} <span className="text-[10px]">{menuAbierto===g.id?"▲":"▼"}</span></button>
             {menuAbierto===g.id&&<div className="absolute right-0 mt-1 w-56 rounded-xl shadow-xl border border-gray-700 py-1 z-50" style={{background:"#3a3a3a"}}>
               {g.items.map(i=><button key={i.id} onClick={()=>irA(i.id)} className={`block w-full text-left px-4 py-2 text-sm transition-all ${view===i.id?"font-bold":"text-gray-300 hover:bg-black hover:bg-opacity-20"}`} style={view===i.id?{color:"#e2a52a"}:{}}>{i.l}</button>)}
             </div>}
           </div>;})}
         <button onClick={()=>{setRol(null);setView("bandeja");setSelectedPedido(null);setMenuAbierto(null);}} className="ml-3 px-2 py-1.5 rounded-lg text-xs text-gray-500 hover:text-red-400">Salir</button>
       </div>
-    </div></div></div>
+    </div>
+
+    {/* Panel de celular: lista completa, nada que adivinar */}
+    {navMovil&&<div className="md:hidden pb-3 -mx-4 px-4 border-t border-gray-700">
+      {MENU.map(g=><div key={g.id} className="mt-3">
+        <p className="flex items-center gap-2 text-xs uppercase tracking-wider font-semibold text-gray-500 mb-1"><Icono n={g.icon} size={14}/>{g.l}</p>
+        {g.items.map(i=><button key={i.id} onClick={()=>{irA(i.id);setNavMovil(false);}} className={`block w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all ${view===i.id?"font-bold text-gray-900":"text-gray-300 active:bg-black active:bg-opacity-20"}`} style={view===i.id?{background:"#e2a52a"}:{}}>{i.l}</button>)}
+      </div>)}
+      <button onClick={()=>{setRol(null);setView("bandeja");setSelectedPedido(null);setMenuAbierto(null);setNavMovil(false);}} className="mt-4 w-full text-left px-3 py-2.5 rounded-lg text-sm text-gray-500 active:text-red-400 border-t border-gray-700 pt-3">Salir</button>
+    </div>}
+    </div></div>
     <div className="max-w-6xl mx-auto px-4 py-6">
       {view==="bandeja"&&!selectedPedido&&subview!=="crear"&&<BandejaPedidos pedidos={pedidos} rol={rol} onSelect={p=>{setSelectedPedido(p);}} onNew={()=>setSubview("crear")} pedidoDetalle={pedidoDetalle} proveedores={proveedores} provEstatus={provEstatus} onDelete={handleDeletePedido} recepciones={recepciones}/>}
       {view==="bandeja"&&subview==="crear"&&<CrearPedido catalogo={catalogo} proveedores={proveedores} insumos={insumos} invSucursal={invSucursal} onSave={handleCreatePedido} onCancel={()=>setSubview(null)}/>}
@@ -4624,7 +4758,7 @@ function App(){
       {view==="ventas"&&["admin","compras","sucursal","finanzas"].includes(rol)&&<VentasSRView productosVenta={productosVenta} setProductosVenta={setProductosVenta} productosInactivos={productosInactivos} setProductosInactivos={setProductosInactivos} recetas={recetas} setRecetas={setRecetas} ventas={ventas} ventaDetalle={ventaDetalle} catalogo={catalogo} insumos={insumos} invSucursal={invSucursal} reglasTicket={reglasTicket} setReglasTicket={setReglasTicket} onImport={handleImportVentas} rol={rol}/>}
       {view==="recetario"&&["admin","compras","sucursal","finanzas"].includes(rol)&&<VentasSRView key="recetario" tabInicial="productos" productosVenta={productosVenta} setProductosVenta={setProductosVenta} productosInactivos={productosInactivos} setProductosInactivos={setProductosInactivos} recetas={recetas} setRecetas={setRecetas} ventas={ventas} ventaDetalle={ventaDetalle} catalogo={catalogo} insumos={insumos} invSucursal={invSucursal} reglasTicket={reglasTicket} setReglasTicket={setReglasTicket} onImport={handleImportVentas} rol={rol}/>}
       {view==="inv_sucursal"&&["admin","compras","sucursal"].includes(rol)&&<SucursalInvView invSucursal={invSucursal} setInvSucursal={setInvSucursal} movSucursal={movSucursal} setMovSucursal={setMovSucursal} mermas={mermas} setMermas={setMermas} catalogo={catalogo} insumos={insumos} sucursales={sucursales} rol={rol} productosVenta={productosVenta} recetas={recetas} producciones={producciones} setProducciones={setProducciones}/>}
-      {view==="estados"&&["admin","compras","finanzas"].includes(rol)&&<EstadosView ventas={ventas} mermas={mermas} gastosOp={gastosOp} comprasDirectas={comprasDirectas} cxp={cxp} pagos={pagos} inventario={inventario} invSucursal={invSucursal} movSucursal={movSucursal} catalogo={catalogo}/>}
+      {view==="estados"&&["admin","compras","finanzas"].includes(rol)&&<EstadosView cogsMensual={cogsMensual} ventas={ventas} mermas={mermas} gastosOp={gastosOp} comprasDirectas={comprasDirectas} cxp={cxp} pagos={pagos} inventario={inventario} invSucursal={invSucursal} movSucursal={movSucursal} catalogo={catalogo}/>}
       {view==="gastos"&&["sucursal","admin","compras","finanzas"].includes(rol)&&<GastosView gastosOp={gastosOp} setGastosOp={setGastosOp} catGastos={catGastos} setCatGastos={setCatGastos} rol={rol}/>}
     </div>
   </div>);
