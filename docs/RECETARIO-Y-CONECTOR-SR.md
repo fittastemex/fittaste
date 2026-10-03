@@ -1969,3 +1969,56 @@ importa tanto como la primera: una guarda ruidosa se ignora.
 
 `ZARZAMORAS` (`FRU-004`, pz, contenido 1, $80) sigue rota a propósito: hoy tiene existencia 0, no
 infla nada, y nadie ha podido decir qué trae el paquete. La guarda avisará en cuanto se toque.
+
+---
+
+## 24. La unidad pegada al campo (v7.30)
+
+**03-oct-2026.** Dirección: *"mañana haremos ya el conteo de inventario para ver realmente lo que
+tenemos y cómo está funcionando"*.
+
+El conteo del 11-sep metió **$1,277,491** de inventario inexistente. Si mañana se cuenta con la
+misma pantalla, el mismo error vuelve a caber. Esto se arregló antes del conteo, no después.
+
+### 24.1 Por qué no fue descuido
+
+La unidad **sí estaba en pantalla**. En letra chica gris, junto al NOMBRE, tres columnas a la
+izquierda del cuadrito donde se teclea. Con una báscula en la mano y 183 renglones por capturar,
+nadie mira allá.
+
+```
+ENELDO  kg                     [    1300    ]        ← la unidad está aquí…
+   ↑                                  ↑                 …y el cursor acá
+```
+
+Pesaron 1,300 **gramos** y escribieron 1300 donde se miden kilos. Lo mismo con 3,800 ml de salsa
+y 4,300 g de harina. Culpar a quien capturó no habría evitado la repetición; mover la unidad sí.
+
+### 24.2 Tres momentos
+
+| Cuándo | Qué hace |
+|---|---|
+| Al teclear | La unidad va **pegada al campo**. El renglón se pinta en ámbar si el físico es ≥100× el teórico. |
+| Al revisar | *"¿1,300 kg? El sistema esperaba 1.3 kg"* — el número esperado, en la misma unidad. |
+| Al cerrar | Los nombra uno por uno y pide confirmación explícita, con la causa probable. |
+
+El umbral es **100×** y no 1000× para atrapar también medio orden de magnitud, y exige teórico
+positivo porque contra cero todo cociente es infinito.
+
+Como las demás guardas de este sistema, **no bloquea**. Un conteo 100× mayor puede ser legítimo
+(una entrega grande que nunca se registró). Una guarda que impide guardar se vuelve un estorbo
+que la gente aprende a esquivar, y entonces falla el día que tiene razón.
+
+### 24.3 Qué NO resuelve
+
+La guarda atrapa el error de magnitud. No atrapa dos cosas que mañana siguen presentes:
+
+- **Los 22 insumos que no entran por ningún lado** (hielo, tortillas de nopal, agua: $8,442/mes).
+  Contarlos registra un SOBRANTE que reduce la merma del mes — y no es merma recuperada, es una
+  compra que nunca se capturó. Conviene dejarlos en blanco.
+- **Las 25 preparaciones sin una sola producción registrada.** Aparecen en la hoja desde v7.25 y
+  su teórico es cero. Contar tres litros de aderezo mete un sobrante del mismo tipo.
+
+Las 15 verificaciones usan los números reales del 11-sep: 1,300 kg de eneldo sobre 1.3, y 3,800
+lt de salsa sobre 3.8. Incluyen que un faltante normal **no** dispare nada, que cancelar no
+escriba un solo movimiento, y que al corregir las cantidades el conteo sí cierre.

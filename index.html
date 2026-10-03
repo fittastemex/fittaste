@@ -3270,6 +3270,22 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
       return {row:r,fisico,teorico,diff,costo:costoInsumo(r.insumo_id,invSucursal,catalogo)};
     }).filter(Boolean);
     if(cambios.length===0){alert("No hay diferencias que registrar. Captura el conteo físico de al menos un insumo.");return;}
+    // v7.30: último filtro antes de escribir. El conteo del 11-sep se cerró con
+    // 1,300 kg de eneldo y 3,800 lt de salsa y nadie lo vio hasta un mes después,
+    // cuando el inventario valía $1.2 millones. Aquí se nombran uno por uno, con
+    // el número que el sistema esperaba al lado, para que el error salte.
+    const magnitud=cambios.filter(c=>c.fisico>0&&c.teorico>0&&c.fisico/c.teorico>=100);
+    if(magnitud.length>0){
+      const lista=magnitud.slice(0,12).map(c=>{
+        const u=c.row.ins?.unidad_base||"";
+        return `• ${c.row.ins?.nombre||"?"}: contaste ${fmtCant(c.fisico,u)} y el sistema esperaba ${fmtCant(c.teorico,u)}`;
+      }).join("\n");
+      const extra=magnitud.length>12?`\n…y ${magnitud.length-12} más.`:"";
+      if(!confirm(`${magnitud.length} ${magnitud.length===1?"insumo tiene":"insumos tienen"} un conteo al menos 100 veces mayor de lo esperado:\n\n${lista}${extra}\n\n`
+        +`Casi siempre esto es una UNIDAD equivocada: pesar en gramos y escribir el número donde se miden kilos.\n\n`
+        +`Si de verdad contaste esas cantidades, continúa. Si no, cancela y corrígelas.\n\n¿Cerrar el conteo así?`))
+        return; // la guarda corre ANTES de setCerrando(true): no hay estado que revertir
+    }
     setCerrando(true);
     const fecha=new Date().toISOString().split("T")[0];
     const ymd=fecha.replace(/-/g,"");
@@ -3443,7 +3459,13 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
     const fisico=contado?parseFloat(txt):null;
     const valido=contado&&!isNaN(fisico)&&fisico>=0;
     const diff=valido?Math.round((fisico-teorico)*1000)/1000:0;
-    return {r,teorico,costo,txt,contado,fisico,valido,diff,diffVal:Math.round(diff*costo*100)/100};
+    // v7.30: un físico 100× mayor que el teórico casi siempre es una unidad
+    // equivocada, no un sobrante. El conteo del 11-sep metió $1,277,491 así:
+    // 1,300 kg de eneldo (eran 1.3), 3,800 lt de salsa (eran 3.8). El factor es
+    // 100 y no 1000 para atrapar también medio orden de magnitud, y pide un
+    // teórico positivo porque contra cero todo es infinito.
+    const sospechoso=valido&&fisico>0&&teorico>0&&fisico/teorico>=100;
+    return {r,teorico,costo,txt,contado,fisico,valido,diff,sospechoso,diffVal:Math.round(diff*costo*100)/100};
   });
   const conteoVista=soloDif?conteoRows.filter(c=>c.valido&&c.diff!==0):conteoRows;
   const cCont=conteoRows.filter(c=>c.valido).length;
@@ -3544,7 +3566,18 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
           return(<tr key={c.r.id} className={`border-t border-gray-100 ${c.valido&&c.diff<0?"bg-red-50/50":c.valido&&c.diff>0?"bg-emerald-50/40":"hover:bg-gray-50"}`}>
             <td className="px-3 py-2 font-medium text-gray-900">{c.r.ins.nombre||"?"} <span className="text-gray-400 text-xs">{c.r.ins.unidad_base}</span></td>
             <td className="px-3 py-2 text-right text-gray-600">{fmtQ(c.teorico,c.r.ins.unidad_base||"")}</td>
-            <td className="px-3 py-2 text-right"><input type="number" min="0" step="0.01" inputMode="decimal" className="w-24 text-right border border-gray-300 rounded-lg px-2 py-1.5 text-sm focus:border-teal-500 focus:outline-none" placeholder="—" value={c.txt==null?"":c.txt} onChange={e=>setConteo({...conteo,[c.r.insumo_id]:e.target.value})}/></td>
+            {/* v7.30: la unidad va PEGADA al campo, no en gris tres columnas a
+                la izquierda junto al nombre. El conteo del 11-sep registró 1,300
+                kg de eneldo, 3,800 lt de salsa y 4,300 kg de harina — alguien
+                pesó en gramos y escribió el número donde se miden kilos. La
+                unidad estaba en pantalla; no estaba donde se mira al teclear. */}
+            <td className="px-3 py-2 text-right">
+              <div className="flex items-center justify-end gap-1.5">
+                <input type="number" min="0" step="0.01" inputMode="decimal" className={`w-24 text-right border rounded-lg px-2 py-1.5 text-sm focus:border-teal-500 focus:outline-none ${c.sospechoso?"border-amber-400 bg-amber-50":"border-gray-300"}`} placeholder="—" value={c.txt==null?"":c.txt} onChange={e=>setConteo({...conteo,[c.r.insumo_id]:e.target.value})}/>
+                <span className={`text-xs font-semibold w-14 text-left ${c.sospechoso?"text-amber-700":"text-gray-500"}`}>{c.r.ins.unidad_base}</span>
+              </div>
+              {c.sospechoso&&<p className="text-xs text-amber-700 mt-1 text-right">¿{fmtCant(c.fisico,c.r.ins.unidad_base)}? El sistema esperaba {fmtCant(c.teorico,c.r.ins.unidad_base)}</p>}
+            </td>
             <td className={`px-3 py-2 text-right font-bold ${dcolor}`}>{c.valido&&c.diff!==0?(c.diff>0?"+":"")+fmtQ(c.diff,c.r.ins.unidad_base||""):c.valido?"✓":"—"}</td>
             <td className={`px-3 py-2 text-right font-semibold ${dcolor}`}>{c.valido&&c.diff!==0?fmt(c.diff*c.costo):"—"}</td>
           </tr>);})}</tbody></table>
