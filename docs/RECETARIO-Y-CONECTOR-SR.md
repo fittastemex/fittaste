@@ -1745,3 +1745,280 @@ PROTEIN CHOCOLATE. Se marcó como línea base, así que el estado de resultados 
 inflado es la valuación. Falta confirmar las cantidades reales con cocina antes de corregir, y
 falta poner la unidad **pegada al campo** de la hoja de conteo, donde hoy aparece en gris a
 tres columnas de distancia.
+
+---
+
+## 22. Las recepciones atrasadas y el costo que nunca se guardaba (v7.29)
+
+**01-oct-2026.** Dirección: *"ayúdame a recibir completos esos pedidos, no quiero tener
+recepciones pendientes ahorita… siempre y cuando no se haya pedido ayer, porque eso realmente
+no se ha entregado."*
+
+### 22.1 El hallazgo que lo motivó
+
+Al revisar el primer mes de pesajes apareció que **el inventario no podía cuadrar**: en 19 días
+el consumo por recetas fue $78,901 contra $50,048 de compras capturadas. La diferencia, $28,853,
+era casi idéntica al valor del inventario negativo (−$25,255). No era coincidencia: el faltante
+de compras *era* el negativo.
+
+La causa no fue la que supuse primero. Escribí que "todo lo fresco nunca entra" y dirección lo
+corrigió: queso panela, claras, res y arrachera sí se compran y sí se recibieron durante meses.
+El dato real es otro, y tiene fecha:
+
+| Mes | Líneas de Botello | Recibidas | % |
+|---|---|---|---|
+| abr–jun | 833 | 0 | 0% |
+| jul | 281 | 60 | 21% |
+| **ago** | **273** | **229** | **84%** |
+| **sep** | **221** | **25** | **11%** |
+
+**Agosto funcionó.** Pero la primera lectura de ese cuadro —"se dejó de usar"— era falsa, y
+dirección la corrigió en el acto: *"¿entonces realmente sí capturaron la recepción y fue error
+nuestro?"*. Al verificarlo:
+
+| Mes | Recepciones capturadas por sucursal | Sin llegar a inventario |
+|---|---|---|
+| abr–jun | 108 | 108 |
+| jul | 53 | 49 |
+| **ago** | **42** | **0** |
+| **sep** | **35** | **1** |
+
+Desde agosto, **77 de 78 recepciones capturadas movieron inventario**. El sistema no se tragó
+nada. (Las de abril a junio son reales pero nacieron antes de v7.2, cuando la entrada automática
+al inventario no existía.)
+
+Y sucursal recibió **todos los pedidos, de todos los proveedores**, cada vez. Lo que nunca se
+abrió fue **una pestaña**:
+
+| Pedido | Botello | Walmart | Meli | Pollo | Almacén | Office Max |
+|---|---|---|---|---|---|---|
+| 31-ago | **nunca** | ✓ | ✓ | ✓ | | |
+| 04-sep | **nunca** | ✓ | ✓ | ✓ | ✓ | |
+| 07-sep | ✓ | ✓ | ✓ | ✓ | | ✓ |
+| 11-sep | **nunca** | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 17-sep | **nunca** | ✓ | ✓ | ✓ | ✓ | |
+| 21-sep | **nunca** | ✓ | ✓ | ✓ | | |
+| 25-sep | **nunca** | ✓ | ✓ | ✓ | ✓ | |
+
+Un solo proveedor —el de más líneas, 24 a 42 por pedido, y el que trae lo fresco— y Yerina una
+vez. Quien recibe estaba haciendo el trabajo completo.
+
+La pregunta útil no es "¿por qué dejaron de recibir?" sino **"¿por qué esa pestaña?"**. Esa la
+contesta la operación, no la base de datos.
+
+### 22.2 Qué se capturó
+
+Siete pedidos, del 31-ago al 25-sep. Los del 29 y 30-sep se dejaron pendientes a petición de
+dirección porque la mercancía todavía no llegaba — recibir lo que no ha llegado habría sido
+exactamente el inventario ficticio que v7.24 vino a evitar.
+
+| | Líneas | Monto |
+|---|---|---|
+| A inventario | 182 | $38,012 |
+| A gastos operativos | 27 | $2,826 |
+| Sin cantidad (pedidas en 0) | 2 | — |
+
+Se replicó `handleRecibir` exactamente: cantidad en unidad base (`cantidad × contenido`), costo
+por unidad base (`costo_pres / contenido`), los insumos `tipo_control = 'gasto'` a
+`gastos_operativos` y no al inventario, y el promedio ponderado con su guarda —
+`existencia > 0 AND costo_promedio > 0` o manda el costo entrante. Esa guarda importaba más que
+de costumbre: 53 insumos recibieron entrada y muchos venían en negativo, donde ponderar habría
+dado un costo sin sentido.
+
+Los movimientos se fecharon con la fecha del pedido, no con la de captura, para que la compra
+caiga en el mes en que de verdad ocurrió.
+
+Resultado: negativos de **64 a 31**, valor del negativo de **−$25,255 a −$12,849**.
+
+Los 31 que quedan se parten en dos: los que **nunca han entrado** (hielo, tortillas de nopal,
+agua — el hueco de los 22 insumos que no existen en ningún pedido) y los que **se reciben pero
+no alcanzan**, que es el residuo normal que resuelve un conteo físico.
+
+### 22.3 El bug que apareció de paso
+
+Al escribir `capturado_por = 'direccion'` el constraint lo rechazó. Sólo admitía 'proveedor',
+'compras' y 'sistema'. Pero `handleRecibir` escribe:
+
+```js
+if(cu>0){upd.costo_real=cu;upd.capturado_por="sucursal";upd.fecha_captura=...}
+await sbPatch("pedido_detalle",item.pedido_detalle_id,upd);
+```
+
+**Cada recepción con precio capturado violaba el constraint y fallaba.** `sbPatch` devuelve
+`r.ok` y nadie lo revisa: fallaba en silencio, desde v7.23.
+
+Duró porque el síntoma no se veía donde se buscaba. El costo capturado SÍ llegaba al inventario
+—`entradaSucursalDB` lo recibe por memoria en la misma llamada— así que el valor del inventario
+quedaba bien. Lo que nunca quedaba era el registro en el pedido: `costo_real` vacío o en 0. El
+histórico de compras quedaba ciego justo para lo que se pidió la función: comparar precio de
+referencia contra precio de factura.
+
+Se extendió el constraint en lugar de cambiar el código a 'sistema'. La sucursal **es** quien
+captura ese precio, y esa procedencia distingue el precio que vio quien recibió la mercancía del
+que puso compras desde la oficina; mandar 'sistema' habría hecho pasar la escritura borrando el
+dato de quién fue.
+
+### 22.4 Lo que esto deja dicho
+
+Tres veces en este trabajo afirmé un fallo más grande del que había, y las tres veces el dato
+me corrigió: la alarma del conector **sí** estaba encendida (§21.2); las compras de fresco **sí**
+se capturaban; y las recepciones **sí** se hacían —todas, de todos los proveedores menos uno.
+
+El patrón de mi error es el mismo las tres veces: medí una parte y describí el todo. Conté las
+líneas de Botello y escribí "el proceso se dejó de hacer", sin mirar las otras cinco pestañas que
+habrían desmentido la frase en la misma consulta. Decir "se dejó de usar" es además una acusación
+sobre personas, y eso pide más evidencia que una cifra agregada, no menos.
+
+La regla que queda: antes de concluir que algo no se hace, buscar dónde **sí** se hizo. Si existe
+un mes, un proveedor o un día que funcionó, el problema no es el sistema ni la disciplina general
+— es algo mucho más específico, y el arreglo también.
+
+### 22.5 Pendiente
+
+- Los 5 pedidos del 29 y 30-sep ($23,422), cuando llegue la mercancía.
+- Los **22 insumos que no existen en ningún pedido** ($11,247/mes). Hielo, tortillas de nopal y
+  agua son $8,442 de eso. Mientras no entren por algún lado, el inventario no puede cuadrar.
+- Los 7 tamaños de paquete con `contenido = 1` ($266,692 inflados).
+- v7.28 sigue sin instalarse en la PC: 0 latidos, 0 ventas `api_v2`.
+
+---
+
+## 23. Un paquete que traía un gramo (v7.30)
+
+**03-oct-2026.** Dirección, con capturas del inventario: *"veo estos inventarios que están mal y
+no hace ningún sentido"*. Orégano: 600 g a **$85.00 el gramo** = $51,000.
+
+### 23.1 No faltaban los tamaños
+
+Durante tres días pedí los tamaños de paquete de siete insumos. Estaban en la base.
+
+En tres casos la presentación correcta **ya existía y estaba desactivada**, con la rota activa
+al lado:
+
+| Insumo | Correcta (inactiva) | Activa |
+|---|---|---|
+| OREGANO | `ABA-024` · kg · **1000** · $85 | `ABA-096` · pz · **1** · $85 |
+| JAMAICA | `VER-025` · kg · **1000** · $190 | `ABA-093` · pz · **1** · $190 |
+| GUAYABA | `FRU-016` · kg · **1000** · $32 | `FRU-024` · kg · **1** · $30 |
+
+Otros dos se deducían del propio renglón: `CHILE MORITA` se compra en **kg** con contenido 1, y
+`ESENCIA AZAHAR` se llama literalmente **"ESENCIA AZAHAR 120ML"**. Sólo dos necesitaban a una
+persona frente al envase — y los dos ya traían la nota *"Verificar presentación"* escrita por
+alguien antes.
+
+Cinco de siete se podían resolver sin preguntar nada. Preguntar es barato pero no gratis: pedí
+tres veces un dato que estaba a una consulta de distancia.
+
+### 23.2 Dónde nacen
+
+`saveNew` crea el insumo con `unidad_base = unidad de compra` y `contenido = 1`. Eso es
+**correcto**: un kilo trae un kilo. Su propio comentario dice qué pasa después:
+
+```js
+// si es una presentación de un insumo existente, se re-apunta después con Editar.
+```
+
+Al re-apuntar esa presentación a un insumo medido en **gramos**, el contenido se queda en 1 y el
+sistema cree que el paquete trae un gramo. Por eso la guarda vive en `saveEdit`: es el punto
+exacto donde el dato se vuelve falso.
+
+### 23.3 Corregir el catálogo no basta
+
+Lección repetida de agosto (ISO PROTEIN CHOCOLATE, §9): `costoInsumo` toma
+`inventario_sucursal.costo_promedio` **sin condiciones**, y sólo cae al catálogo cuando no hay
+promedio. Arreglar `contenido` no mueve un peso de lo que se ve en pantalla.
+
+Cada corrección es un **par**: `catalogo.contenido` y `inventario_sucursal.costo_promedio`. El
+costo se dividió entre el contenido real en vez de reponerlo desde el catálogo, para conservar el
+precio que de verdad se pagó — jamaica traía $140 con referencia $190.
+
+| Insumo | Existencia | Antes | Ahora |
+|---|---|---|---|
+| OREGANO | 600 g | $51,000 | $51 |
+| JAMAICA | 345 g | $48,300 | $48 |
+| PASTA DE CACAHUATE | 610 g | $45,750 | $89.73 |
+| CHILE MORITA | 464.99 g | $44,174 | $44 |
+| MANTEQUILLA AEROSOL | 571.97 ml | $34,318 | $201.85 |
+| ESENCIA AZAHAR | 500 ml | $29,500 | $246 |
+| GUAYABA | 390 g | $13,650 | $14 |
+
+Inventario total: **$372,561 → $112,094**.
+
+### 23.4 La guarda
+
+Tres veces el mismo error en dos meses — ISO PROTEIN CHOCOLATE ($1,300,398), las unidades del
+conteo del 11-sep, y esto ($260,000) — justifica dejar de confiar en la atención de quien
+captura. `avisoContenido(unidadBase, unidadCompra, contenido, precio)` atrapa dos formas:
+
+1. Se compra en `kg`/`lt`, se mide en `g`/`ml`, y el contenido es menor a 100: falta el factor
+   1000. El aviso **propone el número**: *"¿no debería ser 1000 g?"*.
+2. El costo por unidad base pasa de $5: $5 el gramo son $5,000 el kilo. No hay insumo de cocina
+   ahí. El aviso dice *"cada g costaría $85.00 ($85,000.00 por kg)"*.
+
+Aparece **mientras se escribe** en el formulario, y vuelve a aparecer como confirmación al
+guardar en los dos caminos que escriben `contenido`. **No bloquea**: un contenido raro puede ser
+legítimo (una pieza que pesa 1 g), y una guarda que impide guardar se vuelve un estorbo que la
+gente aprende a esquivar — y entonces falla el día que tiene razón.
+
+Las 30 verificaciones incluyen los siete casos reales de octubre y el de agosto, los mismos ya
+corregidos, y once presentaciones legítimas del catálogo real (galón de claras de 3.8 lt, manojo
+de perejil de 80 g, paquete de 200 empaques) que **no** deben disparar nada. Esa segunda mitad
+importa tanto como la primera: una guarda ruidosa se ignora.
+
+### 23.5 Pendiente
+
+`ZARZAMORAS` (`FRU-004`, pz, contenido 1, $80) sigue rota a propósito: hoy tiene existencia 0, no
+infla nada, y nadie ha podido decir qué trae el paquete. La guarda avisará en cuanto se toque.
+
+---
+
+## 24. La unidad pegada al campo (v7.30)
+
+**03-oct-2026.** Dirección: *"mañana haremos ya el conteo de inventario para ver realmente lo que
+tenemos y cómo está funcionando"*.
+
+El conteo del 11-sep metió **$1,277,491** de inventario inexistente. Si mañana se cuenta con la
+misma pantalla, el mismo error vuelve a caber. Esto se arregló antes del conteo, no después.
+
+### 24.1 Por qué no fue descuido
+
+La unidad **sí estaba en pantalla**. En letra chica gris, junto al NOMBRE, tres columnas a la
+izquierda del cuadrito donde se teclea. Con una báscula en la mano y 183 renglones por capturar,
+nadie mira allá.
+
+```
+ENELDO  kg                     [    1300    ]        ← la unidad está aquí…
+   ↑                                  ↑                 …y el cursor acá
+```
+
+Pesaron 1,300 **gramos** y escribieron 1300 donde se miden kilos. Lo mismo con 3,800 ml de salsa
+y 4,300 g de harina. Culpar a quien capturó no habría evitado la repetición; mover la unidad sí.
+
+### 24.2 Tres momentos
+
+| Cuándo | Qué hace |
+|---|---|
+| Al teclear | La unidad va **pegada al campo**. El renglón se pinta en ámbar si el físico es ≥100× el teórico. |
+| Al revisar | *"¿1,300 kg? El sistema esperaba 1.3 kg"* — el número esperado, en la misma unidad. |
+| Al cerrar | Los nombra uno por uno y pide confirmación explícita, con la causa probable. |
+
+El umbral es **100×** y no 1000× para atrapar también medio orden de magnitud, y exige teórico
+positivo porque contra cero todo cociente es infinito.
+
+Como las demás guardas de este sistema, **no bloquea**. Un conteo 100× mayor puede ser legítimo
+(una entrega grande que nunca se registró). Una guarda que impide guardar se vuelve un estorbo
+que la gente aprende a esquivar, y entonces falla el día que tiene razón.
+
+### 24.3 Qué NO resuelve
+
+La guarda atrapa el error de magnitud. No atrapa dos cosas que mañana siguen presentes:
+
+- **Los 22 insumos que no entran por ningún lado** (hielo, tortillas de nopal, agua: $8,442/mes).
+  Contarlos registra un SOBRANTE que reduce la merma del mes — y no es merma recuperada, es una
+  compra que nunca se capturó. Conviene dejarlos en blanco.
+- **Las 25 preparaciones sin una sola producción registrada.** Aparecen en la hoja desde v7.25 y
+  su teórico es cero. Contar tres litros de aderezo mete un sobrante del mismo tipo.
+
+Las 15 verificaciones usan los números reales del 11-sep: 1,300 kg de eneldo sobre 1.3, y 3,800
+lt de salsa sobre 3.8. Incluyen que un faltante normal **no** dispare nada, que cancelar no
+escriba un solo movimiento, y que al corregir las cantidades el conteo sí cierre.
