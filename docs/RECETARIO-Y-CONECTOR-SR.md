@@ -1880,3 +1880,92 @@ un mes, un proveedor o un día que funcionó, el problema no es el sistema ni la
   agua son $8,442 de eso. Mientras no entren por algún lado, el inventario no puede cuadrar.
 - Los 7 tamaños de paquete con `contenido = 1` ($266,692 inflados).
 - v7.28 sigue sin instalarse en la PC: 0 latidos, 0 ventas `api_v2`.
+
+---
+
+## 23. Un paquete que traía un gramo (v7.30)
+
+**03-oct-2026.** Dirección, con capturas del inventario: *"veo estos inventarios que están mal y
+no hace ningún sentido"*. Orégano: 600 g a **$85.00 el gramo** = $51,000.
+
+### 23.1 No faltaban los tamaños
+
+Durante tres días pedí los tamaños de paquete de siete insumos. Estaban en la base.
+
+En tres casos la presentación correcta **ya existía y estaba desactivada**, con la rota activa
+al lado:
+
+| Insumo | Correcta (inactiva) | Activa |
+|---|---|---|
+| OREGANO | `ABA-024` · kg · **1000** · $85 | `ABA-096` · pz · **1** · $85 |
+| JAMAICA | `VER-025` · kg · **1000** · $190 | `ABA-093` · pz · **1** · $190 |
+| GUAYABA | `FRU-016` · kg · **1000** · $32 | `FRU-024` · kg · **1** · $30 |
+
+Otros dos se deducían del propio renglón: `CHILE MORITA` se compra en **kg** con contenido 1, y
+`ESENCIA AZAHAR` se llama literalmente **"ESENCIA AZAHAR 120ML"**. Sólo dos necesitaban a una
+persona frente al envase — y los dos ya traían la nota *"Verificar presentación"* escrita por
+alguien antes.
+
+Cinco de siete se podían resolver sin preguntar nada. Preguntar es barato pero no gratis: pedí
+tres veces un dato que estaba a una consulta de distancia.
+
+### 23.2 Dónde nacen
+
+`saveNew` crea el insumo con `unidad_base = unidad de compra` y `contenido = 1`. Eso es
+**correcto**: un kilo trae un kilo. Su propio comentario dice qué pasa después:
+
+```js
+// si es una presentación de un insumo existente, se re-apunta después con Editar.
+```
+
+Al re-apuntar esa presentación a un insumo medido en **gramos**, el contenido se queda en 1 y el
+sistema cree que el paquete trae un gramo. Por eso la guarda vive en `saveEdit`: es el punto
+exacto donde el dato se vuelve falso.
+
+### 23.3 Corregir el catálogo no basta
+
+Lección repetida de agosto (ISO PROTEIN CHOCOLATE, §9): `costoInsumo` toma
+`inventario_sucursal.costo_promedio` **sin condiciones**, y sólo cae al catálogo cuando no hay
+promedio. Arreglar `contenido` no mueve un peso de lo que se ve en pantalla.
+
+Cada corrección es un **par**: `catalogo.contenido` y `inventario_sucursal.costo_promedio`. El
+costo se dividió entre el contenido real en vez de reponerlo desde el catálogo, para conservar el
+precio que de verdad se pagó — jamaica traía $140 con referencia $190.
+
+| Insumo | Existencia | Antes | Ahora |
+|---|---|---|---|
+| OREGANO | 600 g | $51,000 | $51 |
+| JAMAICA | 345 g | $48,300 | $48 |
+| PASTA DE CACAHUATE | 610 g | $45,750 | $89.73 |
+| CHILE MORITA | 464.99 g | $44,174 | $44 |
+| MANTEQUILLA AEROSOL | 571.97 ml | $34,318 | $201.85 |
+| ESENCIA AZAHAR | 500 ml | $29,500 | $246 |
+| GUAYABA | 390 g | $13,650 | $14 |
+
+Inventario total: **$372,561 → $112,094**.
+
+### 23.4 La guarda
+
+Tres veces el mismo error en dos meses — ISO PROTEIN CHOCOLATE ($1,300,398), las unidades del
+conteo del 11-sep, y esto ($260,000) — justifica dejar de confiar en la atención de quien
+captura. `avisoContenido(unidadBase, unidadCompra, contenido, precio)` atrapa dos formas:
+
+1. Se compra en `kg`/`lt`, se mide en `g`/`ml`, y el contenido es menor a 100: falta el factor
+   1000. El aviso **propone el número**: *"¿no debería ser 1000 g?"*.
+2. El costo por unidad base pasa de $5: $5 el gramo son $5,000 el kilo. No hay insumo de cocina
+   ahí. El aviso dice *"cada g costaría $85.00 ($85,000.00 por kg)"*.
+
+Aparece **mientras se escribe** en el formulario, y vuelve a aparecer como confirmación al
+guardar en los dos caminos que escriben `contenido`. **No bloquea**: un contenido raro puede ser
+legítimo (una pieza que pesa 1 g), y una guarda que impide guardar se vuelve un estorbo que la
+gente aprende a esquivar — y entonces falla el día que tiene razón.
+
+Las 30 verificaciones incluyen los siete casos reales de octubre y el de agosto, los mismos ya
+corregidos, y once presentaciones legítimas del catálogo real (galón de claras de 3.8 lt, manojo
+de perejil de 80 g, paquete de 200 empaques) que **no** deben disparar nada. Esa segunda mitad
+importa tanto como la primera: una guarda ruidosa se ignora.
+
+### 23.5 Pendiente
+
+`ZARZAMORAS` (`FRU-004`, pz, contenido 1, $80) sigue rota a propósito: hoy tiene existencia 0, no
+infla nada, y nadie ha podido decir qué trae el paquete. La guarda avisará en cuanto se toque.
