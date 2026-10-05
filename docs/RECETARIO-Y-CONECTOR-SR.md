@@ -2239,3 +2239,60 @@ comprueba que el movimiento quede en $0.035/g, que la nota lo registre, que el p
 el pedido guarde el precio real.
 
 Suite completa: **356 verificaciones en 16 archivos**.
+
+## 28. El botón existía y nadie podía usarlo (v7.32c)
+
+**05-oct-2026, el mismo día.** Horas después de subir v7.32, dirección mandó una foto del celular
+con el aviso rojo en pantalla: *"sigue sin permitir"*.
+
+El botón de escape **sí existía**. La prueba de v7.32 lo verificaba y pasaba. Estaba en el DOM,
+estaba habilitado, funcionaba.
+
+Estaba al final de la pantalla, después de la tabla.
+
+### 28.1 La distancia
+
+En la recepción de un pedido de Botello hay treinta y tantos renglones de artículos. El aviso rojo
+se pinta **arriba** de la tabla; los botones van **abajo**. En una pantalla de celular eso son
+varias pantallas de distancia entre el mensaje que dice *"puedes recibir con el precio de
+catálogo"* y el botón que lo hace. Y el mensaje no decía dónde estaba.
+
+Peor: al apretar el verde, el aviso aparece fuera de la vista. Desde abajo, el botón parecía no
+hacer nada.
+
+Así que cocina leyó el aviso —o ni lo vio—, no encontró ninguna salida junto a él, y volvió a
+apretar el verde. Que es exactamente lo que el aviso vuelve a rechazar.
+
+### 28.2 El arreglo
+
+- El botón se mueve **dentro de la caja del aviso**, debajo del párrafo que lo explica. Uno solo:
+  dos botones iguales en lugares distintos confunden más de lo que ayudan.
+- Al aparecer el aviso, la pantalla **se desplaza hasta él**. Sin eso, apretar el verde desde abajo
+  no produce ningún cambio visible.
+- La fila de botones de abajo ahora envuelve en pantallas angostas.
+
+### 28.3 Lo que no vi, y por qué
+
+Mi prueba de v7.32 preguntaba `¿existe el botón?` y la respuesta era sí. La pregunta correcta era
+**`¿puede alguien encontrarlo desde donde está parado?`**, y esa no se la hice.
+
+Es la misma clase de error que el simulador ya me había enseñado en v7.31 —ahí Tailwind viene en
+blanco, así que medir geometría no sirve— pero aquí no hacía falta medir nada: bastaba notar que el
+aviso y su salida viven en extremos opuestos de una pantalla larga. Lo tenía en el código, delante.
+
+Las dos verificaciones nuevas no preguntan si el botón existe. Preguntan **dónde**: que esté dentro
+de `#aviso-recep` y que sea el único. Se comprobó que reprueban la versión anterior (25/26).
+
+### 28.4 De paso: dos textos que quedaron mintiendo
+
+v7.32b hizo que la app corrija sola el costo cuando llega la factura, pero dos avisos seguían
+diciendo lo contrario:
+
+- *"la entrada tomaría un costo estimado que después ya nada corrige"* — falso desde v7.32b.
+- *"queda marcada para que compras capture el precio real después"* — incompleto: ya no sólo queda
+  marcada, se corrige sola.
+
+Ahora dicen lo que de verdad pasa, sin vender de más: el costo se corrige solo, **pero mientras
+tanto el de las recetas sale aproximado**.
+
+Suite: **358 verificaciones en 16 archivos**.

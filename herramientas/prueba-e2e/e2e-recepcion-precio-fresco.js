@@ -146,6 +146,20 @@ const check=(n,c,e)=>{results.push({n,ok:!!c});console.log((c?"  ✓ ":"  ✗ ")
   check("4. la salida explica qué implica, no sólo que existe",
         /entra hoy al inventario con un costo aproximado/.test(await page.locator("body").innerText()));
 
+  // v7.32c — Dirección, el mismo día del merge: "sigue sin permitir", con foto
+  // del aviso rojo en pantalla. El botón SÍ existía: vivía al final de la
+  // pantalla, después de la tabla. En un celular eso son treinta y tantos
+  // renglones entre el mensaje que dice "puedes recibir con el precio de
+  // catálogo" y el botón que lo hace. Cocina leyó el aviso, no vio ninguna
+  // salida junto a él, y volvió a apretar el verde.
+  //
+  // Que el botón exista en el DOM no es que la gente pueda usarlo. Estas dos
+  // verificaciones son sobre dónde está, no sobre si está.
+  check("4b. la salida vive DENTRO del aviso, no al final de la pantalla",
+        await page.locator("#aviso-recep").getByRole("button",{name:"Recibir con precio de catálogo"}).count()===1);
+  check("4c. y es la única: dos botones iguales en lugares distintos confunden",
+        await salida.count()===1,await salida.count());
+
   await salida.click();
   await page.waitForTimeout(1200);
   check("5. al usarla, la recepción SÍ se crea",DB.recepciones.length===1,DB.recepciones.length);
