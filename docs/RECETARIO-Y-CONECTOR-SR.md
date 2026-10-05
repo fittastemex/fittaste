@@ -2119,3 +2119,56 @@ hacer la app lenta, y meses después.
 Lo que **no** cubre: el aspecto. El simulador deja Tailwind en blanco, así que medir alturas de
 toque o desbordes ahí daría lo mismo con el encabezado viejo. Se verifica el árbol (qué existe en
 el DOM y cuándo) y las clases del punto de quiebre; el render se revisa en un navegador de verdad.
+
+---
+
+## 26. El muro de la recepción (v7.32)
+
+**05-oct-2026.** Dirección: *"cocina me dice que no les permite hacer la recepción"*. La pantalla
+decía **"Falta el costo unitario de 35 artículos"**. Los 35 precios existían: Botello los había
+capturado desde su liga esa misma mañana, a las **09:15**.
+
+### 26.1 La cadena
+
+1. La app baja las 27 tablas **una vez al abrir** y no vuelve a mirar.
+2. El proveedor captura sus precios desde su liga **a cualquier hora**.
+3. La sucursal tenía la app abierta de antes: su copia traía `costo_real = 0`.
+4. Las casillas salieron vacías aunque la base ya tenía los precios.
+5. El bloqueo de v7.23 se negó a guardar. **No se pudo recibir.**
+
+El código de precarga estaba bien —lee `d.costo_real`— pero leía una copia vieja. Ahora el
+detalle se relee **al abrir la recepción**: es el único momento en que ese dato tiene que estar
+fresco, y es barato (una consulta por pedido y proveedor). Cuando la relectura trae precios que la
+copia local no tenía, lo dice, porque si no parece que las casillas se llenaron solas.
+
+### 26.2 El muro tenía que caer, y eso es una rectificación
+
+v7.23 bloqueaba para evitar que entrara mercancía con un costo estimado que nada corregiría
+después. El razonamiento no era malo. La consecuencia sí:
+
+| | |
+|---|---|
+| Bloqueo en producción | 22-ago, 19:54 UTC |
+| Última recepción de Botello completa | captura del 31-ago |
+| Pedidos sin recibir del 31-ago al 25-sep | **7, por $62,551** |
+| Negativos acumulados | 64 |
+
+No afirmo que el bloqueo haya sido la causa única — los precios de Botello venían del proveedor,
+no de la sucursal, así que el muro no debería haberse activado en su flujo normal. Lo que sí es
+cierto es que **un muro sin salida convierte cualquier tropiezo en una parálisis**, y que durante
+seis semanas nadie pudo pasar de ahí.
+
+Un costo aproximado es malo. No registrar la entrada es peor, y además no se nota hasta semanas
+después: el inventario simplemente se va a negativo en silencio.
+
+Ahora avisa igual, pero ofrece una salida **explícita y de un solo uso**: otro botón, que dice con
+todas sus letras que la mercancía entra con precio de catálogo. Las líneas así recibidas dejan
+`costo_real` vacío, así que siguen siendo identificables como "precio nunca capturado".
+
+### 26.3 El patrón
+
+Es la tercera guarda de este sistema que se revisa por lo mismo. Las que funcionan —la de
+magnitud en recetas, la del contenido, la del conteo— **avisan y dejan pasar**. La única que
+bloqueaba es la única que causó daño.
+
+Una guarda que impide guardar no elimina el error: lo cambia por un hueco, y un hueco no se ve.
