@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.31";
+const V="7.32";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -1935,35 +1935,66 @@ function RecepcionView({pedidos,pedidoDetalle,proveedores,provEstatus,catalogo,r
   // pedirlo a mano sería inventarlo.
   const costeaElSistema=(provId)=>proveedores.find(p=>p.id===provId)?.tipo_flujo==="Almacen interno";
 
-  const startRecibir=(pedId,provId,items)=>{
-    setRecibiendo({pedId,provId});setAvisoRecep(null);
+  // v7.32: la app baja todo UNA vez al abrir y no vuelve a mirar. El proveedor
+  // captura sus precios desde su liga a cualquier hora, así que el navegador de
+  // la sucursal puede tener una copia anterior a esa captura — y entonces las
+  // casillas salen vacías aunque los precios SÍ existan en la base.
+  //
+  // Pasó el 05-oct: Botello mandó 34 precios a las 09:15, cocina tenía la app
+  // abierta de antes, vio 35 casillas en blanco y el bloqueo no la dejó recibir.
+  // Por eso el detalle se vuelve a leer justo al abrir la recepción: es el único
+  // momento en que ese dato tiene que estar fresco.
+  const [cargandoRecep,setCargandoRecep]=useState(false);
+  // Se enciende sólo cuando el aviso de costos faltantes ya se mostró: la
+  // salida nunca aparece antes de que alguien haya visto qué falta.
+  const [ofreceEstimado,setOfreceEstimado]=useState(false);
+  const startRecibir=async(pedId,provId,items)=>{
+    setRecibiendo({pedId,provId});setAvisoRecep(null);setOfreceEstimado(false);setCargandoRecep(true);
+    const frescos=await sbGet("pedido_detalle",`pedido_id=eq.${pedId}&proveedor_id=eq.${provId}`);
+    const porId={};(frescos||[]).forEach(d=>{porId[d.id]=d;});
     const c={};const n={};const k={};
-    items.forEach(d=>{
+    items.forEach(d0=>{
+      const d={...d0,...(porId[d0.id]||{})}; // lo de la base manda sobre la copia local
       c[d.id]=d.cantidad;n[d.id]="";
       // Se propone SÓLO el precio ya capturado para este pedido. El de catálogo
       // se muestra como referencia debajo de la casilla, pero no se precarga:
-      // precargarlo permitiría pasar de largo y recibir con un estimado, que es
-      // justo lo que se quiere evitar. La casilla en blanco obliga a mirar la
-      // factura.
+      // precargarlo permitiría pasar de largo y recibir con un estimado sin
+      // darse cuenta. La casilla en blanco obliga a mirar la factura.
       k[d.id]=d.costo_real!=null&&parseFloat(d.costo_real)>0?String(d.costo_real):"";
     });
-    setCantRecibida(c);setNotasRecep(n);setCostoRecep(k);
+    setCantRecibida(c);setNotasRecep(n);setCostoRecep(k);setCargandoRecep(false);
+    // Si la recarga trajo precios que la copia local no tenía, decirlo: si no,
+    // parece que las casillas se llenaron solas.
+    const traidos=items.filter(d0=>!(parseFloat(d0.costo_real)>0)&&parseFloat(porId[d0.id]?.costo_real)>0).length;
+    if(traidos>0)setAvisoRecep(`Se actualizaron ${traidos} precio${traidos>1?"s":""} que el proveedor capturó después de que abriste la app.`);
   };
 
-  const confirmarRecepcion=async()=>{
+  const confirmarRecepcion=async(forzarEstimado=false)=>{
     if(!recibiendo||saving)return;
     const{pedId,provId}=recibiendo;
     const items=pedidoDetalle.filter(d=>d.pedido_id===pedId&&d.proveedor_id===provId);
-    // Sin costo no se recibe: una entrada sin precio entra al inventario con un
-    // costo inventado y ya nada lo corrige.
-    if(!costeaElSistema(provId)){
+    // v7.23 pedía el costo y NO dejaba guardar sin él: una entrada sin precio
+    // entra al inventario con un costo estimado y ya nada lo corrige.
+    //
+    // v7.32 lo convierte en aviso con salida, porque el muro salió más caro que
+    // el problema que evitaba. Entre el 31-ago y el 25-sep quedaron 7 pedidos
+    // sin recibir ($62,551) y el inventario acumuló 64 negativos. Un costo
+    // aproximado es malo; no registrar la entrada es peor, y además se descubre
+    // semanas después.
+    //
+    // La salida es explícita y de un solo uso: hay que apretar otro botón, que
+    // dice con todas sus letras que entra con precio de catálogo. Las líneas así
+    // recibidas dejan `costo_real` vacío, así que siguen siendo identificables
+    // como "precio nunca capturado" y compras puede llenarlo después.
+    if(!costeaElSistema(provId)&&!forzarEstimado){
       const sinCosto=items.filter(d=>(cantRecibida[d.id]||0)>0&&!(parseFloat(costoRecep[d.id])>0));
       if(sinCosto.length){
         setAvisoRecep(`Falta el costo unitario de ${sinCosto.length} artículo${sinCosto.length>1?"s":""}: ${sinCosto.map(d=>(catalogo.find(c=>c.id===d.catalogo_id)||{}).articulo||"?").join(", ")}. Es el precio de la factura, sin IVA, por unidad de compra.`);
+        setOfreceEstimado(true);
         return;
       }
     }
-    setAvisoRecep(null);setSaving(true);
+    setAvisoRecep(null);setOfreceEstimado(false);setSaving(true);
     const costos={};items.forEach(d=>{const v=parseFloat(costoRecep[d.id]);if(v>0)costos[d.id]=v;});
     const hayFaltante=items.some(d=>(cantRecibida[d.id]||0)!==d.cantidad);
     const estatus=hayFaltante?"con_faltantes":"completo";
@@ -1986,7 +2017,15 @@ function RecepcionView({pedidos,pedidoDetalle,proveedores,provEstatus,catalogo,r
         {todoOk&&<Badge v="success">Todo coincide</Badge>}
         {hayFaltante&&<Badge v="warning">Hay diferencias</Badge>}
       </div>
-      {avisoRecep&&<div className="bg-red-50 border-2 border-red-300 rounded-xl p-3 mb-3 text-sm text-red-800">⚠ {avisoRecep}</div>}
+      {cargandoRecep&&<div className="bg-gray-50 border border-gray-200 rounded-xl p-3 mb-3 text-sm text-gray-600">Buscando los precios que el proveedor haya capturado…</div>}
+      {avisoRecep&&<div className={`border-2 rounded-xl p-3 mb-3 text-sm ${ofreceEstimado?"bg-red-50 border-red-300 text-red-800":"bg-sky-50 border-sky-300 text-sky-900"}`}>
+        <Icono n="alerta" size={14}/> {avisoRecep}
+        {ofreceEstimado&&<p className="mt-2 text-xs text-red-700">
+          Si no tienes la factura a la mano, puedes recibir con el <b>precio de catálogo</b>: la mercancía
+          entra hoy al inventario con un costo aproximado y queda marcada para que compras capture el
+          precio real después. Es preferible a no registrar la entrada.
+        </p>}
+      </div>}
       {!sistemaCostea&&<div className="bg-teal-50 border border-teal-200 rounded-xl p-3 mb-3 text-xs text-teal-800">Captura el <b>costo unitario de la factura</b> (sin IVA, por {items[0]&&(catalogo.find(c=>c.id===items[0].catalogo_id)||{}).unidad_clave||"unidad"} de compra) de cada artículo que estés recibiendo. Con ese precio entra al inventario y se recalcula el costo promedio: si se deja en blanco, la entrada tomaría un costo estimado que después ya nada corrige.</div>}
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden mb-4 overflow-x-auto"><table className="w-full text-sm"><thead className="bg-gray-50"><tr>
         {["Artículo","Esperado","Recibido","Costo unitario s/IVA","Importe","Nota"].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Esperado","Recibido"].includes(h)?"text-center":h==="Importe"?"text-right":"text-left"}`}>{h}</th>)}
@@ -2019,7 +2058,8 @@ function RecepcionView({pedidos,pedidoDetalle,proveedores,provEstatus,catalogo,r
         <span className="text-sm text-gray-600">{!sistemaCostea&&totalFactura>0&&<span>Total sin IVA de lo recibido: <b className="text-gray-800">{fmt(totalFactura)}</b></span>}</span>
         <div className="flex gap-2">
           <Btn onClick={()=>{const c={};items.forEach(d=>{c[d.id]=d.cantidad;});setCantRecibida(c);}} color="amber">Todo correcto</Btn>
-          <Btn onClick={confirmarRecepcion} disabled={saving} color="green">{saving?"Guardando...":hayFaltante?"Confirmar con faltantes":"Recepción completa ✓"}</Btn>
+          <Btn onClick={()=>confirmarRecepcion(false)} disabled={saving} color="green">{saving?"Guardando...":hayFaltante?"Confirmar con faltantes":"Recepción completa ✓"}</Btn>
+          {ofreceEstimado&&<Btn onClick={()=>confirmarRecepcion(true)} disabled={saving} color="amber">Recibir con precio de catálogo</Btn>}
         </div>
       </div>
     </div>);
