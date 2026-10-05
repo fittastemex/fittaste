@@ -129,15 +129,23 @@ const check=(n,c,e)=>{results.push({n,ok:!!c});console.log((c?"  ✓ ":"  ✗ ")
   check("3. muestra el precio de catálogo como referencia",
     await page.getByText(/catálogo/).first().isVisible());
 
-  // ---- 2) Sin costo NO se recibe ----
-  await page.getByRole("button",{name:/Recepción completa/}).click();
-  await page.waitForTimeout(600);
-  check("4. sin costo NO se creó la recepción",DB.recepciones.length===0,DB.recepciones.length);
-  check("5. sin costo NO entró nada al inventario",DB.inventario_sucursal.length===0,DB.inventario_sucursal);
-  const avisoVis=await page.getByText(/Falta el costo unitario/).isVisible().catch(()=>false);
-  check("6. avisa qué falta, en pantalla",avisoVis);
-  check("7. el aviso nombra el artículo",
-    avisoVis&&/POLLO KG/.test(await page.getByText(/Falta el costo unitario/).innerText()));
+  // ---- 2) Sin costo SÍ se recibe, y se avisa con qué precio entra (v7.33) ----
+  // Hasta v7.32c estas verificaciones decían lo contrario: "sin costo NO se
+  // creó la recepción". Era un muro, y dirección señaló por qué no podía
+  // quedarse: quien recibe NO PUEDE SABER si el proveedor ya cargó su precio,
+  // así que pedirle que lo decida es pedirle que adivine.
+  //
+  // Lo que sustituye al muro no es nada: es decir qué va a pasar antes de que
+  // pase. El aviso se pinta sin apretar ningún botón.
+  const cuerpo=await page.locator("body").innerText();
+  check("4. avisa que ese artículo entrará con el precio de catálogo",
+    /1 artículo entrará con el precio de catálogo/.test(cuerpo),cuerpo.slice(0,300));
+  check("5. y lo nombra, para que se pueda corregir si traían la factura",
+    /entrará con el precio de catálogo/.test(cuerpo)&&/POLLO KG/.test(cuerpo));
+  check("6. no hay segundo botón que encontrar para destrabarlo",
+    await page.getByRole("button",{name:"Recibir con precio de catálogo"}).count()===0);
+  // El aviso es informativo: aparece solo, antes de guardar nada.
+  check("7. y aparece ANTES de guardar, no después",DB.recepciones.length===0,DB.recepciones.length);
 
   // ---- 3) Un precio absurdo se marca (5x el de catálogo) ----
   await cajaCosto.fill("1300");   // el total de 10 kg, no el unitario
