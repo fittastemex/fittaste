@@ -2296,3 +2296,67 @@ Ahora dicen lo que de verdad pasa, sin vender de más: el costo se corrige solo,
 tanto el de las recetas sale aproximado**.
 
 Suite: **358 verificaciones en 16 archivos**.
+
+## 29. La pregunta que nadie podía contestar (v7.33)
+
+**05-oct-2026.** Dirección, después de ver el arreglo de v7.32c:
+
+> *"¿podemos mejor dejar que reciban sin poner precio? me gustaría que fuera automático: si no tiene
+> precio, se capture automático, porque **ellos no saben si el proveedor lo hizo**."*
+
+Esa última frase desarma las tres versiones anteriores de esta pantalla.
+
+### 29.1 Por qué la pregunta estaba mal planteada desde el principio
+
+Las tres versiones le pedían lo mismo a quien recibe la mercancía: *decide qué hacer con el precio
+que falta*. Pero quien está en la puerta con la báscula **no tiene cómo saber si el proveedor ya
+cargó su precio desde su liga**. Esa información vive en la base, no en la cocina.
+
+Si la única respuesta posible es apretar el botón que destraba, entonces **no es una pregunta**: es
+un trámite. Y los trámites que no deciden nada sólo producen dos cosas: demora y gente que aprende
+a apretar lo que sea para pasar.
+
+| Versión | Qué hacía | Qué costó |
+|---|---|---|
+| v7.23 | Bloqueaba sin salida | 7 pedidos sin recibir, $62,551, 64 negativos |
+| v7.32 | Avisaba + botón de escape | El botón vivía al final de la pantalla; nadie lo halló |
+| v7.32c | El botón dentro del aviso | Un trámite de dos pasos que no decide nada |
+| **v7.33** | **No pregunta** | — |
+
+### 29.2 Lo que hace ahora
+
+Un solo botón. Lo que no tenga precio capturado entra con el de catálogo, y se dice en tres
+momentos, ninguno de los cuales detiene a nadie:
+
+1. **En el renglón**: el campo vacío se marca en ámbar y dice `entra a $X (catálogo)`. Ya no en
+   rojo — rojo significaba falla, y esto no es una falla.
+2. **Antes de guardar**: una franja nombra los artículos que entrarán con el estimado.
+3. **Al guardar**: confirma cuáles fueron y aclara que **no hay nada que hacer**, porque el precio
+   real corrige solo.
+
+Cuando todos los precios están capturados, no aparece ninguno de los tres. Un aviso que sale
+siempre deja de leerse.
+
+### 29.3 Esto es defendible desde v7.32b, y no antes
+
+El muro de v7.23 protegía algo real: una entrada con costo estimado que **nada corregiría después**.
+Mientras eso fue cierto, quitarlo habría sido cambiar un problema visible por uno invisible.
+
+v7.32b lo cambió: ahora, cuando el precio real llega por cualquiera de los tres caminos, la app
+corrige el movimiento de esa recepción y el costo promedio. El estimado dejó de ser permanente.
+
+El orden importa y conviene decirlo: **primero se construyó la corrección automática, después se
+quitó el muro.** Al revés habría sido descuido.
+
+### 29.4 Lo que esto deja abierto
+
+Sin la recepción como punto de control, nada obliga a que alguien capture el precio real. El dato
+sigue ahí —esas líneas quedan con `costo_real` vacío— pero **no hay ninguna pantalla que las
+muestre**. Al corte de hoy son 7 líneas por $12,012 desde agosto.
+
+La red de seguridad tiene que mudarse de la recepción a compras: una lista de *entradas pendientes
+de precio real*. No se construyó en esta versión; queda anotado como lo que falta, no como algo
+resuelto.
+
+Suite: **358 verificaciones en 16 archivos**, incluidas 4 que antes afirmaban lo contrario y se
+reescribieron a propósito.

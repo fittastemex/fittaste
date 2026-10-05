@@ -133,36 +133,35 @@ const check=(n,c,e)=>{results.push({n,ok:!!c});console.log((c?"  ✓ ":"  ✗ ")
   await page.getByText("Fit Taste Roma").waitFor({timeout:20000});
 
   // ================= 1) EL MURO YA NO ES MURO =================
-  // Nadie ha capturado precios: es el caso que v7.23 bloqueaba en seco.
+  // Nadie ha capturado precios. v7.23 bloqueaba en seco; v7.32 pedía un segundo
+  // botón; v7.33 no pregunta nada, porque quien recibe NO PUEDE SABER si el
+  // proveedor ya cargó su precio. Se recibe de un golpe y se avisa.
   await entrarARecepcion();
+
+  const avisos=[];
+  page.on("dialog",d=>{avisos.push(d.message());d.dismiss().catch(()=>{});});
+
+  const cuerpo=await page.locator("body").innerText();
+  check("1. antes de guardar, dice qué va a pasar y con cuáles artículos",
+        /2 artículos entrarán con el precio de catálogo/.test(cuerpo)&&/JITOMATE/.test(cuerpo));
+  check("2. y lo plantea como camino normal, no como falla",
+        /Puedes recibir así/.test(cuerpo));
+
+  // La prueba de v7.32c verificaba DÓNDE estaba el botón de escape. Ya no hay
+  // botón de escape que encontrar: ese es el arreglo.
+  check("3. ya no hay segundo botón que apretar",
+        await page.getByRole("button",{name:"Recibir con precio de catálogo"}).count()===0);
+
   await page.getByRole("button",{name:/Recepción completa/}).click();
-  await page.waitForTimeout(600);
-  check("1. sin precios avisa cuáles faltan",
-        /Falta el costo unitario de 2/.test(await page.locator("body").innerText()));
-  check("2. y NO guarda nada todavía",DB.recepciones.length===0,DB.recepciones.length);
-
-  const salida=page.getByRole("button",{name:"Recibir con precio de catálogo"});
-  check("3. ofrece la salida explícita",await salida.count()===1);
-  check("4. la salida explica qué implica, no sólo que existe",
-        /entra hoy al inventario con un costo aproximado/.test(await page.locator("body").innerText()));
-
-  // v7.32c — Dirección, el mismo día del merge: "sigue sin permitir", con foto
-  // del aviso rojo en pantalla. El botón SÍ existía: vivía al final de la
-  // pantalla, después de la tabla. En un celular eso son treinta y tantos
-  // renglones entre el mensaje que dice "puedes recibir con el precio de
-  // catálogo" y el botón que lo hace. Cocina leyó el aviso, no vio ninguna
-  // salida junto a él, y volvió a apretar el verde.
-  //
-  // Que el botón exista en el DOM no es que la gente pueda usarlo. Estas dos
-  // verificaciones son sobre dónde está, no sobre si está.
-  check("4b. la salida vive DENTRO del aviso, no al final de la pantalla",
-        await page.locator("#aviso-recep").getByRole("button",{name:"Recibir con precio de catálogo"}).count()===1);
-  check("4c. y es la única: dos botones iguales en lugares distintos confunden",
-        await salida.count()===1,await salida.count());
-
-  await salida.click();
   await page.waitForTimeout(1200);
-  check("5. al usarla, la recepción SÍ se crea",DB.recepciones.length===1,DB.recepciones.length);
+  check("4. un solo botón basta: la recepción se crea al primer intento",
+        DB.recepciones.length===1,DB.recepciones.length);
+  check("4b. y avisa después cuáles entraron con el precio de catálogo",
+        avisos.some(m=>/2 artículos entraron con el precio de catálogo/.test(m)&&/JITOMATE/.test(m)),avisos.join(" | "));
+  check("4c. el aviso dice que no hay nada que hacer, porque se corrige solo",
+        avisos.some(m=>/corrige sola la entrada y el costo promedio/.test(m)));
+
+  check("5. nada quedó sin guardar",DB.recepciones.length===1,DB.recepciones.length);
   const movs=DB.movimientos_sucursal.filter(m=>m.tipo==="entrada_recepcion");
   check("6. y la mercancía entra al inventario",movs.length===2,movs.length);
   // 1 kg de jitomate a $60 el kg = $0.06 el gramo (el precio de catálogo).
@@ -210,9 +209,10 @@ const check=(n,c,e)=>{results.push({n,ok:!!c});console.log((c?"  ✓ ":"  ✗ ")
   check("12. y no con el de catálogo ($60 y $20)",
         !valores.includes("60")&&!valores.includes("20"),valores);
 
-  // Con precios, el camino normal pasa sin ofrecer la salida.
-  check("13. ya no ofrece la salida: no hace falta",
-        await page.getByRole("button",{name:"Recibir con precio de catálogo"}).count()===0);
+  // Con todos los precios capturados no hay nada que avisar: el renglón ámbar
+  // tiene que desaparecer, porque un aviso que sale siempre deja de leerse.
+  check("13. con precios completos no avisa nada",
+        !/entrarán con el precio de catálogo/.test(await page.locator("body").innerText()));
   await page.getByRole("button",{name:/Recepción completa/}).click();
   await page.waitForTimeout(1200);
   check("14. la recepción se crea al primer intento",DB.recepciones.length===1,DB.recepciones.length);
@@ -240,11 +240,9 @@ const check=(n,c,e)=>{results.push({n,ok:!!c});console.log((c?"  ✓ ":"  ✗ ")
   await page.getByRole("button",{name:"Ingresar"}).click();
   await page.getByText("Fit Taste Roma").waitFor({timeout:20000});
 
-  // Se recibe sin precios, usando la salida.
+  // Se recibe sin precios, de un solo golpe.
   await entrarARecepcion();
   await page.getByRole("button",{name:/Recepción completa/}).click();
-  await page.waitForTimeout(600);
-  await page.getByRole("button",{name:"Recibir con precio de catálogo"}).click();
   await page.waitForTimeout(1200);
   const movEst=DB.movimientos_sucursal.find(m=>m.insumo_id==="i-jit"&&m.tipo==="entrada_recepcion");
   check("17. entró con el estimado de catálogo ($0.06/g)",

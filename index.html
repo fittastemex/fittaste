@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.32c";
+const V="7.33";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -2020,9 +2020,8 @@ function RecepcionView({pedidos,pedidoDetalle,proveedores,provEstatus,catalogo,r
   const [cargandoRecep,setCargandoRecep]=useState(false);
   // Se enciende sólo cuando el aviso de costos faltantes ya se mostró: la
   // salida nunca aparece antes de que alguien haya visto qué falta.
-  const [ofreceEstimado,setOfreceEstimado]=useState(false);
   const startRecibir=async(pedId,provId,items)=>{
-    setRecibiendo({pedId,provId});setAvisoRecep(null);setOfreceEstimado(false);setCargandoRecep(true);
+    setRecibiendo({pedId,provId});setAvisoRecep(null);setCargandoRecep(true);
     const frescos=await sbGet("pedido_detalle",`pedido_id=eq.${pedId}&proveedor_id=eq.${provId}`);
     const porId={};(frescos||[]).forEach(d=>{porId[d.id]=d;});
     const c={};const n={};const k={};
@@ -2042,41 +2041,47 @@ function RecepcionView({pedidos,pedidoDetalle,proveedores,provEstatus,catalogo,r
     if(traidos>0)setAvisoRecep(`Se actualizaron ${traidos} precio${traidos>1?"s":""} que el proveedor capturó después de que abriste la app.`);
   };
 
-  const confirmarRecepcion=async(forzarEstimado=false)=>{
+  // Los artículos que van a entrar con el precio de catálogo porque nadie
+  // capturó el de la factura. Se usa para avisarlo ANTES de guardar y para
+  // confirmarlo después; nunca para impedir nada.
+  const lineasSinPrecio=(provId,items)=>
+    costeaElSistema(provId)?[]:items.filter(d=>(cantRecibida[d.id]||0)>0&&!(parseFloat(costoRecep[d.id])>0));
+
+  const confirmarRecepcion=async()=>{
     if(!recibiendo||saving)return;
     const{pedId,provId}=recibiendo;
     const items=pedidoDetalle.filter(d=>d.pedido_id===pedId&&d.proveedor_id===provId);
-    // v7.23 pedía el costo y NO dejaba guardar sin él: una entrada sin precio
-    // entra al inventario con un costo estimado y ya nada lo corrige.
+    // HISTORIA DE ESTA DECISIÓN, QUE SON TRES RECTIFICACIONES SEGUIDAS.
     //
-    // v7.32 lo convierte en aviso con salida, porque el muro salió más caro que
-    // el problema que evitaba. Entre el 31-ago y el 25-sep quedaron 7 pedidos
-    // sin recibir ($62,551) y el inventario acumuló 64 negativos. Un costo
-    // aproximado es malo; no registrar la entrada es peor, y además se descubre
-    // semanas después.
+    // v7.23 exigía el costo y NO dejaba guardar sin él. Entre el 31-ago y el
+    // 25-sep quedaron 7 pedidos sin recibir ($62,551) y 64 negativos.
     //
-    // La salida es explícita y de un solo uso: hay que apretar otro botón, que
-    // dice con todas sus letras que entra con precio de catálogo. Las líneas así
-    // recibidas dejan `costo_real` vacío, así que siguen siendo identificables
-    // como "precio nunca capturado" y compras puede llenarlo después.
-    if(!costeaElSistema(provId)&&!forzarEstimado){
-      const sinCosto=items.filter(d=>(cantRecibida[d.id]||0)>0&&!(parseFloat(costoRecep[d.id])>0));
-      if(sinCosto.length){
-        setAvisoRecep(`Falta el costo unitario de ${sinCosto.length} artículo${sinCosto.length>1?"s":""}: ${sinCosto.map(d=>(catalogo.find(c=>c.id===d.catalogo_id)||{}).articulo||"?").join(", ")}. Es el precio de la factura, sin IVA, por unidad de compra.`);
-        setOfreceEstimado(true);
-        // El aviso se pinta arriba de la tabla; quien apretó el botón está
-        // abajo. Sin esto el mensaje aparece fuera de la pantalla y parece que
-        // el botón simplemente no hizo nada.
-        setTimeout(()=>{document.getElementById("aviso-recep")?.scrollIntoView({behavior:"smooth",block:"center"});},0);
-        return;
-      }
-    }
-    setAvisoRecep(null);setOfreceEstimado(false);setSaving(true);
+    // v7.32 lo volvió aviso con un segundo botón de escape. v7.32c movió ese
+    // botón adentro del aviso porque vivía al final de la pantalla y nadie lo
+    // encontraba.
+    //
+    // v7.33 quita la pregunta entera, por lo que señaló dirección: quien recibe
+    // NO PUEDE SABER si el proveedor ya cargó su precio. Preguntárselo es
+    // pedirle que decida algo que no está en su mano, y la única respuesta
+    // posible es apretar el botón que destraba — o sea, no es una pregunta.
+    //
+    // Lo que falte entra con el precio de catálogo y se avisa, sin detener a
+    // nadie. Esto es defendible desde v7.32b y no antes: ahora, cuando el
+    // precio real llega, la app corrige sola el movimiento y el costo promedio.
+    // El renglón queda con `costo_real` vacío, así que sigue siendo
+    // identificable como "precio nunca capturado".
+    const sinPrecio=lineasSinPrecio(provId,items);
+    setAvisoRecep(null);setSaving(true);
     const costos={};items.forEach(d=>{const v=parseFloat(costoRecep[d.id]);if(v>0)costos[d.id]=v;});
     const hayFaltante=items.some(d=>(cantRecibida[d.id]||0)!==d.cantidad);
     const estatus=hayFaltante?"con_faltantes":"completo";
     await onRecibir(pedId,provId,estatus,items.map(d=>({pedido_detalle_id:d.id,cantidad_pedida:d.cantidad,cantidad_esperada:d.cantidad,cantidad_recibida:cantRecibida[d.id]||0,tiene_discrepancia:(cantRecibida[d.id]||0)!==d.cantidad,nota:notasRecep[d.id]||null})),costos);
     setRecibiendo(null);setSaving(false);
+    if(sinPrecio.length){
+      alert(`Recepción guardada. ${sinPrecio.length} artículo${sinPrecio.length>1?"s entraron":" entró"} con el precio de catálogo porque nadie había capturado el de la factura:\n\n`
+        +sinPrecio.map(d=>"· "+((catalogo.find(c=>c.id===d.catalogo_id)||{}).articulo||"?")).join("\n")
+        +`\n\nNo hay nada que hacer: cuando el proveedor o compras capturen el precio real, la app corrige sola la entrada y el costo promedio.`);
+    }
   };
 
   if(recibiendo){
@@ -2088,6 +2093,7 @@ function RecepcionView({pedidos,pedidoDetalle,proveedores,provEstatus,catalogo,r
     const todoOk=items.every(d=>(cantRecibida[d.id]||0)===d.cantidad);
     const sistemaCostea=costeaElSistema(provId);
     const totalFactura=items.reduce((s,d)=>{const cu=parseFloat(costoRecep[d.id])||0;return s+cu*(cantRecibida[d.id]||0);},0);
+    const sinPrecioAhora=lineasSinPrecio(provId,items);
     return(<div>
       <button onClick={()=>setRecibiendo(null)} className="text-sm text-gray-500 hover:text-gray-700 mb-4">← Volver</button>
       <div className="flex items-center justify-between mb-4"><div><h2 className="text-lg font-bold text-gray-900">Recepción — {prov?.nombre}</h2><p className="text-sm text-gray-500">Pedido {ped?.numero_pedido} — Valida cantidades recibidas</p></div>
@@ -2095,27 +2101,10 @@ function RecepcionView({pedidos,pedidoDetalle,proveedores,provEstatus,catalogo,r
         {hayFaltante&&<Badge v="warning">Hay diferencias</Badge>}
       </div>
       {cargandoRecep&&<div className="bg-gray-50 border border-gray-200 rounded-xl p-3 mb-3 text-sm text-gray-600">Buscando los precios que el proveedor haya capturado…</div>}
-      {avisoRecep&&<div id="aviso-recep" className={`border-2 rounded-xl p-3 mb-3 text-sm ${ofreceEstimado?"bg-red-50 border-red-300 text-red-800":"bg-sky-50 border-sky-300 text-sky-900"}`}>
+      {avisoRecep&&<div id="aviso-recep" className="border-2 rounded-xl p-3 mb-3 text-sm bg-sky-50 border-sky-300 text-sky-900">
         <Icono n="alerta" size={14}/> {avisoRecep}
-        {/* v7.32c — La salida vivía sólo al final de la pantalla, después de la
-            tabla. En un celular eso son treinta y tantos renglones entre el
-            aviso y el botón: cocina leyó "puedes recibir con el precio de
-            catálogo", no vio dónde, y volvió a apretar el verde. El botón va
-            donde está la explicación; el de abajo se queda para quien ya
-            entendió y vuelve a intentar desde ahí. */}
-        {ofreceEstimado&&<>
-          <p className="mt-2 text-xs text-red-700">
-            Si no tienes la factura a la mano, puedes recibir con el <b>precio de catálogo</b>: la mercancía
-            entra hoy al inventario con un costo aproximado. Cuando el proveedor o compras capturen el
-            precio real, la app corrige sola esta entrada y el costo promedio. Es preferible a no
-            registrar la entrada.
-          </p>
-          <div className="mt-3">
-            <Btn onClick={()=>confirmarRecepcion(true)} disabled={saving} color="amber">Recibir con precio de catálogo</Btn>
-          </div>
-        </>}
       </div>}
-      {!sistemaCostea&&<div className="bg-teal-50 border border-teal-200 rounded-xl p-3 mb-3 text-xs text-teal-800">Captura el <b>costo unitario de la factura</b> (sin IVA, por {items[0]&&(catalogo.find(c=>c.id===items[0].catalogo_id)||{}).unidad_clave||"unidad"} de compra) de cada artículo que estés recibiendo. Con ese precio entra al inventario y se recalcula el costo promedio. Si lo dejas en blanco, la entrada toma un costo estimado y la app lo corrige sola en cuanto alguien capture el precio real — pero mientras tanto el costo de las recetas sale aproximado.</div>}
+      {!sistemaCostea&&<div className="bg-teal-50 border border-teal-200 rounded-xl p-3 mb-3 text-xs text-teal-800">Si traes la factura, captura el <b>costo unitario</b> (sin IVA, por {items[0]&&(catalogo.find(c=>c.id===items[0].catalogo_id)||{}).unidad_clave||"unidad"} de compra) de cada artículo. <b>Si no la traes, déjalo en blanco y recibe igual</b>: entra con el precio de catálogo y la app lo corrige sola cuando alguien capture el real. Nunca dejes de registrar una entrada por falta de precio.</div>}
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden mb-4 overflow-x-auto"><table className="w-full text-sm"><thead className="bg-gray-50"><tr>
         {["Artículo","Esperado","Recibido","Costo unitario s/IVA","Importe","Nota"].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Esperado","Recibido"].includes(h)?"text-center":h==="Importe"?"text-right":"text-left"}`}>{h}</th>)}
       </tr></thead><tbody>{items.map(d=>{
@@ -2124,30 +2113,38 @@ function RecepcionView({pedidos,pedidoDetalle,proveedores,provEstatus,catalogo,r
         const recibido=cantRecibida[d.id]||0;
         const diff=recibido!==esperado;
         const cu=parseFloat(costoRecep[d.id]);
-        const faltaCosto=!sistemaCostea&&recibido>0&&!(cu>0);
+        // v7.33 — Sin precio capturado ya no es un error, es un camino normal:
+        // la entrada toma el de catálogo. El renglón se marca en ámbar (aviso)
+        // y no en rojo (falla), y dice qué va a pasar.
+        const tomaCatalogo=!sistemaCostea&&recibido>0&&!(cu>0);
         // Aviso de magnitud, mismo criterio que en recetas: un precio 5 veces
         // arriba del de referencia casi siempre es un decimal fuera de lugar o
         // el importe total en lugar del unitario.
         const ref=parseFloat(d.costo_referencia)||0;
         const raro=cu>0&&ref>0&&(cu/ref>=5||ref/cu>=5);
-        return(<tr key={d.id} className={`border-t border-gray-100 ${faltaCosto?"bg-red-50":diff?"bg-orange-50":""}`}>
+        return(<tr key={d.id} className={`border-t border-gray-100 ${tomaCatalogo?"bg-amber-50":diff?"bg-orange-50":""}`}>
           <td className="px-3 py-2 font-medium text-gray-900">{cat.articulo} <span className="text-gray-400 text-xs">{cat.unidad_clave}</span></td>
           <td className="px-3 py-2 text-center text-gray-500">{cat.unidad_clave==="kg"?fmtQ(esperado,"kg"):esperado}</td>
           <td className="px-3 py-2 text-center"><input type="number" min="0" step={cat.unidad_clave==="kg"?"0.25":"1"} className={`w-20 text-center border rounded-lg px-1 py-1 text-sm ${diff?"border-orange-400 bg-orange-50":"border-gray-200"}`} value={cantRecibida[d.id]||""} onChange={e=>setCantRecibida({...cantRecibida,[d.id]:parseFloat(e.target.value)||0})}/></td>
           <td className="px-3 py-2">{sistemaCostea
             ?<span className="text-xs text-gray-400">lo calcula el sistema (PEPS)</span>
-            :<div><input type="number" min="0" step="0.01" placeholder="0.00" className={`w-24 text-right border rounded-lg px-2 py-1 text-sm ${faltaCosto?"border-red-400 bg-red-50":raro?"border-amber-400 bg-amber-50":"border-gray-200"}`} value={costoRecep[d.id]??""} onChange={e=>setCostoRecep({...costoRecep,[d.id]:e.target.value})}/>
-               {ref>0&&<span className="block text-[10px] text-gray-400">catálogo {fmt(ref)}</span>}
+            :<div><input type="number" min="0" step="0.01" placeholder="0.00" className={`w-24 text-right border rounded-lg px-2 py-1 text-sm ${tomaCatalogo?"border-amber-300":raro?"border-amber-400 bg-amber-50":"border-gray-200"}`} value={costoRecep[d.id]??""} onChange={e=>setCostoRecep({...costoRecep,[d.id]:e.target.value})}/>
+               {ref>0&&<span className={`block text-[10px] ${tomaCatalogo?"text-amber-700 font-semibold":"text-gray-400"}`}>{tomaCatalogo?`entra a ${fmt(ref)} (catálogo)`:`catálogo ${fmt(ref)}`}</span>}
                {raro&&<span className="block text-[10px] text-amber-700 font-semibold">{(cu>ref?cu/ref:ref/cu).toFixed(0)}× el de catálogo — ¿es el unitario?</span>}</div>}</td>
           <td className="px-3 py-2 text-right text-xs font-semibold text-gray-700">{cu>0&&recibido>0?fmt(cu*recibido):"—"}</td>
           <td className="px-3 py-2"><input className="w-full border border-gray-200 rounded-lg px-2 py-1 text-xs" placeholder="Nota opcional" value={notasRecep[d.id]||""} onChange={e=>setNotasRecep({...notasRecep,[d.id]:e.target.value})}/></td>
         </tr>);})}</tbody></table></div>
       {hayFaltante&&<div className="bg-orange-50 border border-orange-200 rounded-xl p-3 mb-3"><p className="text-sm font-semibold text-orange-800">Artículos con diferencias:</p><div className="text-xs text-orange-700 mt-1">{items.filter(d=>(cantRecibida[d.id]||0)!==d.cantidad).map(d=>{const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};return<p key={d.id}>{cat.articulo}: esperado {d.cantidad} → recibido {cantRecibida[d.id]||0}</p>;})}</div></div>}
+      {sinPrecioAhora.length>0&&<div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-3 text-xs text-amber-800">
+        <b>{sinPrecioAhora.length} artículo{sinPrecioAhora.length>1?"s":""} entrará{sinPrecioAhora.length>1?"n":""} con el precio de catálogo</b> porque nadie ha
+        capturado el de la factura: {sinPrecioAhora.map(d=>(catalogo.find(c=>c.id===d.catalogo_id)||{}).articulo||"?").join(", ")}.
+        Puedes recibir así; la app corrige el costo sola cuando llegue el precio real.
+      </div>}
       <div className="flex justify-between items-center gap-2 flex-wrap">
         <span className="text-sm text-gray-600">{!sistemaCostea&&totalFactura>0&&<span>Total sin IVA de lo recibido: <b className="text-gray-800">{fmt(totalFactura)}</b></span>}</span>
         <div className="flex gap-2 flex-wrap">
           <Btn onClick={()=>{const c={};items.forEach(d=>{c[d.id]=d.cantidad;});setCantRecibida(c);}} color="amber">Todo correcto</Btn>
-          <Btn onClick={()=>confirmarRecepcion(false)} disabled={saving} color="green">{saving?"Guardando...":hayFaltante?"Confirmar con faltantes":"Recepción completa ✓"}</Btn>
+          <Btn onClick={()=>confirmarRecepcion()} disabled={saving} color="green">{saving?"Guardando...":hayFaltante?"Confirmar con faltantes":"Recepción completa ✓"}</Btn>
         </div>
       </div>
     </div>);
