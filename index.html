@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.32";
+const V="7.32b";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -198,6 +198,79 @@ function explotarReceta(prodId,cantidadVendida,recetas,productosVenta,consumo,de
 }
 // v7.0: entrada de insumo al inventario de sucursal con costo promedio ponderado.
 // Recibe y devuelve la lista local (los loops llaman varias veces antes de setState).
+// v7.32b — Cuando la factura llega después de la mercancía.
+//
+// v7.32 abrió la puerta a recibir con precio de catálogo cuando el proveedor
+// todavía no ha cargado el suyo, porque no registrar la entrada salía más caro
+// que registrarla con un costo aproximado. Pero dejaba un cabo suelto: el
+// proveedor carga su precio más tarde, el pedido lo guarda… y el inventario se
+// queda con el estimado para siempre.
+//
+// Esto lo cierra. Cuando el proveedor captura el precio de una línea que YA se
+// recibió, se corrige el movimiento de ESA recepción y se recalcula el costo
+// promedio. No es reescribir historia: el movimiento es el registro de esa
+// compra concreta, y ponerle el precio de la factura es terminar de capturarla.
+//
+// SOBRE LA EXACTITUD. El promedio se ajusta por la diferencia de valor
+// (`cantidad × (nuevo − viejo)`) repartida sobre la existencia de hoy. Es exacto
+// si no se ha consumido nada desde la recepción, y una aproximación que converge
+// si ya se consumió: lo que salió se fue con el costo viejo y eso no se puede
+// deshacer sin recalcular el kárdex entero, que son más de cien mil renglones.
+// Entre un promedio aproximado y uno que se queda con el precio de catálogo para
+// siempre, el aproximado gana.
+//
+// Devuelve cuántas líneas corrigió, para poder decírselo a quien capturó.
+async function corregirCostoRecepcion(pedidoId, catalogoRow, costoPresNuevo) {
+  if (!pedidoId || !catalogoRow?.insumo_id || !(costoPresNuevo > 0)) return 0;
+  const contenido = parseFloat(catalogoRow.contenido) || 1;
+  const nuevoPorBase = Math.round((costoPresNuevo / contenido) * 1e6) / 1e6;
+
+  // Los movimientos de ESTE pedido para ESTE insumo. Se buscan por
+  // `recepcion_id`, que es la llave real, y no filtrando el texto de la nota:
+  // esa nota lleva acentos y espacios, y armar el patrón dentro de una URL es
+  // justo el tipo de detalle que funciona en la prueba y falla en producción.
+  const receps = await sbGet("recepciones", `pedido_id=eq.${pedidoId}`);
+  if (!receps.length) return 0;
+  const ids = receps.map((r) => r.id).join(",");
+  const movs = await sbGet(
+    "movimientos_sucursal",
+    `recepcion_id=in.(${ids})&insumo_id=eq.${catalogoRow.insumo_id}&tipo=eq.entrada_recepcion`
+  );
+  if (!movs.length) return 0;
+
+  let deltaValor = 0, corregidos = 0;
+  for (const m of movs) {
+    const viejo = parseFloat(m.costo_unitario) || 0;
+    const cant = parseFloat(m.cantidad) || 0;
+    if (cant <= 0 || Math.abs(viejo - nuevoPorBase) < 1e-6) continue;
+    const ok = await sbPatch("movimientos_sucursal", m.id, {
+      costo_unitario: nuevoPorBase,
+      nota: `${m.nota} · precio corregido con la factura`,
+    });
+    if (!ok) continue;
+    deltaValor += cant * (nuevoPorBase - viejo);
+    corregidos++;
+  }
+  if (!corregidos) return 0;
+
+  // El promedio absorbe la diferencia. Con existencia en cero o negativa no hay
+  // sobre qué repartirla: ahí manda el precio nuevo, igual que en una entrada.
+  const invRows = await sbGet("inventario_sucursal", `insumo_id=eq.${catalogoRow.insumo_id}`);
+  const inv = invRows[0];
+  if (inv) {
+    const exist = parseFloat(inv.existencia) || 0;
+    const prom = parseFloat(inv.costo_promedio) || 0;
+    const nuevoProm = exist > 0
+      ? Math.max(0, Math.round(((exist * prom + deltaValor) / exist) * 1e4) / 1e4)
+      : nuevoPorBase;
+    await sbPatch("inventario_sucursal", inv.id, {
+      costo_promedio: nuevoProm,
+      updated_at: new Date().toISOString(),
+    });
+  }
+  return corregidos;
+}
+
 async function entradaSucursalDB(invList,sucId,insumoId,cantidad,costoU,tipo,extra){
   let row=invList.find(i=>i.sucursal_id===sucId&&i.insumo_id===insumoId);
   if(!row){
@@ -4116,7 +4189,11 @@ function App(){
         const uMap={};(ums||[]).forEach(u=>{uMap[u.id]=u;});
         const catIds=[...new Set((det||[]).map(d=>d.catalogo_id).filter(Boolean))];
         const catRows=catIds.length?await sbGet("catalogo",`id=in.(${catIds.join(",")})`):[];
-        setCatalogo((catRows||[]).map(c=>({id:c.id,sku:c.sku,articulo:c.articulo,unidad_clave:uMap[c.unidad_id]?.clave||"?",aplica_iva:c.aplica_iva!==false})));
+        // v7.32b: `insumo_id` y `contenido` viajan además de lo visible, porque
+        // corregirCostoRecepcion los necesita para traducir el precio del
+        // paquete a precio por unidad base. No amplían lo que el proveedor ve:
+        // son un id interno y el tamaño del paquete que él mismo entrega.
+        setCatalogo((catRows||[]).map(c=>({id:c.id,sku:c.sku,articulo:c.articulo,unidad_clave:uMap[c.unidad_id]?.clave||"?",aplica_iva:c.aplica_iva!==false,insumo_id:c.insumo_id,contenido:parseFloat(c.contenido)||1})));
         setPedidoDetalle(det||[]);
         setProvEstatus([pe]);
         setProveedores((provRows||[]).map(p=>({id:p.id,nombre:p.nombre})));
@@ -4361,6 +4438,16 @@ function App(){
   const handleUpdatePrecio=async(detalleId,precio)=>{
     await sbPatch("pedido_detalle",detalleId,{costo_real:precio,capturado_por:"compras",fecha_captura:new Date().toISOString()});
     setPedidoDetalle(pedidoDetalle.map(d=>d.id===detalleId?{...d,costo_real:precio}:d));
+    // v7.32b: tercer camino por el que llega un precio tarde. Compras también
+    // captura desde la oficina, y la línea puede estar ya recibida con el
+    // estimado de catálogo; si es así, se corrige movimiento y promedio.
+    const det=pedidoDetalle.find(d=>d.id===detalleId);
+    const cat=catalogo.find(c=>c.id===det?.catalogo_id);
+    const ped=pedidos.find(x=>x.id===det?.pedido_id);
+    if(cat&&ped){
+      const n=await corregirCostoRecepcion(ped.id,cat,parseFloat(precio));
+      if(n>0)alert(`Este artículo ya se había recibido con precio estimado. Se corrigió su costo en el inventario con el precio que acabas de capturar.`);
+    }
   };
 
   const handleUpdateCantidad=async(detalleId,cantidad)=>{
@@ -4396,15 +4483,27 @@ function App(){
   };
 
   const handleProvConfirm=async(precios,cantidades)=>{
+    let corregidas=0;
     for(const[detId,precio]of Object.entries(precios)){
       if(precio==null)continue;
       const cant=cantidades[detId];
       await sbPatch("pedido_detalle",detId,{costo_real:precio,cantidad:cant,capturado_por:"proveedor",fecha_captura:new Date().toISOString()});
+      // v7.32b: si esta línea YA se recibió (con precio de catálogo, porque la
+      // factura no había llegado), el inventario se quedó con el estimado.
+      // Aquí llega el precio bueno: se corrige el movimiento y el promedio.
+      const det=pedidoDetalle.find(d=>d.id===detId);
+      const cat=catalogo.find(c=>c.id===det?.catalogo_id);
+      // En la liga del proveedor `pedidos` no se carga (el atajo baja lo mínimo):
+      // el id del pedido viene del estatus que validó el token.
+      const pedId=det?.pedido_id||provEstatus.find(x=>x.token_acceso===provToken)?.pedido_id;
+      if(cat&&pedId)corregidas+=await corregirCostoRecepcion(pedId,cat,parseFloat(precio));
     }
     // Expire token
     const pe=provEstatus.find(x=>x.token_acceso===provToken);
     if(pe)await sbPatch("pedido_proveedor_estatus",pe.id,{estatus:"precios_capturados",token_activo:false,fecha_completado:new Date().toISOString()});
-    alert("Precios confirmados. Gracias.");
+    alert(corregidas>0
+      ? `Precios confirmados. Gracias.\n\n${corregidas} ${corregidas===1?"artículo ya había sido recibido":"artículos ya habían sido recibidos"} con precio estimado: su costo quedó corregido con el de tu factura.`
+      : "Precios confirmados. Gracias.");
     window.location.href=window.location.pathname;
   };
 
@@ -4751,7 +4850,12 @@ function App(){
         const pe=provEstatus.find(x=>x.pedido_id===selectedPedido.id&&x.proveedor_id===jcProv?.id);
         const isReadOnly=pe&&["precios_capturados","recibido_completo","recibido_con_faltantes"].includes(pe.estatus);
         return<ProveedorTokenView detalle={provDet} catalogo={catalogo} pedido={selectedPedido} provNombre={jcProv?.nombre||"Proveedor"} readOnly={isReadOnly} onConfirm={async(precios,cantidades)=>{
-          for(const[detId,precio]of Object.entries(precios)){if(precio==null)continue;const cant=cantidades[detId];await sbPatch("pedido_detalle",detId,{costo_real:precio,cantidad:cant,capturado_por:"proveedor",fecha_captura:new Date().toISOString()});}
+          for(const[detId,precio]of Object.entries(precios)){if(precio==null)continue;const cant=cantidades[detId];
+            await sbPatch("pedido_detalle",detId,{costo_real:precio,cantidad:cant,capturado_por:"proveedor",fecha_captura:new Date().toISOString()});
+            // v7.32b: mismo cierre que en la liga del proveedor.
+            const det=pedidoDetalle.find(d=>d.id===detId);
+            const cat=catalogo.find(c=>c.id===det?.catalogo_id);
+            if(cat&&selectedPedido)await corregirCostoRecepcion(selectedPedido.id,cat,parseFloat(precio));}
           if(pe)await sbPatch("pedido_proveedor_estatus",pe.id,{estatus:"precios_capturados",token_activo:false,fecha_completado:new Date().toISOString()});
           setProvEstatus(provEstatus.map(x=>x.pedido_id===selectedPedido.id&&x.proveedor_id===jcProv?.id?{...x,estatus:"precios_capturados",token_activo:false}:x));
           setPedidoDetalle(pedidoDetalle.map(d=>{const pr=precios[d.id];if(pr!=null)return{...d,costo_real:pr,cantidad:cantidades[d.id]||d.cantidad};return d;}));

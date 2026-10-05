@@ -2172,3 +2172,70 @@ magnitud en recetas, la del contenido, la del conteo— **avisan y dejan pasar**
 bloqueaba es la única que causó daño.
 
 Una guarda que impide guardar no elimina el error: lo cambia por un hueco, y un hueco no se ve.
+
+## 27. La factura que llega después de la mercancía (v7.32b)
+
+**05-oct-2026.** La pregunta de dirección, inmediatamente después de quitar el muro: *"¿qué pasa
+si el proveedor entrega y aún no ha cargado precios?"*
+
+Buena pregunta, porque v7.32 resolvía la mitad visible del problema y dejaba la otra mitad
+invisible. La mercancía ya podía entrar con precio de catálogo. Lo que nadie veía es lo que pasa
+después: **el proveedor carga su precio al día siguiente, el pedido lo guarda, y el inventario se
+queda con el estimado para siempre.** El costo promedio de ese insumo arrastra una cifra
+inventada, y el costo de las recetas que lo usan la hereda.
+
+### 27.1 Lo que hace ahora
+
+Cuando se captura el precio de una línea que **ya se recibió**, la app corrige sola:
+
+1. Busca los movimientos de esa recepción para ese insumo —por `recepcion_id`, que es la llave
+   real, no por el texto de la nota.
+2. Les pone el costo de la factura (`precio de presentación ÷ contenido`).
+3. Les anota `· precio corregido con la factura`, para que el kárdex diga por qué cambió.
+4. Ajusta el costo promedio del inventario por la diferencia de valor.
+5. Avisa cuántas líneas corrigió a quien capturó el precio.
+
+Funciona en los tres caminos por donde puede llegar un precio tarde: la **liga del proveedor**,
+el **rol proveedor dentro de la app**, y **compras** cuando alguien edita el precio a mano.
+
+Esto no es reescribir historia. El movimiento es el registro de esa compra concreta; ponerle el
+precio de la factura es terminar de capturarla.
+
+### 27.2 Lo que NO hace, y hay que decirlo
+
+El promedio se ajusta repartiendo la diferencia de valor sobre **la existencia de hoy**:
+
+```
+nuevo_promedio = (existencia × promedio_actual + Σ cantidad × (costo_nuevo − costo_viejo)) / existencia
+```
+
+Eso es **exacto solo si no se ha consumido nada** desde la recepción. Si ya se vendió parte, esas
+unidades salieron con el costo viejo y eso no se deshace sin recalcular el kárdex completo —más de
+cien mil renglones—. En ese caso el promedio queda aproximado, y converge conforme rota el
+inventario.
+
+Entre un promedio aproximado y uno que se queda con el precio de catálogo para siempre, el
+aproximado gana. Pero es una aproximación, no una corrección perfecta, y entre más tarde llegue la
+factura menos exacta es.
+
+**La consecuencia práctica:** mientras más rápido cargue el proveedor su precio, más exacto es el
+costo. No es una regla burocrática, es aritmética.
+
+### 27.3 Un detalle que casi lo rompe
+
+La liga del proveedor no carga la app completa —por eso abre rápido—. Carga un catálogo reducido
+que traía solo lo necesario para pintar la tabla: `sku`, `articulo`, `unidad`, `precio`. Sin
+`insumo_id` ni `contenido`, el corrector no tenía con qué trabajar y devolvía cero **en silencio**,
+que es justo el camino por donde llegan la mayoría de los precios tarde.
+
+Lo detectó la prueba, no la lectura del código. Es la segunda vez en este sistema que una ruta
+"rápida" de carga omite un campo que alguien más necesitaba después.
+
+### 27.4 Verificación
+
+`herramientas/prueba-e2e/e2e-recepcion-precio-fresco.js` creció a **24 verificaciones**. El tercer
+bloque recibe al estimado de catálogo, hace que el proveedor capture $35/kg por su liga, y
+comprueba que el movimiento quede en $0.035/g, que la nota lo registre, que el promedio siga y que
+el pedido guarde el precio real.
+
+Suite completa: **356 verificaciones en 16 archivos**.

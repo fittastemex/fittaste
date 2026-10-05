@@ -209,6 +209,69 @@ const check=(n,c,e)=>{results.push({n,ok:!!c});console.log((c?"  ✓ ":"  ✗ ")
   const det2=DB.pedido_detalle.find(d=>d.id==="det-jit");
   check("16. y esta vez costo_real SÍ queda guardado",parseFloat(det2.costo_real)===35,det2.costo_real);
 
+  // ================= 3) EL PRECIO LLEGA DESPUÉS DE RECIBIR =================
+  // El cabo que v7.32 dejó suelto y que dirección señaló: "¿qué pasa si el
+  // proveedor entrega y aún no ha cargado precios?". Se recibe con el de
+  // catálogo, y cuando llega la factura el inventario tiene que corregirse.
+  DB.recepciones=[];DB.recepcion_detalle=[];DB.movimientos_sucursal=[];
+  DB.inventario_sucursal=[];
+  DB.pedido_detalle.forEach(d=>{d.costo_real=null;d.capturado_por=null;});
+  DB.pedido_proveedor_estatus[0].estatus="enviado";
+  DB.pedido_proveedor_estatus[0].token_activo=true;
+  DB.pedido_proveedor_estatus[0].token_acceso="tok-1";
+  await page.reload();
+  await page.getByText("Selecciona tu rol").waitFor({timeout:20000});
+  await page.getByText("Crea pedidos").first().click();
+  await page.locator("input[type=password]").fill("roma2026");
+  await page.getByRole("button",{name:"Ingresar"}).click();
+  await page.getByText("Fit Taste Roma").waitFor({timeout:20000});
+
+  // Se recibe sin precios, usando la salida.
+  await entrarARecepcion();
+  await page.getByRole("button",{name:/Recepción completa/}).click();
+  await page.waitForTimeout(600);
+  await page.getByRole("button",{name:"Recibir con precio de catálogo"}).click();
+  await page.waitForTimeout(1200);
+  const movEst=DB.movimientos_sucursal.find(m=>m.insumo_id==="i-jit"&&m.tipo==="entrada_recepcion");
+  check("17. entró con el estimado de catálogo ($0.06/g)",
+        movEst&&Math.abs(parseFloat(movEst.costo_unitario)-0.06)<1e-6,movEst&&movEst.costo_unitario);
+  check("18. el movimiento queda atado a su recepción (recepcion_id)",
+        movEst&&!!movEst.recepcion_id,movEst&&movEst.recepcion_id);
+  const invEst=DB.inventario_sucursal.find(i=>i.insumo_id==="i-jit");
+  check("19. y el costo promedio también ($0.06/g)",
+        invEst&&Math.abs(parseFloat(invEst.costo_promedio)-0.06)<1e-6,invEst&&invEst.costo_promedio);
+
+  // Ahora llega Botello con su liga y captura $35/kg (el real).
+  await page.goto("http://fittaste.local/index.html?token=tok-1");
+  await page.getByText(/Captura de precios|Precios|PED-PRUEBA-001/).first().waitFor({timeout:20000});
+  await page.waitForTimeout(600);
+  // En esta vista cada renglón tiene dos campos numéricos: "Entregado" (ya
+  // viene con la cantidad) y "Precio unit." (vacío). Se llenan los vacíos.
+  const cajasPrecio=page.locator('input[type=number]');
+  const nCajas=await cajasPrecio.count();
+  check("20. la liga del proveedor sigue abierta después de recibir",nCajas>0,nCajas);
+  for(let i=0;i<nCajas;i++){
+    if((await cajasPrecio.nth(i).inputValue())==="")await cajasPrecio.nth(i).fill("35");
+  }
+  await page.waitForTimeout(400);
+  // El botón arranca deshabilitado diciendo cuántos precios faltan; al llenarlos
+  // cambia a confirmar. Se toma el último botón de la vista, que es el de acción.
+  const btns=page.locator("button");
+  await btns.last().click();
+  await page.waitForTimeout(1800);
+
+  const movCorr=DB.movimientos_sucursal.find(m=>m.insumo_id==="i-jit"&&m.tipo==="entrada_recepcion");
+  check("21. el movimiento de recepción quedó al precio de factura ($0.035/g)",
+        movCorr&&Math.abs(parseFloat(movCorr.costo_unitario)-0.035)<1e-6,movCorr&&movCorr.costo_unitario);
+  check("22. y la nota deja constancia de la corrección",
+        movCorr&&/precio corregido con la factura/.test(movCorr.nota||""),movCorr&&movCorr.nota);
+  const invCorr=DB.inventario_sucursal.find(i=>i.insumo_id==="i-jit");
+  check("23. el costo promedio del inventario también se corrigió",
+        invCorr&&Math.abs(parseFloat(invCorr.costo_promedio)-0.035)<1e-3,invCorr&&invCorr.costo_promedio);
+  const detFin=DB.pedido_detalle.find(d=>d.id==="det-jit");
+  check("24. y el pedido guarda el precio real ($35)",
+        parseFloat(detFin.costo_real)===35,detFin.costo_real);
+
   await browser.close();
   const ok=results.filter(r=>r.ok).length;
   console.log("\n================ RESULTADO ================");
