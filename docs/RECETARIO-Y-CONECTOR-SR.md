@@ -2360,3 +2360,81 @@ resuelto.
 
 Suite: **358 verificaciones en 16 archivos**, incluidas 4 que antes afirmaban lo contrario y se
 reescribieron a propósito.
+
+## 30. El conteo del 4-oct y la escritura que borraba a la otra (v7.34)
+
+**04-oct-2026.** Segundo conteo completo: 171 de 193 insumos. La app reportó una diferencia neta de
+**−$182,617**, que habría sido la merma del mes si alguien la hubiera creído.
+
+### 30.1 De qué estaba hecha esa cifra
+
+| Concepto | Valor | ¿Merma? |
+|---|---:|---|
+| Neto del conteo | −$182,617 | |
+| Fantasma de SALSA VERDE + SALSA ROJA | +$176,184 | No |
+| Sobrante de los 45 insumos que nunca entran | −$12,769 | No |
+| **Merma real** | **−$19,202** | Sí |
+
+$19,202 en 24 días = **5.6% de la venta** ($340,187). Food cost real **33.0%** contra 27.4% teórico.
+
+### 30.2 La escritura que borraba a la otra
+
+El 96% de la falsa merma era una sola cosa, y la causa estaba en el código:
+
+```
+11-sep        el conteo inicial capturó 7,000 lt de salsa verde (eran ~7)
+03-oct 17:03  se corrigió a 7 lt desde la base
+03-oct 17:05  cocina registró una producción de 9 lt desde la app
+              su copia en memoria decía 7,000 → escribió 7,009
+              costo previo 0 → el promedio tomó $20.99 y lo aplicó a TODO
+              = $147,138 de valor inventado en una sola escritura
+04-oct        el conteo lo quitó y lo reportó como merma
+```
+
+De las **11 preparaciones corregidas ese día, fallaron exactamente las dos que tuvieron una
+producción en los minutos siguientes.** Las otras nueve cerraron con diferencias de gramos. Eso es
+lo que señala la causa y descarta que fuera la corrección en sí.
+
+`entradaSucursalDB` y las salidas de producción y merma calculaban
+`existencia nueva = existencia EN MEMORIA ± cantidad` y guardaban el **total**. Todo lo que hubiera
+cambiado en la base desde que se abrió la app se perdía.
+
+**No hace falta tocar SQL para dispararlo.** Cocina recibiendo mientras dirección registra una
+producción basta: el segundo en guardar borra al primero. Con la app abierta todo el día en la
+cocina, la ventana no es de milisegundos, es de horas.
+
+### 30.3 El arreglo, y lo que NO arregla
+
+`filaInvFresca()` relee la fila de la base justo antes de calcular, en los tres caminos que escriben
+un delta: entradas (recepción, producción, compra directa), salida de ingredientes por producción y
+merma. El conteo y el ajuste manual **no** se tocan: ahí escribir un valor absoluto es lo correcto,
+porque el físico reemplaza al teórico.
+
+Esto reduce la ventana de horas a milisegundos. **No la vuelve atómica**: dos escrituras en el mismo
+instante siguen pudiendo pisarse. El arreglo completo es que la suma ocurra en la base
+(`UPDATE ... SET existencia = existencia + x`), y queda pendiente.
+
+### 30.4 Dos cosas que afirmé mal en el primer análisis
+
+Las corrijo aquí porque el informe que salió al equipo las traía:
+
+1. **"$26,370 escondidos en un tocino duplicado muerto."** Falso. El insumo TOCINO (pz) **está en
+   uso**: lo consume SANDWICH WAFFLICH y tiene 56 movimientos, el último del 5-oct. El problema real
+   es otro: la cantidad se lleva en rebanadas y el costo se carga por paquete ($90 la rebanada), más
+   que las compras nuevas entran por `TOCINO SAN RAFAEL` (g) mientras la receta consume el de piezas.
+2. **"Los empaques no están en ninguna receta."** Falso. ALUMINIO está en 4 recetas y EMPAQUE ALMEJA
+   en unas 30. Lo cierto es que **faltan en muchos platillos que sí los usan**: aluminio aparece en
+   4 recetas pero se gastaron 2,589 piezas contra 100 teóricas.
+
+El patrón de los dos errores es el mismo de septiembre: **conté una parte y describí el todo.** Vi
+una presentación inactiva y concluí "insumo muerto" sin mirar los movimientos; vi un consumo teórico
+bajo y concluí "no está en la receta" sin mirar las recetas.
+
+### 30.5 Verificación
+
+`e2e-escritura-concurrente.js`, 8 verificaciones, reproduce el incidente: carga 7,000 lt fantasma,
+corrige la base a espaldas de la app y registra la producción. Con el código anterior produce
+**$156,916** de valor inventado —el mismo orden que los $147,138 reales— y con el arreglo cierra en
+16 lt. Cubre también la merma en sentido contrario.
+
+Suite: **366 verificaciones en 17 archivos**.
