@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.33";
+const V="7.34";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -271,12 +271,40 @@ async function corregirCostoRecepcion(pedidoId, catalogoRow, costoPresNuevo) {
   return corregidos;
 }
 
+// v7.34 — Leer la existencia de la base justo antes de escribirla.
+//
+// EL INCIDENTE. El 3-oct a las 17:03 se corrigió la salsa verde de 7,000 lt a 7
+// desde la base. A las 17:05 cocina registró una producción de 9 lt desde una
+// app que llevaba horas abierta: su copia en memoria todavía decía 7,000, así
+// que escribió 7,009 y borró la corrección. Y como el costo previo era 0, la
+// regla del promedio ponderado le puso a esos 7,009 litros fantasma el costo de
+// la producción —$20.99— así que aparecieron $147,138 de valor que no existía.
+// El conteo del día siguiente lo quitó y lo reportó como merma.
+//
+// LA CAUSA no es la corrección por SQL. Es que estas escrituras calculan
+// `existencia nueva = existencia EN MEMORIA ± cantidad` y guardan el TOTAL, no
+// la diferencia. Todo lo que haya cambiado en la base desde que se abrió la app
+// se machaca. Con dos personas trabajando a la vez —cocina recibiendo mientras
+// dirección produce— pasa igual, sin que nadie toque SQL.
+//
+// EL ALCANCE DE ESTE ARREGLO, dicho claro: releer antes de calcular reduce la
+// ventana de horas a milisegundos y cubre el caso real. NO lo vuelve atómico:
+// dos escrituras en el mismo instante siguen pudiendo pisarse. Para eso la suma
+// tendría que ocurrir en la base (UPDATE ... SET existencia = existencia + x),
+// que es el arreglo completo y queda pendiente.
+async function filaInvFresca(row){
+  if(!row?.id)return row;
+  const f=await sbGet("inventario_sucursal",`id=eq.${row.id}`);
+  return f&&f[0]?{...row,...f[0]}:row;
+}
+
 async function entradaSucursalDB(invList,sucId,insumoId,cantidad,costoU,tipo,extra){
   let row=invList.find(i=>i.sucursal_id===sucId&&i.insumo_id===insumoId);
   if(!row){
     const res=await sbPost("inventario_sucursal",{sucursal_id:sucId,insumo_id:insumoId,existencia:0,costo_promedio:costoU||0});
     if(res&&res[0]){row=res[0];invList=[...invList,row];}else return{invList,mov:null};
   }
+  row=await filaInvFresca(row);
   const exist=parseFloat(row.existencia)||0;
   const costoPrev=parseFloat(row.costo_promedio)||0;
   const nuevaExist=Math.round((exist+cantidad)*1000)/1000;
@@ -3584,6 +3612,7 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
     for(const l of plan.lineas){
       let row=invLocal.find(v=>v.insumo_id===l.insumo_id&&(!sucId||v.sucursal_id===sucId));
       if(!row){const c=await sbPost("inventario_sucursal",{sucursal_id:sucId,insumo_id:l.insumo_id,existencia:0,costo_promedio:l.costo_unitario});if(c&&c[0]){row=c[0];invLocal=[...invLocal,row];}else continue;}
+      row=await filaInvFresca(row);
       const nueva=Math.round(((parseFloat(row.existencia)||0)-l.cantidad)*1000)/1000;
       await sbPatch("inventario_sucursal",row.id,{existencia:nueva,updated_at:new Date().toISOString()});
       invLocal=invLocal.map(v=>v.id===row.id?{...v,existencia:nueva}:v);
@@ -3620,7 +3649,7 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
       setMermas([res[0],...mermas]);
       const mv=await sbPost("movimientos_sucursal",{sucursal_id:sucId,insumo_id:fMerma.insumo_id,tipo:"salida_merma",cantidad:fMerma.cantidad,costo_unitario:costo,merma_id:res[0].id,fecha:new Date().toISOString().split("T")[0],nota:`Merma: ${fMerma.motivo}`,registrado_por:rol});
       if(mv&&mv[0])setMovSucursal(prev=>[...prev,mv[0]]);
-      if(row){const nueva=(parseFloat(row.existencia)||0)-fMerma.cantidad;await sbPatch("inventario_sucursal",row.id,{existencia:nueva,updated_at:new Date().toISOString()});setInvSucursal(invSucursal.map(i=>i.id===row.id?{...i,existencia:nueva}:i));}
+      if(row){const fresca=await filaInvFresca(row);const nueva=Math.round(((parseFloat(fresca.existencia)||0)-fMerma.cantidad)*1000)/1000;await sbPatch("inventario_sucursal",row.id,{existencia:nueva,updated_at:new Date().toISOString()});setInvSucursal(invSucursal.map(i=>i.id===row.id?{...i,existencia:nueva}:i));}
       setFMerma({insumo_id:"",cantidad:0,motivo:"caducidad",nota:""});
       alert(`Merma registrada — ${fmt(costoTotal)} de pérdida`);
     }else alert("Error al registrar merma");
