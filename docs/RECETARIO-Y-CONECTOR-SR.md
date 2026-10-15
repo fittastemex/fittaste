@@ -2438,3 +2438,63 @@ corrige la base a espaldas de la app y registra la producción. Con el código a
 16 lt. Cubre también la merma en sentido contrario.
 
 Suite: **366 verificaciones en 17 archivos**.
+
+## 31. "No me deja guardar" y la app que no decía por qué (v7.35)
+
+**15-oct-2026.** Dirección: *"cocina me dice que no le deja registrar la compra directa: que es de
+$55 pesos, que si le pone en $53 no le deja guardar"*. Captura: tortilla de nopal, 13 × $53,
+transferencia.
+
+### 31.1 Lo que se pudo averiguar, y lo que no
+
+Se reprodujo ese renglón exacto contra producción con la llave anon —el mismo camino que usa la
+app— y **entró sin problema**. Así que quedó descartado: no era una restricción de la base, ni un
+permiso, ni el precio. La teoría de "$53 sí, $55 no" no tenía dónde sostenerse.
+
+Pero tampoco se pudo decir qué **sí** era. Y ése es el hallazgo:
+
+```js
+async function sbPost(t,data){ … if(!r.ok){ console.error(…); return null; } … }
+```
+
+`sbPost` escribe el motivo real en la **consola del navegador** y devuelve `null`. En pantalla sólo
+salía **"Error al registrar"**. Nadie en una cocina tiene la consola abierta.
+
+Desde fuera, tres causas completamente distintas se ven idénticas:
+
+| Lo que pasó | Lo que decía la pantalla |
+|---|---|
+| La base rechazó el renglón | Error al registrar |
+| Se cayó el internet del celular | Error al registrar |
+| Faltaba un campo | Error al registrar |
+
+Cada reporte se volvía una investigación a ciegas. Es el mismo patrón del PATCH de
+`capturado_por`, que falló en silencio desde v7.23 hasta que una consulta lo destapó por casualidad.
+
+### 31.2 El arreglo
+
+La compra directa usa ahora `sbPostE`, que sí devuelve el detalle. El aviso lleva el motivo que
+mandó el servidor y su código, y distingue el fallo de red —donde además dice que **nada se
+guardó**, que es lo que la gente necesita saber para decidir si recaptura.
+
+Y se cubrió un segundo hueco en el mismo camino: si la compra **se guarda** pero la entrada al
+inventario truena, antes el botón se quedaba en *"Guardando…"* para siempre y parecía que nada se
+había registrado — cuando sí. Ahora lo dice, y **advierte que no se recapture** porque quedaría
+doble.
+
+### 31.3 Lo que esto no resuelve
+
+**Sigue sin saberse qué le falló a cocina ese día.** El arreglo no lo averigua hacia atrás: hace
+que la próxima vez se vea. Si vuelve a pasar, el mensaje va a traer el motivo y se resuelve en un
+mensaje en lugar de en una tarde.
+
+### 31.4 Verificación
+
+`e2e-compra-directa-error.js`, 14 verificaciones. El servidor falso se porta mal a propósito:
+rechaza con un error de la base, luego tumba la conexión, y al final deja pasar. Comprueba que el
+mensaje traiga el motivo, que distinga red de rechazo, y que el camino bueno siga entrando al
+inventario convertido a unidad base (13 kg × 7.7 = 100.1 pz a $6.88 la pieza).
+
+Se comprobó que reprueba la versión anterior: **9 de 14**.
+
+Suite: **380 verificaciones en 18 archivos**.

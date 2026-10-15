@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.34";
+const V="7.35";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -2339,19 +2339,40 @@ function ComprasDirectasView({comprasDirectas,setComprasDirectas,catalogo,provee
     if(!form.catalogo_id||!form.proveedor_id||form.cantidad<=0||form.costo_unitario<=0){alert("Completa todos los campos");return;}
     setSaving(true);
     const costoTotal=Math.round(form.cantidad*form.costo_unitario*100)/100;
-    const res=await sbPost("compras_directas",{catalogo_id:form.catalogo_id,proveedor_id:form.proveedor_id,cantidad:form.cantidad,costo_unitario:form.costo_unitario,costo_total:costoTotal,metodo_pago:form.metodo_pago,fecha:new Date().toISOString().split("T")[0],registrado_por:"sucursal",nota:form.nota||null});
+    // v7.35 — Antes esto usaba sbPost, que escribe el motivo real en la consola
+    // del navegador y devuelve null. En pantalla sólo salía "Error al
+    // registrar". Nadie en una cocina tiene la consola abierta, así que el
+    // motivo se perdía: cocina reportaba "no me deja guardar" y desde fuera era
+    // indistinguible de un problema de red, de un dato faltante o de la base.
+    // Es el mismo patrón del PATCH que falló en silencio desde v7.23.
+    const r=await sbPostE("compras_directas",{catalogo_id:form.catalogo_id,proveedor_id:form.proveedor_id,cantidad:form.cantidad,costo_unitario:form.costo_unitario,costo_total:costoTotal,metodo_pago:form.metodo_pago,fecha:new Date().toISOString().split("T")[0],registrado_por:"sucursal",nota:form.nota||null});
+    const res=r.data;
     if(res&&res[0]){
       setComprasDirectas([res[0],...comprasDirectas]);
-      // v7.0: la compra directa también entra al inventario de sucursal
-      if(onEntrada)await onEntrada(form.catalogo_id,form.cantidad,form.costo_unitario);
-      if(form.metodo_pago==="credito"){
-        const cxpRes=await sbPost("cuentas_por_pagar",{pedido_id:null,proveedor_id:form.proveedor_id,monto_total:costoTotal,estatus:"pendiente"});
-        if(cxpRes&&cxpRes[0])setCxp([...cxp,cxpRes[0]]);
-        alert("Compra registrada — CxP generada (crédito)");
-      }else{alert("Compra registrada");}
+      // La compra YA quedó guardada. Si la entrada al inventario truena, el
+      // botón se quedaba en "Guardando..." para siempre y parecía que nada se
+      // había registrado — cuando en realidad sí. Hay que decir exactamente eso.
+      try{
+        // v7.0: la compra directa también entra al inventario de sucursal
+        if(onEntrada)await onEntrada(form.catalogo_id,form.cantidad,form.costo_unitario);
+        if(form.metodo_pago==="credito"){
+          const cxpRes=await sbPost("cuentas_por_pagar",{pedido_id:null,proveedor_id:form.proveedor_id,monto_total:costoTotal,estatus:"pendiente"});
+          if(cxpRes&&cxpRes[0])setCxp([...cxp,cxpRes[0]]);
+          alert("Compra registrada — CxP generada (crédito)");
+        }else{alert("Compra registrada");}
+      }catch(e){
+        alert(`La compra SÍ se registró, pero no se pudo actualizar el inventario:\n\n${String(e&&e.message||e)}\n\n`
+          +"No la vuelvas a capturar o quedará doble. Avisa a dirección.");
+      }
       setForm({catalogo_id:"",proveedor_id:"",cantidad:0,costo_unitario:0,metodo_pago:"efectivo",nota:""});
       setNBusq(n=>n+1);
-    }else{alert("Error al registrar");}
+    }else{
+      const msg=r.error?.message||r.error?.hint||r.error?.details||"";
+      alert(`No se pudo registrar la compra.\n\n${msg||"La app no recibió respuesta del servidor."}\n\n`
+        +(r.status===0
+          ?"Parece un problema de conexión: revisa el internet de la sucursal y vuelve a intentar. Nada se guardó."
+          :`Código ${r.status}. Manda esta pantalla a dirección si se repite.`));
+    }
     setSaving(false);
   };
 
