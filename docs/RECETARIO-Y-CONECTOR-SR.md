@@ -2498,3 +2498,63 @@ inventario convertido a unidad base (13 kg × 7.7 = 100.1 pz a $6.88 la pieza).
 Se comprobó que reprueba la versión anterior: **9 de 14**.
 
 Suite: **380 verificaciones en 18 archivos**.
+
+## 32. El semáforo que iba a gritar todas las noches (v7.36)
+
+**15-oct-2026.** Cinco días después de instalar el conector v7.28, revisando cómo iba: el latido
+llevaba **185 minutos callado**, desde las 18:06 — justo al cerrar. Todo había subido bien
+(45 tickets revisados, 0 pendientes). La PC simplemente se apaga al terminar el turno.
+
+Con la regla de v7.28 (`mudo = mins >= 15`), eso significa **semáforo rojo todas las noches y todos
+los domingos**.
+
+### 32.1 Por qué eso es un defecto y no un detalle
+
+Este recuadro existe porque el conector se murió cuatro veces y la última tardamos diez días en
+notarlo. Su único trabajo es que un silencio anormal se vea.
+
+**Una alarma que suena cuando no pasa nada deja de mirarse.** Si dirección ve rojo cada noche, para
+diciembre el rojo no significa nada — y el día que el conector se muera de verdad a las 11 de la
+mañana, el recuadro va a estar diciendo exactamente lo mismo que lleva dos meses diciendo.
+
+Es la misma lección de las guardas que bloqueaban: una señal que se ignora es peor que no tenerla,
+porque da una sensación de cobertura que no existe.
+
+### 32.2 La señal que NO se puede usar
+
+Lo primero que viene a la mente es "si no hay ventas recientes, está cerrado". **No sirve, y vale
+la pena entender por qué**: las ventas llegan a la base **por el conector**. Si se muere a media
+mañana, también dejan de entrar ventas.
+
+Así que "sin ventas recientes" es justo lo que se ve cuando hay un problema. La señal se anula a sí
+misma: usarla apagaría la alarma exactamente en el caso que la alarma existe para atrapar.
+
+### 32.3 La que sí sirve: el histórico
+
+A esta hora de este día de la semana, ¿**alguna vez** ha habido venta?
+
+Ese dato ya está en la base, no depende de que el conector esté vivo ahora, y no hay horario
+escrito a mano que mantener: si cambian de horario o abren un domingo, el semáforo lo aprende solo
+en cuanto haya ventas a esa hora. Un horario capturado a mano se queda viejo y empieza a mentir —
+que es precisamente lo que se está tratando de evitar.
+
+| Estado | Cuándo | Qué dice |
+|---|---|---|
+| 🟢 verde | latió hace menos de 15 min | trabajando |
+| 🟠 ámbar | late pero falla | no es la PC: SoftRestaurant o la red |
+| 🔴 rojo | callado **y a esta hora sí se vende** | hay que ir a la PC |
+| ⚪ gris | callado **y a esta hora nunca se vende** | PC apagada fuera de servicio |
+
+**Con poca historia (menos de 200 ventas) no se concluye nada y se pinta rojo.** Callar por falta
+de datos es el peor error posible aquí: el costo de una alarma de más es una molestia; el de una de
+menos fueron diez días y $140,000.
+
+### 32.4 Verificación
+
+`e2e-latido-conector.js` pasó de 24 a 31 verificaciones. Las nuevas construyen 240 ventas históricas
+en el mismo día de la semana —desplazadas de hora para el caso "cerrado", a la misma hora para el
+caso "en servicio"— y comprueban los tres desenlaces, incluido que con poca historia siga gritando.
+
+Se comprobó que reprueban la versión anterior: **27 de 31**.
+
+Suite: **387 verificaciones en 18 archivos**.
