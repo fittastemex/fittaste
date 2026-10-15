@@ -127,7 +127,8 @@ const check=(n,c,e)=>{results.push({n,ok:!!c});console.log((c?"  ✓ ":"  ✗ ")
       if(!d)return null;
       const cls=d.className;
       return{texto:d.textContent.replace(/\s+/g," ").trim(),
-             color:/red/.test(cls)?"rojo":/amber/.test(cls)?"ambar":/emerald/.test(cls)?"verde":"?"};
+             color:/red/.test(cls)?"rojo":/amber/.test(cls)?"ambar":/emerald/.test(cls)?"verde"
+                  :/gray/.test(cls)?"gris":"?"};
     });
   };
 
@@ -203,6 +204,47 @@ const check=(n,c,e)=>{results.push({n,ok:!!c});console.log((c?"  ✓ ":"  ✗ ")
   check("23. a los 14 min sigue VERDE (no alarmar por una red lenta)",s&&s.color==="verde",s);
   // Un ciclo sin tickets no es un problema: a media tarde puede no haber venta.
   check("24. un ciclo sin tickets no inventa un problema",s&&!/no están subiendo/i.test(s.texto),s&&s.texto);
+
+  // ---------- 5) Callado al cerrar NO es callado en servicio (v7.36) ----------
+  //
+  // La PC se apaga al terminar el turno, así que el conector deja de latir
+  // todas las noches y todos los domingos. Con la regla anterior el semáforo
+  // salía ROJO cada noche. Una alarma que suena cuando no pasa nada se deja de
+  // mirar — y así fue exactamente como el conector se murió cuatro veces.
+  //
+  // La señal que decide NO puede ser "¿hay ventas recientes?": las ventas
+  // llegan por el conector, así que si se muere también dejan de entrar. Esa
+  // pregunta se anula a sí misma. La que sí sirve es el histórico: a esta hora
+  // de este día de la semana, ¿alguna vez ha habido venta?
+  const historial=(n,horasShift)=>{
+    const dias=[7,14,21,28];
+    return Array.from({length:n},(_,i)=>{
+      const d=new Date(Date.now()-dias[i%dias.length]*86400000-horasShift*3600000);
+      return{id:"vh"+i,folio:"TKT-H"+i,origen:"api_v2",fecha:d.toISOString().split("T")[0],
+             total:200,created_at:d.toISOString(),sucursal_id:"suc-1",canal:"mostrador"};
+    });
+  };
+  const latidoMudo={sucursal_id:"suc-1",visto_en:hace(200),version:"v7.28",host:"POS-ROMA",
+                    ultimo_resultado:{ok:true,subidos:0,fallidos:0,revisados:45}};
+
+  // 5a. Mismo día de la semana, pero a una hora en la que NUNCA se ha vendido:
+  //     es la PC apagada después del turno.
+  s=await verSemaforo(latidoMudo,historial(240,5));
+  check("25. mudo a una hora sin venta histórica se pinta GRIS, no rojo",s&&s.color==="gris",s);
+  check("26. y lo nombra como reposo, no como falla",s&&/en reposo/i.test(s.texto),s&&s.texto);
+  check("27. explica que es la PC apagada fuera de servicio",
+        s&&/fuera de servicio/i.test(s.texto),s&&s.texto);
+  check("28. y NO manda a nadie a la sucursal",s&&!/ir a la PC/i.test(s.texto),s&&s.texto);
+
+  // 5b. Mismo día y MISMA hora en que sí se vende: ahí el silencio sí importa.
+  s=await verSemaforo(latidoMudo,historial(240,0));
+  check("29. mudo a una hora en que SÍ se vende sigue siendo ROJO",s&&s.color==="rojo",s);
+  check("30. y manda a la PC",s&&/ir a la PC/i.test(s.texto),s&&s.texto);
+
+  // 5c. Sin historia suficiente no se puede concluir que esté cerrado. Ante la
+  //     duda hay que avisar: callar por falta de datos es el peor error aquí.
+  s=await verSemaforo(latidoMudo,historial(40,5));
+  check("31. con poca historia NO se arriesga a callar: rojo",s&&s.color==="rojo",s);
 
   await browser.close();
   const ok=results.filter(r=>r.ok).length;

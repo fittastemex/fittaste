@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.35";
+const V="7.36";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -1318,6 +1318,44 @@ function SemaforoConector({ventas}){
   const mudo=mins>=15;
   const res=latido.ultimo_resultado||{};
   const atorado=!mudo&&res.ok===false;
+
+  // ---- v7.36: callado al cerrar NO es lo mismo que callado en servicio ----
+  //
+  // La PC se apaga al terminar el turno, así que el conector deja de latir
+  // todas las noches. Con la regla anterior el semáforo salía ROJO cada noche
+  // y cada domingo. Una alarma que suena cuando no pasa nada se deja de mirar,
+  // y así fue exactamente como el conector se murió cuatro veces.
+  //
+  // POR QUÉ NO BASTA MIRAR "¿hay ventas recientes?": las ventas llegan a la
+  // base POR EL CONECTOR. Si se muere a medio servicio, también dejan de
+  // entrar ventas — o sea que "sin ventas" es justo lo que se ve cuando hay
+  // un problema. Esa señal se anula a sí misma.
+  //
+  // Lo que sí es independiente es el HISTÓRICO: a esta hora de este día de la
+  // semana, ¿alguna vez ha habido venta? Eso ya está en la base y no depende
+  // de que el conector esté vivo ahora. Y no hay horario escrito a mano que
+  // mantener: si cambian de horario o abren un domingo, el semáforo lo aprende
+  // solo en cuanto haya ventas a esa hora.
+  const ahora=new Date();
+  const conHora=(ventas||[]).filter(v=>v.created_at);
+  const mismaFranja=conHora.filter(v=>{
+    const d=new Date(v.created_at);
+    return d.getDay()===ahora.getDay()&&d.getHours()===ahora.getHours();
+  });
+  // Con poca historia no se puede concluir nada: ante la duda, se avisa.
+  const hayHistoria=conHora.length>=200;
+  const fueraDeServicio=mudo&&hayHistoria&&mismaFranja.length===0;
+
+  if(fueraDeServicio){
+    return(<div className="mb-4 border rounded-xl px-4 py-2.5 flex items-center gap-3 text-sm bg-gray-50 border-gray-200 text-gray-600">
+      <span className="w-2.5 h-2.5 rounded-full shrink-0 bg-gray-400"/>
+      <div className="flex-1">
+        <b>Conector en reposo</b> — sin señal {cuantoHace(mins)}, pero a esta hora nunca hay venta.
+        Es la PC apagada fuera de servicio, no una falla.
+        <span className="opacity-60"> · Vuelve solo al encender la PC · {latido.version||"?"}</span>
+      </div>
+    </div>);
+  }
 
   const tono=mudo?"bg-red-50 border-red-200 text-red-800"
            :atorado?"bg-amber-50 border-amber-200 text-amber-800"
