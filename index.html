@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.36";
+const V="7.37";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -376,6 +376,43 @@ const Icono=({n,size=16,className=""})=>(
 // No bloquea: devuelve el aviso y quien guarda decide. Un contenido raro puede
 // ser legítimo (una pieza que pesa 1 g), y una guarda que impide guardar se
 // vuelve un estorbo que la gente aprende a esquivar.
+// v7.37 — La guarda de magnitud que le faltaba a producción.
+//
+// 14-oct y 21-oct: alguien capturó 1332.8 y 1504 en "¿Cuánto salió? (kg)",
+// queriendo decir GRAMOS. El sistema hizo lo que le pidieron: para producir
+// 1,504 kg de dip hacen falta 3,008 tandas, y descontó los ingredientes de
+// 3,008 tandas. $231,789 de insumos que nunca se usaron, 663 litros de claras
+// en negativo, 11,405 aguacates.
+//
+// La hoja de conteo tiene guarda de magnitud desde v7.30. Las recetas también.
+// Producción no tenía ninguna — y es la MÁS peligrosa de las tres, porque un
+// error en un solo campo se multiplica por cada ingrediente de la receta a la
+// vez. Un 1000x en un renglón se volvió 1000x en siete insumos.
+//
+// El aviso de "no alcanza el inventario" sí salió las dos veces, y las dos
+// veces lo pasaron de largo: está redactado como un trámite rutinario ("se
+// puede registrar igual") y no dice que el número sea absurdo. Un aviso que
+// describe la consecuencia pero no la causa no ayuda a corregir.
+//
+// Éste nombra la causa y propone el número, como avisoContenido. No bloquea.
+function avisoProduccion(nombre,unidad,rendimiento,producido){
+  const rend=parseFloat(rendimiento)||0,prod=parseFloat(producido)||0;
+  if(!(rend>0)||!(prod>0))return null;
+  const tandas=prod/rend;
+  // 20 tandas: la producción real más grande registrada son 4. Un umbral alto
+  // a propósito, para que cuando aparezca no haya duda de que algo está mal.
+  if(tandas<20)return null;
+  const u=unidad||"";
+  const enMil=prod/1000,tandasMil=enMil/rend;
+  // Si al correr el punto tres lugares queda una tanda creíble, es el error de
+  // unidad clásico: gramos escritos en un campo de kilos.
+  const sugerencia=(tandasMil>=0.1&&tandasMil<=20)
+    ? ` ¿No serán ${fmtCant(enMil,u)}? Eso serían ${tandasMil.toFixed(2)} tanda${tandasMil===1?"":"s"}.`
+    : "";
+  return `${fmtCant(prod,u)} de ${nombre} son ${Math.round(tandas).toLocaleString("es-MX")} tandas`
+       + `, y se van a descontar los ingredientes de todas.${sugerencia}`;
+}
+
 const UNIDADES_CHICAS={g:1,ml:1};
 const UNIDADES_GRANDES={kg:1000,lt:1000,l:1000};
 function avisoContenido(unidadBase,unidadCompra,contenido,precio){
@@ -3648,6 +3685,18 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
     if(!plan.espejo){setMsgProd({tipo:"error",txt:`${plan.prep.nombre} no tiene su renglón de inventario. Avisa a dirección: falta correr la migración de producción.`});return;}
     const sinInsumo=plan.lineas.filter(l=>!l.insumo_id);
     if(sinInsumo.length){setMsgProd({tipo:"error",txt:`La receta de ${plan.prep.nombre} tiene ${sinInsumo.length} línea(s) sin insumo. Corrígela antes de producir.`});return;}
+    // La magnitud va PRIMERO, antes del faltante. Las dos producciones de
+    // octubre dispararon el aviso de faltante y lo pasaron de largo, porque ese
+    // aviso describe la consecuencia ("no alcanza el inventario") y no la causa
+    // ("escribiste mil veces de más"). Quien ve primero el motivo correcto
+    // corrige; quien ve primero un trámite, lo acepta.
+    const avisoMag=avisoProduccion(plan.prep.nombre,plan.prep.unidad,plan.rend,plan.producido);
+    if(avisoMag){
+      if(!confirm(`⚠ REVISA LA CANTIDAD\n\n${avisoMag}\n\n`
+        +`Si de verdad se produjo esa cantidad, continúa. Si no, cancela y corrígela: `
+        +`esto descuenta los ingredientes de todas esas tandas y deja el inventario en negativo.\n\n`
+        +`¿Registrar de todas formas?`))return;
+    }
     // El faltante NO bloquea: la mercancía ya se usó físicamente y negarlo dejaría
     // el inventario peor. Se avisa y se pide confirmar, igual que en las recetas.
     if(plan.faltantes.length){
@@ -3927,7 +3976,17 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
             return null;})()}
           <div className="grid grid-cols-2 gap-3 mb-3">
             <div><label className="text-xs text-gray-500 block mb-1">¿Cuánto salió? {prepSel&&<b className="text-purple-700">({prepSel.unidad||"u"})</b>}</label>
-              <input type="number" min="0" step="0.001" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder={prepSel?`ej. ${prepSel.rendimiento||"1"}`:"0"} value={fProd.cantidad} onChange={e=>setFProd({...fProd,cantidad:e.target.value})}/></div>
+              {(()=>{const av=prepSel?avisoProduccion(prepSel.nombre,prepSel.unidad,prepSel.rendimiento,fProd.cantidad):null;
+                return<>
+                  <input type="number" min="0" step="0.001"
+                    className={`w-full border rounded-lg px-3 py-2 text-sm ${av?"border-red-400 bg-red-50":"border-gray-200"}`}
+                    placeholder={prepSel?`ej. ${prepSel.rendimiento||"1"}`:"0"} value={fProd.cantidad}
+                    onChange={e=>setFProd({...fProd,cantidad:e.target.value})}/>
+                  {/* Mientras se escribe, no sólo al guardar: corregir un número
+                      antes de apretar el botón es gratis; después cuesta revertir
+                      el inventario de siete insumos. */}
+                  {av&&<p className="mt-1 text-[11px] text-red-700 font-semibold leading-snug">{av}</p>}
+                </>;})()}</div>
             <div><label className="text-xs text-gray-500 block mb-1">Fecha</label>
               <input type="date" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={fProd.fecha} onChange={e=>setFProd({...fProd,fecha:e.target.value})}/></div>
           </div>

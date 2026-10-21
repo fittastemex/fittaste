@@ -243,6 +243,58 @@ const inv=(id)=>DB.inventario_sucursal.find(i=>i.insumo_id===id);
   const cuerpoConteo=await page.locator("body").innerText();
   check("24. la preparación aparece en la hoja de conteo",/ADEREZO RANCH/.test(cuerpoConteo));
 
+  // ---- 6) La guarda de magnitud (v7.37) ----
+  //
+  // EL CASO REAL. 14-oct y 21-oct: capturaron 1332.8 y 1504 en "¿Cuánto salió?
+  // (kg)" queriendo decir GRAMOS. El sistema descontó los ingredientes de 2,666
+  // y 3,008 tandas: $231,789 de insumos que nunca se usaron, 663 litros de
+  // claras en negativo, 11,405 aguacates.
+  //
+  // La hoja de conteo tenía guarda de magnitud desde v7.30; producción no — y
+  // es la más peligrosa de las dos, porque el error se multiplica por CADA
+  // ingrediente de la receta a la vez.
+  //
+  // El aviso de "no alcanza el inventario" sí salió las dos veces y las dos
+  // veces lo pasaron de largo: describe la consecuencia, no la causa.
+  const estadoAntes=()=>({mayo:parseFloat(inv("ins-mayo").existencia),
+                          esp:parseFloat(inv("ins-esp").existencia),
+                          prods:DB.producciones.length});
+  await irA("Producción");
+  await page.locator("select").filter({hasText:"Selecciona…"}).first().selectOption({index:1});
+  await page.waitForTimeout(300);
+  // Rendimiento 2 lt. Capturar 1600 (queriendo decir 1.6) son 800 tandas.
+  await page.getByPlaceholder(/^ej\. /).fill("1600");
+  await page.waitForTimeout(500);
+
+  const cuerpoMag=await page.locator("body").innerText();
+  check("25. mientras se escribe ya avisa que son cientos de tandas",
+        /800 tandas/.test(cuerpoMag),cuerpoMag.slice(0,200));
+  check("26. y propone el número correcto en vez de sólo regañar",
+        /¿No serán 1\.6/.test(cuerpoMag),(cuerpoMag.match(/.{0,80}No serán.{0,40}/)||[])[0]);
+  check("27. dice que se van a descontar los ingredientes de TODAS",
+        /descontar los ingredientes de todas/i.test(cuerpoMag));
+
+  // Al guardar pide confirmación explícita, y cancelar no debe escribir nada.
+  const antes=estadoAntes();
+  page.removeAllListeners("dialog");
+  const dialogos=[];
+  page.once("dialog",async d=>{dialogos.push(d.message());await d.dismiss();});
+  await page.getByRole("button",{name:"Registrar producción"}).click();
+  await page.waitForTimeout(1200);
+  check("28. al guardar pide confirmar y el aviso nombra la cantidad",
+        dialogos.some(m=>/REVISA LA CANTIDAD/.test(m)&&/800 tandas/.test(m)),dialogos.join(" | "));
+  check("29. cancelar NO registra la producción",DB.producciones.length===antes.prods,DB.producciones.length);
+  check("30. y NO toca el inventario",
+        parseFloat(inv("ins-mayo").existencia)===antes.mayo&&parseFloat(inv("ins-esp").existencia)===antes.esp,
+        {mayo:inv("ins-mayo").existencia,esp:inv("ins-esp").existencia});
+
+  // Una tanda normal no debe disparar nada: una guarda que sale siempre se ignora.
+  await page.getByPlaceholder(/^ej\. /).fill("1.6");
+  await page.waitForTimeout(500);
+  const cuerpoOk=await page.locator("body").innerText();
+  check("31. una tanda normal NO dispara la guarda",
+        !/tandas, y se van a descontar/i.test(cuerpoOk));
+
   await browser.close();
   const fails=results.filter(r=>!r.ok);
   console.log("\n================ RESULTADO ================");
