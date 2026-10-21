@@ -295,6 +295,54 @@ const inv=(id)=>DB.inventario_sucursal.find(i=>i.insumo_id===id);
   check("31. una tanda normal NO dispara la guarda",
         !/tandas, y se van a descontar/i.test(cuerpoOk));
 
+  // ---- 7) Merma y ajuste manual: las otras dos que escriben inventario (v7.38) ----
+  //
+  // Hasta v7.37 la guarda se ponía después de cada golpe y en una pantalla a la
+  // vez. Estas dos escriben inventario directo y no tenían ninguna: una merma
+  // mil veces mayor manda el insumo a negativo profundo, y el ajuste manual es
+  // la hoja de conteo de a uno — el mismo campo que metió 7,000 lt de salsa.
+  await irA("Registrar merma");
+  await page.waitForTimeout(400);
+  await page.locator("select").filter({hasText:"Seleccionar..."}).first().selectOption("ins-pollo");
+  await page.waitForTimeout(300);
+  // Hay 10,000 g de pollo; mermar 10,000,000 es mil veces eso.
+  await page.locator('input[type="number"]').first().fill("10000000");
+  await page.waitForTimeout(400);
+  const cuerpoMerma=await page.locator("body").innerText();
+  check("32. mermar mil veces lo que hay avisa en el formulario",
+        /veces lo que hay/.test(cuerpoMerma),(cuerpoMerma.match(/.{0,60}veces lo que hay.{0,40}/)||[])[0]);
+  check("33. y propone el número correcto",
+        /¿No serán 10,000 g\?/.test(cuerpoMerma),(cuerpoMerma.match(/.{0,40}No serán.{0,30}/)||[])[0]);
+  await page.locator('input[type="number"]').first().fill("500");
+  await page.waitForTimeout(400);
+  check("34. una merma normal no dispara nada",
+        !/veces lo que hay/.test(await page.locator("body").innerText()));
+
+  // El ajuste manual vive en la pestaña de Inventario, renglón por renglón.
+  await irA("Inventario");
+  await page.waitForTimeout(400);
+  const btnAjustar=page.getByRole("button",{name:"Ajustar"}).first();
+  if(await btnAjustar.count()){
+    await btnAjustar.click();
+    await page.waitForTimeout(300);
+    const cajaAj=page.locator('input[type="number"]').first();
+    await cajaAj.fill("99999999");
+    const dlgAj=[];
+    page.removeAllListeners("dialog");
+    page.once("dialog",async d=>{dlgAj.push(d.message());await d.dismiss();});
+    const antesAj=DB.movimientos_sucursal.length;
+    await page.getByRole("button",{name:"✓"}).first().click();
+    await page.waitForTimeout(900);
+    check("35. el ajuste manual pide confirmar cuando el número es absurdo",
+          dlgAj.some(m=>/REVISA LA CANTIDAD/.test(m)),dlgAj.join(" | "));
+    check("36. y cancelar no escribe ningún movimiento",
+          DB.movimientos_sucursal.length===antesAj,DB.movimientos_sucursal.length-antesAj);
+    page.on("dialog",async d=>{await d.accept();});
+  }else{
+    check("35. el ajuste manual pide confirmar cuando el número es absurdo",false,"no se encontró el botón Ajustar");
+    check("36. y cancelar no escribe ningún movimiento",false,"no se encontró el botón Ajustar");
+  }
+
   await browser.close();
   const fails=results.filter(r=>!r.ok);
   console.log("\n================ RESULTADO ================");

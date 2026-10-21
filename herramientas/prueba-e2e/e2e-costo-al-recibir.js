@@ -129,6 +129,42 @@ const check=(n,c,e)=>{results.push({n,ok:!!c});console.log((c?"  ✓ ":"  ✗ ")
   check("3. muestra el precio de catálogo como referencia",
     await page.getByText(/catálogo/).first().isVisible());
 
+  // ---- 1b) La cantidad recibida contra la pedida (v7.38) ----
+  //
+  // Hasta v7.37 las guardas de magnitud se iban poniendo DESPUÉS de cada golpe
+  // y en una pantalla a la vez. Recepción no tenía ninguna sobre la cantidad —
+  // y es la pantalla que más se usa: todos los días, por varias personas.
+  //
+  // La referencia aquí es la más limpia del sistema: alguien escribió cuánto
+  // quería y ahora escribe cuánto llegó.
+  const cajaCant=page.locator('input[type="number"]').first();
+  await cajaCant.fill("10000");            // se pidieron 10 kg
+  await page.waitForTimeout(400);
+  const cuerpoCant=await page.locator("body").innerText();
+  check("3b. recibir 1000x lo pedido avisa en el renglón",
+        /1,000 veces lo pedido/.test(cuerpoCant),(cuerpoCant.match(/.{0,60}veces lo pedido.{0,40}/)||[])[0]);
+  check("3c. y propone el número correcto",
+        /¿No serán 10 kg\?/.test(cuerpoCant),(cuerpoCant.match(/.{0,40}No serán.{0,30}/)||[])[0]);
+
+  // Al guardar pide confirmación explícita; cancelar no debe escribir nada.
+  const dlg=[];
+  // El test trae un manejador global que ACEPTA todo. Aquí hace falta cancelar,
+  // que es justo lo que debe probarse: que cancelar no escriba nada.
+  page.removeAllListeners("dialog");
+  page.once("dialog",async d=>{dlg.push(d.message());await d.dismiss();});
+  await page.getByRole("button",{name:/Recepción completa|Confirmar con faltantes/}).click();
+  await page.waitForTimeout(1000);
+  check("3d. al guardar pide confirmar y nombra el artículo",
+        dlg.some(m=>/REVISA LAS CANTIDADES/.test(m)&&/POLLO KG/.test(m)),dlg.join(" | "));
+  check("3e. cancelar no crea la recepción",DB.recepciones.length===0,DB.recepciones.length);
+
+  // Vuelta a la cantidad correcta: la guarda tiene que apagarse sola.
+  await cajaCant.fill("10");
+  await page.waitForTimeout(400);
+  check("3f. con la cantidad correcta el aviso desaparece",
+        !/veces lo pedido/.test(await page.locator("body").innerText()));
+  page.on("dialog",async d=>{await d.accept();});   // se restaura el global
+
   // ---- 2) Sin costo SÍ se recibe, y se avisa con qué precio entra (v7.33) ----
   // Hasta v7.32c estas verificaciones decían lo contrario: "sin costo NO se
   // creó la recepción". Era un muro, y dirección señaló por qué no podía
