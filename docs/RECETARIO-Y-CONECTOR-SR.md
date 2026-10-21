@@ -2558,3 +2558,84 @@ caso "en servicio"— y comprueban los tres desenlaces, incluido que con poca hi
 Se comprobó que reprueban la versión anterior: **27 de 31**.
 
 Suite: **387 verificaciones en 18 archivos**.
+
+## 33. $231,789 en dos tecleos, y la guarda que faltaba (v7.37)
+
+**21-oct-2026.** Dirección manda la foto de la pantalla de producción de cocina: *"le sale este
+error"*. El aviso decía que el inventario no alcanzaba para 4 ingredientes, con existencias
+imposibles: **vinagre blanco −285,668 ml**, aceite de oliva −166,334 ml.
+
+Lo que cocina estaba haciendo en ese momento —una vinagreta de 4 lt— **estaba bien y se guardó
+bien**. El aviso decía la verdad, pero la causa era de una semana antes.
+
+### 33.1 Dos tecleos
+
+| Fecha | Capturaron | Debió ser | Tandas que calculó |
+|---|---:|---:|---:|
+| 14-oct | 1,332.8 kg | 1.3328 kg | 2,666 |
+| 21-oct | 1,504 kg | 1.504 kg | 3,008 |
+
+Escribieron **gramos** en el campo que pide **kilos**. El sistema hizo exactamente lo que se le
+pidió: para producir 1,504 kg de dip hacen falta 3,008 tandas, y descontó los ingredientes de
+3,008 tandas.
+
+**$231,789 de insumos** que nunca se usaron. 663 litros de claras en negativo, 11,405 aguacates,
+y del otro lado **2,837 kg de dip de aguacate** ($214,264) — casi tres toneladas. El inventario
+total marcaba menos que el dip solo.
+
+### 33.2 La guarda que no existía
+
+La hoja de conteo tiene guarda de magnitud desde **v7.30**. Las recetas también. **Producción no
+tenía ninguna** — y es la más peligrosa de las tres, porque un error en un solo campo **se
+multiplica por cada ingrediente de la receta a la vez**: un 1000× en un renglón se volvió 1000× en
+siete insumos.
+
+Y hay algo peor: **el aviso de faltante sí salió las dos veces**, y las dos veces lo pasaron de
+largo. Está redactado como trámite rutinario —*"se puede registrar igual"*— y describe la
+**consecuencia** ("no alcanza el inventario") en vez de la **causa** ("el número está mil veces
+arriba"). Quien ve primero el motivo correcto corrige; quien ve primero un trámite, lo acepta.
+
+`avisoProduccion()` nombra la causa y propone el número, como `avisoContenido`:
+
+> *1,600 lt de ADEREZO RANCH son 800 tandas, y se van a descontar los ingredientes de todas.
+> ¿No serán 1.6 lt? Eso serían 0.80 tandas.*
+
+Sale **mientras se escribe** —corregir antes de apretar el botón es gratis— y otra vez al guardar,
+**antes** del aviso de faltante. Umbral: 20 tandas, cuando la producción real más grande registrada
+son 4. No bloquea.
+
+### 33.3 Un hallazgo de paso: el kárdex tenía un movimiento duplicado
+
+Al reconstruir, las claras no cuadraban: kárdex **−1,024,450** contra existencia **−663,007.60**.
+La diferencia era un `salida_produccion` de claras **insertado dos veces**, a las 17:59:07 y
+18:03:35 — cuatro minutos y medio aparte, con `produccion_consumo` mostrando **un solo renglón**.
+
+Es decir: **la app descontó una vez y el POST se insertó dos**. Un reintento de red sobre una
+petición que no es idempotente. El duplicado no movió existencia, sólo ensució el kárdex, y por eso
+se neutralizó con una entrada que **no toca inventario**.
+
+Queda anotado como riesgo abierto: los `sbPost` de movimientos no llevan llave de idempotencia.
+
+### 33.4 La corrección
+
+Se devolvió a cada ingrediente el 99.9% de lo descontado, calculado desde `produccion_consumo`
+(un renglón por ingrediente, a diferencia del kárdex), y salió el dip que nunca se produjo.
+
+| | Antes | Después |
+|---|---:|---:|
+| Dip de aguacate | 2,837 kg · $214,264 | **3.62 kg · $273** |
+| Insumos en negativo | 39 · −$231,789 | **35 · −$8,619** |
+| Inventario total | $112,016 | **$100,659** |
+
+Las dos producciones quedaron en 1.3328 y 1.504 kg, con su nota.
+
+### 33.5 Verificación
+
+`e2e-produccion.js` pasó de 24 a 31 verificaciones: que el aviso salga al escribir, que proponga el
+número, que al guardar pida confirmación, que **cancelar no escriba nada**, y que una tanda normal
+no lo dispare — esa última importa tanto como las otras, porque una guarda que sale siempre se
+ignora, que es justo lo que pasó con el aviso de faltante.
+
+Reprueba la versión anterior: **27 de 31**.
+
+Suite: **394 verificaciones en 18 archivos**.
