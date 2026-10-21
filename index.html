@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.37";
+const V="7.38";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -411,6 +411,44 @@ function avisoProduccion(nombre,unidad,rendimiento,producido){
     : "";
   return `${fmtCant(prod,u)} de ${nombre} son ${Math.round(tandas).toLocaleString("es-MX")} tandas`
        + `, y se van a descontar los ingredientes de todas.${sugerencia}`;
+}
+
+// v7.38 — Una sola regla para todas las pantallas donde se teclea una cantidad.
+//
+// Cinco de los últimos seis incidentes fueron EL MISMO error: un número
+// capturado en la unidad equivocada, casi siempre gramos donde se piden kilos
+// o mililitros donde se piden litros.
+//
+//   contenido 1 en vez de 1000      $260,000 de inventario inventado   v7.30
+//   conteo de salsa verde           $147,138                            v7.34
+//   conteo de arroz al vapor        $33,183                             —
+//   conteo de guacamole             $4,040 armado, sin detonar          —
+//   producción de dip (dos veces)   $231,789                            v7.37
+//
+// Cada guarda se puso DESPUÉS del golpe y en una pantalla a la vez. Esto las
+// unifica y cubre las que faltaban: recepción, merma, ajuste manual, compra
+// directa y recetas, que escriben inventario y no tenían ninguna.
+//
+// LA REGLA. Una cantidad es sospechosa cuando es desproporcionada frente a una
+// REFERENCIA DEL MISMO RENGLÓN: lo que se pidió, lo que hay, lo que cuesta el
+// platillo. No hay umbrales absolutos escritos a mano —envejecen y empiezan a
+// mentir—; la referencia sale del dato que ya está en pantalla.
+//
+// Y si al correr el punto tres lugares la proporción se vuelve normal, se dice:
+// nombrar la causa y proponer el número es lo que hace que alguien corrija. Un
+// aviso que sólo describe la consecuencia se aprende a aceptar, que es
+// exactamente lo que pasó con el de "no alcanza el inventario" en producción.
+function avisoMagnitud(cantidad,referencia,opciones){
+  const o=opciones||{};
+  const c=parseFloat(cantidad)||0,r=parseFloat(referencia)||0;
+  const factor=o.factor||20;
+  if(!(c>0)||!(r>0))return null;
+  if(c/r<factor)return null;
+  const u=o.unidad||"";
+  const enMil=c/1000;
+  const sugerencia=(enMil/r>=0.05&&enMil/r<factor)?` ¿No serán ${fmtCant(enMil,u)}?`:"";
+  return `${fmtCant(c,u)} es ${Math.round(c/r).toLocaleString("es-MX")} veces ${o.refEs||"lo esperado"}`
+       + ` (${fmtCant(r,u)}).${sugerencia}`;
 }
 
 const UNIDADES_CHICAS={g:1,ml:1};
@@ -2173,6 +2211,18 @@ function RecepcionView({pedidos,pedidoDetalle,proveedores,provEstatus,catalogo,r
     // precio real llega, la app corrige sola el movimiento y el costo promedio.
     // El renglón queda con `costo_real` vacío, así que sigue siendo
     // identificable como "precio nunca capturado".
+    // v7.38 — Antes de guardar, la magnitud. Va primero que todo lo demás por
+    // la lección de producción: quien ve primero el motivo correcto corrige.
+    const raras=items.map(d=>{
+      const cat=catalogo.find(c=>c.id===d.catalogo_id)||{};
+      const av=avisoMagnitud(cantRecibida[d.id],d.cantidad,{unidad:cat.unidad_clave,refEs:"lo pedido"});
+      return av?`• ${cat.articulo||"?"}: ${av}`:null;
+    }).filter(Boolean);
+    if(raras.length){
+      if(!confirm(`⚠ REVISA LAS CANTIDADES\n\n${raras.join("\n")}\n\n`
+        +`Si de verdad llegó eso, continúa. Si no, cancela y corrígelo: entra tal cual al inventario.\n\n`
+        +`¿Registrar de todas formas?`))return;
+    }
     const sinPrecio=lineasSinPrecio(provId,items);
     setAvisoRecep(null);setSaving(true);
     const costos={};items.forEach(d=>{const v=parseFloat(costoRecep[d.id]);if(v>0)costos[d.id]=v;});
@@ -2220,6 +2270,10 @@ function RecepcionView({pedidos,pedidoDetalle,proveedores,provEstatus,catalogo,r
         // la entrada toma el de catálogo. El renglón se marca en ámbar (aviso)
         // y no en rojo (falla), y dice qué va a pasar.
         const tomaCatalogo=!sistemaCostea&&recibido>0&&!(cu>0);
+        // v7.38 — La cantidad recibida contra la pedida. Es la referencia más
+        // limpia que hay en todo el sistema: alguien escribió cuánto quería y
+        // ahora escribe cuánto llegó. Recibir 20 veces lo pedido no pasa.
+        const avisoCant=avisoMagnitud(recibido,esperado,{unidad:cat.unidad_clave,refEs:"lo pedido"});
         // Aviso de magnitud, mismo criterio que en recetas: un precio 5 veces
         // arriba del de referencia casi siempre es un decimal fuera de lugar o
         // el importe total en lugar del unitario.
@@ -2228,7 +2282,12 @@ function RecepcionView({pedidos,pedidoDetalle,proveedores,provEstatus,catalogo,r
         return(<tr key={d.id} className={`border-t border-gray-100 ${tomaCatalogo?"bg-amber-50":diff?"bg-orange-50":""}`}>
           <td className="px-3 py-2 font-medium text-gray-900">{cat.articulo} <span className="text-gray-400 text-xs">{cat.unidad_clave}</span></td>
           <td className="px-3 py-2 text-center text-gray-500">{cat.unidad_clave==="kg"?fmtQ(esperado,"kg"):esperado}</td>
-          <td className="px-3 py-2 text-center"><input type="number" min="0" step={cat.unidad_clave==="kg"?"0.25":"1"} className={`w-20 text-center border rounded-lg px-1 py-1 text-sm ${diff?"border-orange-400 bg-orange-50":"border-gray-200"}`} value={cantRecibida[d.id]||""} onChange={e=>setCantRecibida({...cantRecibida,[d.id]:parseFloat(e.target.value)||0})}/></td>
+          <td className="px-3 py-2 text-center">
+            <input type="number" min="0" step={cat.unidad_clave==="kg"?"0.25":"1"}
+              className={`w-20 text-center border rounded-lg px-1 py-1 text-sm ${avisoCant?"border-red-400 bg-red-50":diff?"border-orange-400 bg-orange-50":"border-gray-200"}`}
+              value={cantRecibida[d.id]||""} onChange={e=>setCantRecibida({...cantRecibida,[d.id]:parseFloat(e.target.value)||0})}/>
+            {avisoCant&&<span className="block text-[10px] text-red-700 font-semibold leading-snug mt-0.5">{avisoCant}</span>}
+          </td>
           <td className="px-3 py-2">{sistemaCostea
             ?<span className="text-xs text-gray-400">lo calcula el sistema (PEPS)</span>
             :<div><input type="number" min="0" step="0.01" placeholder="0.00" className={`w-24 text-right border rounded-lg px-2 py-1 text-sm ${tomaCatalogo?"border-amber-300":raro?"border-amber-400 bg-amber-50":"border-gray-200"}`} value={costoRecep[d.id]??""} onChange={e=>setCostoRecep({...costoRecep,[d.id]:e.target.value})}/>
@@ -2397,7 +2456,7 @@ function FinanzasView({cxp,setCxp,pagos,setPagos,pedidos,proveedores,pedidoDetal
 }
 
 // ======================== COMPRAS DIRECTAS (Sucursal) ========================
-function ComprasDirectasView({comprasDirectas,setComprasDirectas,catalogo,proveedores,cxp,setCxp,onEntrada}){
+function ComprasDirectasView({comprasDirectas,setComprasDirectas,catalogo,proveedores,cxp,setCxp,onEntrada,invSucursal,insumos}){
   const [form,setForm]=useState({catalogo_id:"",proveedor_id:"",cantidad:0,costo_unitario:0,metodo_pago:"efectivo",nota:""});
   const [saving,setSaving]=useState(false);
   const [filter,setFilter]=useState("");
@@ -2478,7 +2537,18 @@ function ComprasDirectasView({comprasDirectas,setComprasDirectas,catalogo,provee
           {form.catalogo_id&&(()=>{const c=catalogo.find(x=>x.id===form.catalogo_id);
             return c?<p className="text-xs text-teal-700 mt-1">Seleccionado: <b>{c.articulo}</b> ({c.unidad_clave})</p>:null;})()}
         </div>
-        <div><label className="text-xs text-gray-500 block mb-1">Cantidad</label><input type="number" min="0" step="0.25" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={form.cantidad||""} onChange={e=>setForm({...form,cantidad:parseFloat(e.target.value)||0})}/></div>
+        {/* v7.38 — Lo que va a ENTRAR (cantidad × contenido, en unidad base)
+            contra lo que hay. Sólo cuando ya hay existencia: contra cero no
+            hay proporción que medir y el aviso saldría en cada alta nueva. */}
+        {(()=>{const cat=catalogo.find(c=>c.id===form.catalogo_id);
+          const inv=cat?(invSucursal||[]).find(v=>v.insumo_id===cat.insumo_id):null;
+          const base=(parseFloat(form.cantidad)||0)*(parseFloat(cat?.contenido)||1);
+          const uB=cat?(insumos||[]).find(x=>x.id===cat.insumo_id)?.unidad_base:"";
+          const avC=inv?avisoMagnitud(base,inv.existencia,{unidad:uB,refEs:"lo que hay en inventario"}):null;
+          return<div><label className="text-xs text-gray-500 block mb-1">Cantidad</label>
+            <input type="number" min="0" step="0.25" className={`w-full border rounded-lg px-3 py-1.5 text-sm ${avC?"border-red-400 bg-red-50":"border-gray-200"}`} value={form.cantidad||""} onChange={e=>setForm({...form,cantidad:parseFloat(e.target.value)||0})}/>
+            {avC&&<p className="mt-1 text-[11px] text-red-700 font-semibold leading-snug">Entrarían {avC}</p>}
+          </div>;})()}
       </div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
         <div><label className="text-xs text-gray-500 block mb-1">Costo unitario</label><input type="number" min="0" step="0.01" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={form.costo_unitario||""} onChange={e=>setForm({...form,costo_unitario:parseFloat(e.target.value)||0})}/></div>
@@ -3548,6 +3618,12 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
     const actual=parseFloat(row.existencia)||0;
     const diff=Math.round((ajusteVal-actual)*1000)/1000;
     if(diff===0){setAjustando(null);return;}
+    // v7.38 — Mismo criterio que la hoja de conteo, que es lo que este campo
+    // hace de a uno: fijar la existencia a mano. El conteo del 11-sep metió
+    // 7,000 lt de salsa por este mismo tipo de captura.
+    const avAj=avisoMagnitud(ajusteVal,actual,{unidad:row.ins?.unidad_base||"",refEs:"lo que hay"});
+    if(avAj&&!confirm(`⚠ REVISA LA CANTIDAD\n\n${row.ins?.nombre||"Este insumo"}: ${avAj}\n\n`
+      +`Esto fija la existencia a ese número y registra la diferencia como ajuste.\n\n¿Ajustar de todas formas?`))return;
     setSaving(true);
     const costo=costoInsumo(row.insumo_id,invSucursal,catalogo);
     const mv=await sbPost("movimientos_sucursal",{sucursal_id:row.sucursal_id,insumo_id:row.insumo_id,tipo:diff>0?"entrada_ajuste":"salida_ajuste",cantidad:Math.abs(diff),costo_unitario:costo,fecha:new Date().toISOString().split("T")[0],nota:ajusteNota||"Ajuste por conteo físico",registrado_por:rol});
@@ -4060,7 +4136,14 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
         <div className="space-y-3">
           <div><label className="text-xs text-gray-500 block mb-1">Insumo</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={fMerma.insumo_id} onChange={e=>setFMerma({...fMerma,insumo_id:e.target.value})}><option value="">Seleccionar...</option>{rows.map(r=><option key={r.insumo_id} value={r.insumo_id}>{r.ins.nombre} — hay {fmtQ(parseFloat(r.existencia)||0,r.ins.unidad_base||"")}</option>)}</select></div>
           <div className="grid grid-cols-2 gap-3">
-            <div><label className="text-xs text-gray-500 block mb-1">Cantidad</label><input type="number" min="0" step="0.25" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={fMerma.cantidad||""} onChange={e=>setFMerma({...fMerma,cantidad:parseFloat(e.target.value)||0})}/></div>
+            {/* v7.38 — La merma contra lo que hay. Mermar mil veces la existencia
+                manda el insumo a negativo profundo y ensucia el costo del mes. */}
+            {(()=>{const rM=rows.find(x=>x.insumo_id===fMerma.insumo_id);
+              const avM=rM?avisoMagnitud(fMerma.cantidad,rM.existencia,{unidad:rM.ins.unidad_base,refEs:"lo que hay"}):null;
+              return<div><label className="text-xs text-gray-500 block mb-1">Cantidad</label>
+                <input type="number" min="0" step="0.25" className={`w-full border rounded-lg px-3 py-1.5 text-sm ${avM?"border-red-400 bg-red-50":"border-gray-200"}`} value={fMerma.cantidad||""} onChange={e=>setFMerma({...fMerma,cantidad:parseFloat(e.target.value)||0})}/>
+                {avM&&<p className="mt-1 text-[11px] text-red-700 font-semibold leading-snug">{avM}</p>}
+              </div>;})()}
             <div><label className="text-xs text-gray-500 block mb-1">Motivo</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={fMerma.motivo} onChange={e=>setFMerma({...fMerma,motivo:e.target.value})}><option value="caducidad">Caducidad</option><option value="dano">Daño / mal estado</option><option value="produccion">Error de producción</option><option value="robo">Robo / faltante</option><option value="ajuste_inventario">Ajuste de inventario</option><option value="otro">Otro</option></select></div>
           </div>
           <div><label className="text-xs text-gray-500 block mb-1">Nota</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Opcional" value={fMerma.nota} onChange={e=>setFMerma({...fMerma,nota:e.target.value})}/></div>
@@ -5045,7 +5128,7 @@ function App(){
       {view==="catalogo"&&rol==="admin"&&<CatalogoView catalogo={catalogo} setCatalogo={setCatalogo} proveedores={proveedores} setProveedores={setProveedores} unidades={unidades} inventario={inventario} flujos={flujos} insumos={insumos} setInsumos={setInsumos} recetas={recetas}/>}
       {view==="recepcion"&&rol==="sucursal"&&<RecepcionView pedidos={pedidos} pedidoDetalle={pedidoDetalle} proveedores={proveedores} provEstatus={provEstatus} catalogo={catalogo} recepciones={recepciones} recepcionDetalle={recepcionDetalle} onRecibir={handleRecibir}/>}
       {view==="finanzas"&&["admin","compras","finanzas"].includes(rol)&&<FinanzasView cxp={cxp} setCxp={setCxp} pagos={pagos} setPagos={setPagos} pedidos={pedidos} proveedores={proveedores} pedidoDetalle={pedidoDetalle} catalogo={catalogo}/>}
-      {view==="compras_directas"&&["sucursal","admin","compras","finanzas"].includes(rol)&&<ComprasDirectasView comprasDirectas={comprasDirectas} setComprasDirectas={setComprasDirectas} catalogo={catalogo} proveedores={proveedores} cxp={cxp} setCxp={setCxp} onEntrada={async(catId,cant,costoU)=>{
+      {view==="compras_directas"&&["sucursal","admin","compras","finanzas"].includes(rol)&&<ComprasDirectasView comprasDirectas={comprasDirectas} setComprasDirectas={setComprasDirectas} catalogo={catalogo} proveedores={proveedores} cxp={cxp} setCxp={setCxp} invSucursal={invSucursal} insumos={insumos} onEntrada={async(catId,cant,costoU)=>{
         const sucId=sucursales[0]?.id;if(!sucId)return;
         const cat=catalogo.find(c=>c.id===catId);if(!cat?.insumo_id)return;
         const ins=insumos.find(x=>x.id===cat.insumo_id);

@@ -41,7 +41,7 @@ const DB={
      costo_referencia:53,proveedor_id:"prov-tort",aplica_iva:false,activo:true,
      insumo_id:"ins-nopal",contenido:7.7,inventario_almacen_id:null,notas:null},
   ],
-  inventario_sucursal:[{id:"iv-nopal",sucursal_id:"suc-1",insumo_id:"ins-nopal",existencia:0,costo_promedio:0}],
+  inventario_sucursal:[{id:"iv-nopal",sucursal_id:"suc-1",insumo_id:"ins-nopal",existencia:100,costo_promedio:6.88}],
   productos_venta:[],recetas:[],producciones:[],produccion_consumo:[],
   pedidos:[],pedido_detalle:[],pedido_proveedor_estatus:[],
   inventario_almacen:[],lotes_almacen:[],movimientos_almacen:[],salidas_peps:[],
@@ -122,7 +122,10 @@ const check=(n,c,e)=>{results.push({n,ok:!!c});console.log((c?"  ✓ ":"  ✗ ")
   const capturar=async()=>{
     await page.getByPlaceholder("Escribe para buscar el artículo…").fill("TORTILLA DE NOPAL");
     await page.waitForTimeout(400);
-    await page.getByText("TORTILLA DE NOPAL",{exact:false}).last().click().catch(()=>{});
+    // Las opciones del buscador son <button>: hay que clicar una de ésas y no
+    // cualquier texto, porque después de la primera compra el nombre también
+    // aparece en la tabla de compras recientes.
+    await page.getByRole("button",{name:/TORTILLA DE NOPAL/}).first().click();
     await page.waitForTimeout(300);
     const nums=page.locator('input[type="number"]');
     await nums.nth(0).fill("13");
@@ -171,14 +174,31 @@ const check=(n,c,e)=>{results.push({n,ok:!!c});console.log((c?"  ✓ ":"  ✗ ")
         {c:cd.cantidad,cu:cd.costo_unitario,t:cd.costo_total});
   // 13 kg × contenido 7.7 = 100.1 piezas, a 53/7.7 = $6.88 por pieza.
   const inv=DB.inventario_sucursal.find(i=>i.insumo_id==="ins-nopal");
-  check("11. y entra al inventario convertido a unidad base (13 × 7.7 = 100.1 pz)",
-        inv&&Math.abs(parseFloat(inv.existencia)-100.1)<0.05,inv&&inv.existencia);
+  check("11. y entra al inventario convertido a unidad base (100 + 13 × 7.7 = 200.1 pz)",
+        inv&&Math.abs(parseFloat(inv.existencia)-200.1)<0.05,inv&&inv.existencia);
   check("12. con el costo por pieza, no por kilo ($53 / 7.7 = $6.88)",
         inv&&Math.abs(parseFloat(inv.costo_promedio)-6.8831)<0.01,inv&&inv.costo_promedio);
   check("13. el kárdex registra la entrada",
         DB.movimientos_sucursal.some(m=>m.tipo==="entrada_compra_directa"),
         DB.movimientos_sucursal.map(m=>m.tipo));
   check("14. y lo confirma en pantalla",/Compra registrada/.test(avisos.join(" | ")),avisos.join(" | "));
+
+  // ---- 4) La guarda de magnitud en la cantidad (v7.38) ----
+  //
+  // La referencia aquí es lo que YA hay: 100 piezas. Comprar 13 kg trae
+  // 100.1 piezas (×7.7), que es normal. Comprar 13,000 kg traería 100,100.
+  await capturar();   // el guardado anterior limpió el formulario
+  await page.locator('input[type="number"]').nth(0).fill("13000");
+  await page.waitForTimeout(500);
+  const cuerpoCD=await page.locator("body").innerText();
+  check("15. una cantidad mil veces mayor avisa, en unidad base",
+        /veces lo que hay en inventario/.test(cuerpoCD),(cuerpoCD.match(/.{0,70}veces lo que hay.{0,40}/)||[])[0]);
+  check("16. y dice cuánto ENTRARÍA de verdad, no lo tecleado",
+        /Entrar[íi]an 100,100 pz/.test(cuerpoCD),(cuerpoCD.match(/.{0,50}Entrar.{0,40}/)||[])[0]);
+  await page.locator('input[type="number"]').nth(0).fill("13");
+  await page.waitForTimeout(500);
+  check("17. la cantidad normal no dispara nada",
+        !/veces lo que hay en inventario/.test(await page.locator("body").innerText()));
 
   await browser.close();
   const fails=results.filter(r=>!r.ok);

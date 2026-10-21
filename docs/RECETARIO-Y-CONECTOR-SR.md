@@ -2639,3 +2639,79 @@ ignora, que es justo lo que pasó con el aviso de faltante.
 Reprueba la versión anterior: **27 de 31**.
 
 Suite: **394 verificaciones en 18 archivos**.
+
+## 34. Las guardas dejan de ponerse una por golpe (v7.38)
+
+**21-oct-2026.** Después de revertir los $231,789 del dip, dirección: *"revisa todas las pantallas
+y ponles la guarda"*.
+
+Hasta aquí cada guarda se había puesto **después de su propio incidente y en una pantalla a la
+vez**. Cinco de los últimos seis desastres fueron el mismo error —un número en la unidad
+equivocada, casi siempre gramos donde se piden kilos— y cada vez se tapó un agujero mientras los
+demás seguían abiertos.
+
+| Incidente | Costo | Guarda puesta |
+|---|---:|---|
+| contenido 1 en vez de 1000 | $260,000 | v7.30 |
+| conteo de salsa verde | $147,138 | v7.34 (otra causa) |
+| conteo de arroz al vapor | $33,183 | — |
+| conteo de guacamole | $4,040 armado | — |
+| producción de dip, dos veces | $231,789 | v7.37 |
+
+### 34.1 El censo
+
+39 campos numéricos en la app. Los que **escriben inventario**:
+
+| Pantalla | Guarda antes | Ahora |
+|---|---|---|
+| Contenido de presentación | `avisoContenido` v7.30 | igual |
+| Hoja de conteo | magnitud 100× v7.30 | igual |
+| Producción | `avisoProduccion` v7.37 | igual |
+| Costo al recibir | `raro` 5× | igual |
+| **Cantidad recibida** | **ninguna** | contra lo pedido |
+| **Merma** | **ninguna** | contra lo que hay |
+| **Ajuste manual** | **ninguna** | contra lo que hay |
+| **Compra directa** | **ninguna** | contra lo que hay, en unidad base |
+
+La cantidad recibida es la que más dolía por omisión: es la pantalla de **uso diario**, por varias
+personas, y no tenía nada sobre la cantidad — sólo sobre el precio.
+
+### 34.2 Una sola regla, con referencia del propio renglón
+
+`avisoMagnitud(cantidad, referencia, …)` sustituye la idea de umbrales absolutos. Una cantidad es
+sospechosa cuando es **desproporcionada frente a un dato que ya está en la pantalla**:
+
+| Pantalla | Referencia |
+|---|---|
+| Recepción | lo que se pidió |
+| Merma, ajuste, compra directa | lo que hay en inventario |
+| Producción | el rendimiento de la tanda |
+
+No hay números mágicos escritos a mano: envejecen y empiezan a mentir, como habría pasado con un
+horario fijo en el semáforo (§32). La referencia se mueve con el negocio.
+
+Y si al correr el punto tres lugares la proporción se vuelve normal, **se propone el número**:
+
+> *10,000 kg es 1,000 veces lo pedido (10 kg). ¿No serán 10 kg?*
+
+Esa segunda frase es la que hace que alguien corrija. El aviso de "no alcanza el inventario" llevaba
+meses saliendo en producción, describía la **consecuencia** y no la **causa**, y lo pasaron de largo
+las dos veces que importó.
+
+### 34.3 Lo que deliberadamente NO se cubrió
+
+Cuatro campos numéricos escriben inventario pero **no tienen una referencia honesta**: existencia
+inicial al dar de alta un insumo, lote de almacén, surtido almacén→sucursal y rendimiento de
+preparación. En todos, el primer número no tiene contra qué compararse.
+
+Poner ahí un umbral inventado sería ruido, y **una guarda que sale cuando no pasa nada enseña a
+ignorar las que sí importan** — la misma razón por la que el semáforo dejó de gritar de noche.
+Quedan anotados: necesitan una referencia histórica por insumo, que es otro trabajo.
+
+### 34.4 Verificación
+
+13 verificaciones nuevas repartidas en tres archivos, incluyendo en cada pantalla que **cancelar no
+escriba nada** y que **una cantidad normal no dispare el aviso**. Esa última importa tanto como la
+otra: es la que evita que la guarda se vuelva ruido.
+
+Suite: **407 verificaciones en 18 archivos**.
