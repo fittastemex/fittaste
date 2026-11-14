@@ -88,7 +88,7 @@ const check=(n,c,e)=>{results.push({n,ok:!!c});console.log((c?"  ✓ ":"  ✗ ")
 (async()=>{
   console.log("\n== Semáforo del conector: enterarse en minutos, no en días (v7.28) ==");
   const html=fs.readFileSync("/home/user/fittaste/index.html","utf8");
-  const browser=await chromium.launch({executablePath:"/opt/pw-browsers/chromium-1194/chrome-linux/chrome",headless:true});
+  const browser=await chromium.launch({executablePath:process.env.E2E_CHROME||"/opt/pw-browsers/chromium",headless:true});
   const page=await(await browser.newContext()).newPage();
   page.on("dialog",async d=>{await d.accept();});
   page.on("pageerror",e=>console.log("  [pageerror]",e.message));

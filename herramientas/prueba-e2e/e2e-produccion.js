@@ -104,7 +104,7 @@ const inv=(id)=>DB.inventario_sucursal.find(i=>i.insumo_id===id);
 (async()=>{
   console.log("\n== Producción de preparaciones (v7.25) ==");
   const html=fs.readFileSync("/home/user/fittaste/index.html","utf8");
-  const browser=await chromium.launch({executablePath:"/opt/pw-browsers/chromium-1194/chrome-linux/chrome",headless:true});
+  const browser=await chromium.launch({executablePath:process.env.E2E_CHROME||"/opt/pw-browsers/chromium",headless:true});
   const page=await(await browser.newContext()).newPage();
   page.on("dialog",async d=>{await d.accept();});
   page.on("pageerror",e=>console.log("  [pageerror]",e.message));

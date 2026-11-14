@@ -30,13 +30,16 @@ create table if not exists _respaldo_proveedores_20261114 as
 -- ---------------------------------------------------------------------------
 -- 1. tes_proveedores adopta las columnas que hoy sólo existen en Fit Taste
 -- ---------------------------------------------------------------------------
+-- tipo_flujo_id va SIN llave foránea y nullable, a petición de tesorería
+-- (condición 2 de su réplica): un borrado del lado operativo no debe poder
+-- bloquear una operación de tesorería. La integridad la cuida la app.
 alter table tes_proveedores
-  add column if not exists tipo_flujo_id uuid references tipos_flujo_costo(id),
+  add column if not exists tipo_flujo_id uuid,
   add column if not exists alias_cocina  text,
   add column if not exists es_interno    boolean not null default false;
 
 comment on column tes_proveedores.tipo_flujo_id is
-  'Cómo se captura el costo en Fit Taste: Commodity, Compra manual, Directo, Almacen interno.';
+  'Cómo se captura el costo en Fit Taste: Commodity, Compra manual, Directo, Almacen interno. Apunta a tipos_flujo_costo SIN llave foránea, a propósito. Tesorería nunca lo lee ni lo escribe.';
 comment on column tes_proveedores.alias_cocina is
   'Nombre con el que cocina conoce al proveedor. Ej: alias_cocina="Pollo" sobre nombre="King''s Food de Santander". Tesorería sigue mostrando `alias`.';
 comment on column tes_proveedores.es_interno is
@@ -65,8 +68,14 @@ update tes_proveedores set alias_cocina='Juan Carlos Botello',
 --    sola fila histórica de pedidos, recepciones ni catálogo.
 --    token_activo = false: ninguno de estos usa el portal todavía.
 -- ---------------------------------------------------------------------------
+-- liquida_por_descuento va EXPLÍCITO en false, a petición de tesorería
+-- (condición 1 de su réplica, no negociable): su trigger fn_tes_cfdi_liquidada
+-- lo lee al insertar un CFDI para decidir si la factura se paga por
+-- transferencia o se descuenta del depósito, como Uber y Clip. Ninguno de
+-- estos seis se liquida por descuento.
 insert into tes_proveedores (id, nombre, alias_cocina, rfc, tipo_flujo_id,
-                             contacto_nombre, contacto_email, activo, token_activo, es_interno, nota)
+                             contacto_nombre, contacto_email, activo, token_activo,
+                             es_interno, liquida_por_descuento, nota)
 select p.id,
        case p.nombre
          when 'Walmart' then 'NUEVA WAL MART DE MEXICO'
@@ -81,6 +90,7 @@ select p.id,
        end,
        p.tipo_flujo_id, p.contacto, p.email, p.activo, false,
        (p.nombre = 'Almacen'),
+       false,
        case when p.nombre='Almacen'
             then 'Entidad interna: el CEDIS surtiendo a sucursal. No es un tercero.'
             else 'Migrado del catálogo de Fit Taste el 2026-11-14.' end

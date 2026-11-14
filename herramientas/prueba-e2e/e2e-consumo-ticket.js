@@ -53,7 +53,7 @@ const solapadas=[
 
   // ---------- La copia de la lógica que vive en la app ----------
   const html=fs.readFileSync("/home/user/fittaste/index.html","utf8");
-  const browser=await chromium.launch({executablePath:"/opt/pw-browsers/chromium-1194/chrome-linux/chrome",headless:true});
+  const browser=await chromium.launch({executablePath:process.env.E2E_CHROME||"/opt/pw-browsers/chromium",headless:true});
   const ctx=await browser.newContext();
   const page=await ctx.newPage();
   page.on("pageerror",e=>console.log("  [pageerror]",e.message));

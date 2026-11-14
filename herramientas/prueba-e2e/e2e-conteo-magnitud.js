@@ -82,7 +82,7 @@ const check=(n,c,e)=>{results.push({n,ok:!!c});console.log((c?"  ✓ ":"  ✗ ")
 (async()=>{
   console.log("\n== Guarda de magnitud en el conteo: 1,300 kg de eneldo no existen (v7.30) ==");
   const html=fs.readFileSync("/home/user/fittaste/index.html","utf8");
-  const browser=await chromium.launch({executablePath:"/opt/pw-browsers/chromium-1194/chrome-linux/chrome",headless:true});
+  const browser=await chromium.launch({executablePath:process.env.E2E_CHROME||"/opt/pw-browsers/chromium",headless:true});
   const page=await(await browser.newContext()).newPage();
   page.on("pageerror",e=>console.log("  [pageerror]",e.message));
 

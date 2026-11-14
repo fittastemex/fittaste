@@ -100,7 +100,7 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
 
 (async()=>{
   const html=fs.readFileSync("/home/user/fittaste/index.html","utf8");
-  const browser=await chromium.launch({executablePath:"/opt/pw-browsers/chromium-1194/chrome-linux/chrome",headless:true});
+  const browser=await chromium.launch({executablePath:process.env.E2E_CHROME||"/opt/pw-browsers/chromium",headless:true});
   const page=await(await browser.newContext()).newPage();
   const dialogs=[];
   page.on("dialog",async d=>{dialogs.push(d.message());await d.accept();});
@@ -211,9 +211,10 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   const gastoJabon=DB.gastos_operativos.find(g=>g.categoria==="Limpieza");
   check("3.2 jabón registrado como gasto Limpieza $90",gastoJabon&&approx(gastoJabon.monto,90),gastoJabon);
   check("3.2 kárdex: 3 entradas por recepción",DB.movimientos_sucursal.filter(m=>m.tipo==="entrada_recepcion").length===3,DB.movimientos_sucursal.length);
-  check("3.3 pedido auto-cerrado y CxP generada",DB.pedidos[0]?.estatus==="cerrado"&&DB.cuentas_por_pagar.length===1,{est:DB.pedidos[0]?.estatus,cxp:DB.cuentas_por_pagar.length});
-  const cxpMonto=parseFloat(DB.cuentas_por_pagar[0]?.monto_total||0);
-  check("3.3 CxP con IVA: $2,340.88",approx(cxpMonto,2340.88,0.05),cxpMonto);
+  check("3.3 pedido auto-cerrado",DB.pedidos[0]?.estatus==="cerrado",{est:DB.pedidos[0]?.estatus});
+  // v7.39: el pasivo salió de esta app. El ciclo termina en "se recibe" y el
+  // cobro lo lleva Tesorería, que lee las recepciones desde la misma base.
+  check("3.3 ya NO se genera cuenta por pagar",DB.cuentas_por_pagar.length===0,{cxp:DB.cuentas_por_pagar.length});
 
   console.log("\n== Parte 4: Preparación y receta ==");
   // v7.6: 'Productos y recetas' vive ahora en el grupo Catálogos y abre directo en esa pestaña
@@ -374,7 +375,7 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   console.log("\n== Parte 7: Estados financieros ==");
   await page.getByRole("button",{name:"Salir"}).click();
   await page.getByText("Selecciona tu rol").waitFor();
-  await page.getByText("Cuentas por pagar").click();
+  await page.getByText("Gastos y estados").click();
   await page.locator("input[type=password]").fill("finanzas2026");
   await page.getByRole("button",{name:"Ingresar"}).click();
   await menu("Finanzas","Estados financieros");
@@ -384,7 +385,9 @@ const approx=(a,b,tol=0.02)=>Math.abs(a-b)<=tol;
   check("7.1 flujo: efectivo $710 y tarjeta $800",body.includes("710.00")&&body.includes("800.00"));
   check("7.1 merma registrada visible ($12.89)",body.includes("12.89"));
   check("7.1 food cost ~22.3%",/22\.[0-9]%/.test(body));
-  check("7.1 CxP pendiente en posición ($2,340.88)",body.includes("2,340.88"));
+  check("7.1 posición ya NO muestra cuentas por pagar",!/Cuentas por pagar/.test(body),null);
+  check("7.1 posición muestra inventario total",body.includes("Inventario total"),null);
+  check("7.1 dice dónde vive el pasivo",/vive en Tesorer[íi]a/.test(body),null);
   // v7.7: resumen mensual de 3 líneas + integración de conteo en mermas
   check("7.2 resumen del mes: 3 bloques (Costos / Gastos / Mermas)",body.includes("Costos (materia prima)")&&body.includes("Gastos del mes")&&body.includes("Mermas del mes"),null);
   check("7.2 faltante de conteo físico integrado a merma",/[Ff]altantes de conteo f[íi]sico/.test(body),null);

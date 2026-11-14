@@ -88,7 +88,7 @@ async function login(page,html,texto,pass){
 
 (async()=>{
   const html=fs.readFileSync("/home/user/fittaste/index.html","utf8");
-  const browser=await chromium.launch({executablePath:"/opt/pw-browsers/chromium-1194/chrome-linux/chrome",headless:true});
+  const browser=await chromium.launch({executablePath:process.env.E2E_CHROME||"/opt/pw-browsers/chromium",headless:true});
   const ctx=await browser.newContext();
   const page=await ctx.newPage();
   let ultimoDialogo="";
