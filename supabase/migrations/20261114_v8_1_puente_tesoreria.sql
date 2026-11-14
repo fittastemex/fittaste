@@ -7,32 +7,43 @@
 -- Requiere la v8.0 (catálogo único) aplicada: sin ella no hay RFC ni token
 -- de proveedor del lado operativo.
 --
--- LA LLAVE DE CRUCE ES EL SUBTOTAL RECIBIDO, SIN IVA
+-- LA LLAVE DE CRUCE DEPENDE DEL TIPO DE FLUJO DEL PROVEEDOR
 --
--- Esto se descubrió con datos reales y cambia el diseño. Nuestro IVA es una
--- ESTIMACIÓN: multiplicamos por 1.16 lo que trae catalogo.aplica_iva marcado.
--- El IVA del CFDI es el de verdad, y además trae retenciones. Comparar totales
--- da un desfase sistemático de ~1.2%.
+-- De nuestro lado hay UNA sola cifra: importe_recibido = cantidad recibida ×
+-- costo capturado. Lo que cambia es contra QUÉ campo del CFDI se compara, y
+-- eso lo decide cómo se captura el precio:
 --
--- Comparando el subtotal sin IVA, en cambio, cuadra AL CENTAVO. De las 11
--- facturas de Juan Carlos, 8 empatan exacto contra un solo pedido:
+--   Commodity       el proveedor captura precios NETOS, sin IVA.
+--                   → cotejar contra  cfdi.subtotal − coalesce(cfdi.descuento,0)
 --
---   CFDI 155 · $5,370.00  =  PED-20261109-001 · $5,370.00
---   CFDI 154 · $3,079.00  =  PED-20261102-001 · $3,079.00
---   CFDI 153 · $4,085.00  =  PED-20261029-001 · $4,085.00
---   CFDI 152 · $3,887.00  =  PED-20261026-001 · $3,887.00
---   CFDI 149 · $4,091.00  =  PED-20261015-001 · $4,091.00
---   CFDI 148 · $5,153.00  =  PED-20261012-001 · $5,153.00
---   CFDI 147 · $5,566.00  =  PED-20261006-001 · $5,566.00
---   CFDI 146 · $5,436.00  =  PED-20261002-001 · $5,436.00
+--   Compra manual   compras va a la tienda y captura el precio de MOSTRADOR,
+--                   que ya trae IVA incluido.
+--                   → cotejar contra  cfdi.total
 --
--- Y la novena empata contra DOS pedidos, que es justo por lo que la tabla de
--- enlace tiene que ser de muchos a muchos:
+-- La vista trae la columna `cotejar_contra` ya resuelta, para que Tesorería no
+-- tenga que replicar esta regla.
 --
---   CFDI 145 · $5,988.00  =  PED-20260929-001 ($5,908) + PED-20260929-002 ($80)
+-- POR QUÉ NO ES UNA SOLA LLAVE — medido, no supuesto:
 --
--- Por eso la vista entrega los subtotales como llave principal y los totales
--- con IVA sólo como referencia, con el nombre bien claro de que son estimados.
+--   Juan Carlos (Commodity), 11 facturas: 8 empatan AL CENTAVO contra el
+--   subtotal de un solo pedido, y una novena contra dos pedidos —
+--   CFDI 145 ($5,988) = PED-20260929-001 ($5,908) + PED-20260929-002 ($80) —
+--   que es justo por lo que la tabla de enlace tiene que ser de muchos a muchos.
+--
+--   Walmart (Compra manual), 8 facturas de octubre: contra subtotal−descuento
+--   empata 1; contra el total empata 4. Ejemplos del total:
+--     CFDI 605285 · $1,375.01  =  PED-20261026-001 · $1,375.00
+--     CFDI 603312 · $1,440.01  =  PED-20261019-001 · $1,440.00
+--     CFDI 605300 · $  812.01  =  PED-20261022-002 · $  812.00
+--
+--   Y el descuento de Walmart ya viene restado DENTRO del total, así que
+--   restarlo otra vez del subtotal aleja el número en vez de acercarlo:
+--     CFDI 603311: subtotal 1,203.91 − descuento 75.00 = 1,128.91,
+--                  pero el total es 1,158.01. La diferencia es el IVA.
+--
+-- LO QUE NO SIRVE PARA COTEJAR: nuestro IVA estimado. Multiplicábamos por 1.16
+-- lo que trae catalogo.aplica_iva marcado. Eso es invención nuestra y además
+-- sería doble IVA en Compra manual. Esas columnas no se exponen.
 --
 -- CUATRO OBJETOS, DOS PÚBLICOS DISTINTOS
 --
@@ -62,13 +73,11 @@ with linea as (
   select ppe.id as ppe_id,
          pd.id  as pd_id,
          pd.cantidad,
-         coalesce(pd.costo_real, pd.costo_referencia) as cu,
-         case when coalesce(cat.aplica_iva,false) then 1.16 else 1 end as f_iva
+         coalesce(pd.costo_real, pd.costo_referencia) as cu
     from pedido_proveedor_estatus ppe
     join pedido_detalle pd
       on pd.pedido_id    = ppe.pedido_id
      and pd.proveedor_id = ppe.proveedor_id
-    left join catalogo cat on cat.id = pd.catalogo_id
 ), recibido as (
   select pedido_detalle_id, sum(cantidad_recibida) as q
     from recepcion_detalle group by 1
@@ -83,14 +92,20 @@ select
   tp.alias_cocina                                            as proveedor_alias,
   'ROMA'::text                                               as centro,
 
-  -- LLAVES DE CRUCE: sin IVA. Contra esto cuadra el subtotal del CFDI.
-  round(sum(l.cantidad * l.cu)::numeric, 2)                  as subtotal_pedido,
-  round(sum(coalesce(r.q,0) * l.cu)::numeric, 2)             as subtotal_recibido,
+  -- LA CIFRA. Es el costo tal como se capturó: neto de IVA si el proveedor
+  -- es Commodity, con IVA incluido si es Compra manual. Por eso no se llama
+  -- "subtotal": sería mentira para Walmart.
+  round(sum(l.cantidad * l.cu)::numeric, 2)                  as importe_pedido,
+  round(sum(coalesce(r.q,0) * l.cu)::numeric, 2)             as importe_recibido,
 
-  -- SÓLO REFERENCIA: el IVA aquí es estimado por nosotros a partir de
-  -- catalogo.aplica_iva. No sirve para emparejar; el del CFDI es el bueno.
-  round(sum(l.cantidad * l.cu * l.f_iva)::numeric, 2)        as total_pedido_iva_estimado,
-  round(sum(coalesce(r.q,0) * l.cu * l.f_iva)::numeric, 2)   as total_recibido_iva_estimado,
+  tf.nombre                                                  as tipo_flujo,
+  -- Contra qué campo del CFDI comparar importe_recibido. Resuelto aquí para
+  -- que Tesorería no tenga que replicar la regla.
+  case tf.nombre
+    when 'Compra manual' then 'cfdi.total'
+    when 'Commodity'     then 'cfdi.subtotal - coalesce(cfdi.descuento,0)'
+    else 'revisar'
+  end                                                        as cotejar_contra,
 
   ppe.estatus                                                as estatus,
   -- 'completo' y 'recibido_completo' significan lo mismo: son versiones
@@ -104,16 +119,18 @@ select
 from pedido_proveedor_estatus ppe
 join pedidos p          on p.id  = ppe.pedido_id
 join tes_proveedores tp on tp.id = ppe.proveedor_id
+left join tipos_flujo_costo tf on tf.id = tp.tipo_flujo_id
 join linea l            on l.ppe_id = ppe.id
 left join recibido r    on r.pedido_detalle_id = l.pd_id
 group by ppe.id, p.numero_pedido, p.fecha, tp.id, tp.rfc, tp.nombre,
          tp.alias_cocina, ppe.estatus, ppe.pedido_id, ppe.proveedor_id,
-         tp.es_interno;
+         tp.es_interno, tf.nombre;
 
 comment on view v_pedidos_tesoreria is
   'Contrato de solo lectura para Tesorería. Grano: (pedido × proveedor). '
-  'Emparejar CFDI contra subtotal_recibido (sin IVA): cuadra al centavo. '
-  'Los totales con IVA son estimación nuestra, sólo de referencia. '
+  'Emparejar CFDI contra importe_recibido, usando el campo que diga la columna '
+  'cotejar_contra: cfdi.total para Compra manual (el precio capturado ya trae '
+  'IVA) y cfdi.subtotal menos descuento para Commodity. '
   'Filtrar es_traspaso_interno = false: eso es el CEDIS surtiendo a sucursal, '
   'y va valuado aparte en v_traspasos_cedis_tesoreria, a costo PEPS.';
 
@@ -133,17 +150,20 @@ select
   'ROMA'::text                                       as centro,
   round(cd.costo_total::numeric,2)                   as total,
   cd.metodo_pago                                     as metodo_pago,
+  tf.nombre                                          as tipo_flujo,
   -- true = ya salió del banco, Tesorería debería tener el cargo
   (cd.metodo_pago in ('transferencia','tarjeta'))    as toca_banco,
   cd.nota                                            as nota,
   cd.registrado_por                                  as registrado_por
 from compras_directas cd
-join tes_proveedores tp on tp.id = cd.proveedor_id;
+join tes_proveedores tp on tp.id = cd.proveedor_id
+left join tipos_flujo_costo tf on tf.id = tp.tipo_flujo_id;
 
 comment on view v_compras_directas_tesoreria is
   'Compras que la sucursal hace sin pedido previo. toca_banco = true son las '
   'que ya salieron por transferencia o tarjeta y llegan al estado de cuenta. '
-  'El costo_total de esta tabla se captura tal cual, sin desglose de IVA.';
+  'El total se captura tal cual lo pagó la sucursal, así que normalmente ya '
+  'trae IVA: cotejar contra cfdi.total, no contra el subtotal.';
 
 -- ---------------------------------------------------------------------------
 -- 2b. Vista de traspasos CEDIS → ROMA
@@ -170,9 +190,27 @@ comment on view v_compras_directas_tesoreria is
 -- migración de variantes y unidades de ese mes. No lo tomen como bueno sin
 -- revisarlo.
 create or replace view v_traspasos_cedis_tesoreria as
+with valor_pedido as (
+  -- lo que el pedido le cobró a sucursal por ese mismo renglón, para poder
+  -- separar el efecto de VALUACIÓN del de CORTE DE FECHA
+  select pd.pedido_id, cat.inventario_almacen_id as inv_id,
+         sum(coalesce(r.q,0) * coalesce(pd.costo_real, pd.costo_referencia)) as valor
+    from pedido_detalle pd
+    join tes_proveedores tp on tp.id = pd.proveedor_id
+                           and coalesce(tp.es_interno,false)
+    join catalogo cat on cat.id = pd.catalogo_id
+    left join (select pedido_detalle_id, sum(cantidad_recibida) q
+                 from recepcion_detalle group by 1) r on r.pedido_detalle_id = pd.id
+   group by 1,2
+)
 select
   m.id::text                                   as traspaso_id,
   m.fecha                                      as fecha_salida,
+  -- las DOS fechas. Devengar por fecha_salida (amarra contra el conteo
+  -- físico del almacén); la diferencia entre ambas es mercancía EN TRÁNSITO
+  -- al cierre del mes. Si eso crece, hace falta una cuenta de tránsito.
+  (select max(x.fecha_recepcion)::date from recepciones x
+    where x.pedido_id = m.pedido_id)           as fecha_recepcion,
   'CEDIS'::text                                as centro_origen,
   'ROMA'::text                                 as centro_destino,
   m.pedido_id::text                            as pedido_id,
@@ -181,11 +219,15 @@ select
   ia.descripcion                               as descripcion,
   m.cantidad                                   as cantidad,
   round(coalesce(sum(sp.costo_total),0)::numeric, 2) as costo_peps,
+  -- sólo para cuadrar contra la cifra vieja; NO usar para contabilizar
+  round(coalesce(max(vp.valor),0)::numeric, 2)       as costo_pedido_referencia,
   m.nota                                       as nota
 from movimientos_almacen m
 join inventario_almacen ia on ia.id = m.inventario_id
 left join salidas_peps sp  on sp.movimiento_id = m.id
 left join pedidos p        on p.id = m.pedido_id
+left join valor_pedido vp  on vp.pedido_id = m.pedido_id
+                          and vp.inv_id    = m.inventario_id
 where m.tipo = 'salida'
 group by m.id, m.fecha, m.pedido_id, p.numero_pedido,
          ia.sku, ia.descripcion, m.cantidad, m.nota;
@@ -193,8 +235,17 @@ group by m.id, m.fecha, m.pedido_id, p.numero_pedido,
 comment on view v_traspasos_cedis_tesoreria is
   'Surtido CEDIS → ROMA, al grano de la salida de almacén y valuado a costo '
   'PEPS real. Es movimiento de costo entre centros, NO una compra: no genera '
-  'pasivo ni espera factura. Cortar por fecha_salida, no por la recepción. '
-  'Julio 2026 trae una anomalía de +$78,069 sin revisar.';
+  'pasivo ni espera factura. Devengar por fecha_salida; la mercancía con '
+  'fecha_recepcion en otro mes es EN TRÁNSITO al cierre. '
+  'costo_pedido_referencia es la valuación vieja, sólo para cuadrar: en '
+  'octubre 2026 la brecha de $6,030.40 se parte en −$3,328.02 de valuación '
+  '(el PEPS resultó MENOR que el costo del pedido) y +$9,358.42 de corte de '
+  'fecha, con $10,574.42 a caballo entre octubre y noviembre. '
+  'ADVERTENCIA HISTÓRICA: julio 2026 trae $112,374.38 de PEPS contra '
+  '$34,305.42 de costo de pedido, +$78,069 que no se compensan con ningún '
+  'otro mes. Coincide con la migración de variantes y unidades (v7.10, '
+  '_respaldo_unidades_20260727). No usar julio para costo histórico '
+  'comparable sin revisarlo antes.';
 
 -- ---------------------------------------------------------------------------
 -- 3. La función del portal del proveedor
@@ -219,13 +270,15 @@ create or replace function fn_pedidos_por_facturar(
   p_desde date default date '2026-10-01'
 )
 returns table (
-  pedido_id         text,
-  pedido_folio      varchar,
-  fecha_pedido      date,
-  fecha_recepcion   date,
-  subtotal_recibido numeric,
-  subtotal_pedido   numeric,
-  estatus           varchar
+  pedido_id        text,
+  pedido_folio     varchar,
+  fecha_pedido     date,
+  fecha_recepcion  date,
+  importe_recibido numeric,
+  importe_pedido   numeric,
+  tipo_flujo       text,
+  cotejar_contra   text,
+  estatus          varchar
 )
 language sql
 stable
@@ -233,7 +286,8 @@ security definer
 set search_path = public
 as $$
   select v.pedido_id, v.pedido_folio, v.fecha_pedido, v.fecha_recepcion,
-         v.subtotal_recibido, v.subtotal_pedido, v.estatus
+         v.importe_recibido, v.importe_pedido, v.tipo_flujo, v.cotejar_contra,
+         v.estatus
     from v_pedidos_tesoreria v
    where p_token is not null
      and length(p_token) >= 16          -- un token vacío no abre nada
@@ -244,7 +298,7 @@ as $$
               and tp.activo
               and not coalesce(tp.es_interno,false))
      and v.recibido                      -- sólo lo que ya llegó se factura
-     and v.subtotal_recibido > 0
+     and v.importe_recibido > 0
      and v.fecha_recepcion >= p_desde    -- Tesorería arranca el 1-oct-2026
    order by v.fecha_recepcion desc nulls last, v.fecha_pedido desc;
 $$;
@@ -253,7 +307,8 @@ comment on function fn_pedidos_por_facturar(text, date) is
   'Portal del proveedor: entregas ya recibidas y facturables del proveedor '
   'dueño del token, desde el 1-oct-2026 (arranque de los libros de Tesorería). '
   'El token ES la autorización. Nunca devuelve datos de otro proveedor ni '
-  'traspasos internos. Emparejar contra subtotal_recibido, sin IVA.';
+  'traspasos internos. Emparejar contra importe_recibido, usando el campo del '
+  'CFDI que indique cotejar_contra.';
 
 -- ---------------------------------------------------------------------------
 -- 4. Permisos
@@ -274,8 +329,8 @@ commit;
 -- ============================================================================
 -- VERIFICACIÓN
 -- ============================================================================
--- Juan Carlos debe ver 15 entregas, no 43, y PED-20261109-001 por $5,370.00
--- hasta arriba:
+-- Juan Carlos debe ver 15 entregas, no 43, PED-20261109-001 por $5,370.00
+-- hasta arriba, y cotejar_contra = 'cfdi.subtotal - coalesce(cfdi.descuento,0)':
 --   select * from fn_pedidos_por_facturar(
 --     (select token_acceso from tes_proveedores where alias_cocina='Juan Carlos Botello'));
 --
