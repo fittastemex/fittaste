@@ -207,7 +207,17 @@ comment on view v_traspasos_cedis_tesoreria is
 --     select * from fn_pedidos_por_facturar('<token del proveedor>');
 -- y después quita de esa lista lo que ya tenga renglón en tes_pedidos_enlace,
 -- que es tabla suya. Nosotros no sabemos ni queremos saber qué ya se enlazó.
-create or replace function fn_pedidos_por_facturar(p_token text)
+-- EL CORTE DE OCTUBRE NO ES COSMÉTICO
+-- Los libros de Tesorería arrancan el 1 de octubre de 2026; lo anterior se
+-- liquidó fuera del sistema. Sin este corte el portal le mostraría a Juan
+-- Carlos 43 entregas cuando las vivas son 15, y entre todos los proveedores
+-- saldrían 197 facturables en vez de 58: $430,627 de entregas ya saldadas que
+-- invitan a amarrar una factura nueva contra mercancía vieja.
+-- El parámetro se puede mover si algún día cambia la fecha de arranque.
+create or replace function fn_pedidos_por_facturar(
+  p_token text,
+  p_desde date default date '2026-10-01'
+)
 returns table (
   pedido_id         text,
   pedido_folio      varchar,
@@ -235,13 +245,15 @@ as $$
               and not coalesce(tp.es_interno,false))
      and v.recibido                      -- sólo lo que ya llegó se factura
      and v.subtotal_recibido > 0
+     and v.fecha_recepcion >= p_desde    -- Tesorería arranca el 1-oct-2026
    order by v.fecha_recepcion desc nulls last, v.fecha_pedido desc;
 $$;
 
-comment on function fn_pedidos_por_facturar(text) is
+comment on function fn_pedidos_por_facturar(text, date) is
   'Portal del proveedor: entregas ya recibidas y facturables del proveedor '
-  'dueño del token. El token ES la autorización. Nunca devuelve datos de otro '
-  'proveedor ni traspasos internos. Emparejar contra subtotal_recibido.';
+  'dueño del token, desde el 1-oct-2026 (arranque de los libros de Tesorería). '
+  'El token ES la autorización. Nunca devuelve datos de otro proveedor ni '
+  'traspasos internos. Emparejar contra subtotal_recibido, sin IVA.';
 
 -- ---------------------------------------------------------------------------
 -- 4. Permisos
@@ -255,14 +267,15 @@ grant select  on v_traspasos_cedis_tesoreria  to authenticated;
 
 -- La función la puede llamar el portal con cualquiera de los dos roles,
 -- porque la autorización va en el token, no en el rol.
-grant execute on function fn_pedidos_por_facturar(text) to anon, authenticated;
+grant execute on function fn_pedidos_por_facturar(text, date) to anon, authenticated;
 
 commit;
 
 -- ============================================================================
 -- VERIFICACIÓN
 -- ============================================================================
--- Juan Carlos debe ver PED-20261109-001 por $5,370.00 hasta arriba:
+-- Juan Carlos debe ver 15 entregas, no 43, y PED-20261109-001 por $5,370.00
+-- hasta arriba:
 --   select * from fn_pedidos_por_facturar(
 --     (select token_acceso from tes_proveedores where alias_cocina='Juan Carlos Botello'));
 --
@@ -285,7 +298,7 @@ commit;
 -- ============================================================================
 -- CÓMO REVERTIR
 -- ============================================================================
--- drop function if exists fn_pedidos_por_facturar(text);
+-- drop function if exists fn_pedidos_por_facturar(text, date);
 -- drop view if exists v_traspasos_cedis_tesoreria;
 -- drop view if exists v_compras_directas_tesoreria;
 -- drop view if exists v_pedidos_tesoreria;
