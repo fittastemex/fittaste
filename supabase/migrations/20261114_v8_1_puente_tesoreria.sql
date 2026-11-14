@@ -34,11 +34,12 @@
 -- Por eso la vista entrega los subtotales como llave principal y los totales
 -- con IVA sólo como referencia, con el nombre bien claro de que son estimados.
 --
--- TRES OBJETOS, DOS PÚBLICOS DISTINTOS
+-- CUATRO OBJETOS, DOS PÚBLICOS DISTINTOS
 --
---   v_pedidos_tesoreria          → pantallas internas de finanzas (authenticated)
---   v_compras_directas_tesoreria → ídem
---   fn_pedidos_por_facturar(tok) → el PORTAL DEL PROVEEDOR
+--   v_pedidos_tesoreria           → pantallas internas de finanzas (authenticated)
+--   v_compras_directas_tesoreria  → ídem
+--   v_traspasos_cedis_tesoreria   → ídem; CEDIS → ROMA a costo PEPS real
+--   fn_pedidos_por_facturar(tok)  → el PORTAL DEL PROVEEDOR
 --
 -- Por qué una función y no una vista para el portal: no existe ni una sola
 -- política RLS para el rol `anon` en las tablas tes_*, ni edge functions, ni
@@ -113,7 +114,8 @@ comment on view v_pedidos_tesoreria is
   'Contrato de solo lectura para Tesorería. Grano: (pedido × proveedor). '
   'Emparejar CFDI contra subtotal_recibido (sin IVA): cuadra al centavo. '
   'Los totales con IVA son estimación nuestra, sólo de referencia. '
-  'Filtrar es_traspaso_interno = false: es el CEDIS surtiendo a sucursal.';
+  'Filtrar es_traspaso_interno = false: eso es el CEDIS surtiendo a sucursal, '
+  'y va valuado aparte en v_traspasos_cedis_tesoreria, a costo PEPS.';
 
 -- ---------------------------------------------------------------------------
 -- 2. Vista de compras directas
@@ -142,6 +144,57 @@ comment on view v_compras_directas_tesoreria is
   'Compras que la sucursal hace sin pedido previo. toca_banco = true son las '
   'que ya salieron por transferencia o tarjeta y llegan al estado de cuenta. '
   'El costo_total de esta tabla se captura tal cual, sin desglose de IVA.';
+
+-- ---------------------------------------------------------------------------
+-- 2b. Vista de traspasos CEDIS → ROMA
+-- ---------------------------------------------------------------------------
+-- Para Tesorería, CEDIS ES el almacén: un centro de costos, no un proveedor.
+-- El "Almacen" que esta app registra como proveedor es ese centro surtiendo a
+-- la sucursal, y Tesorería ya lo contabiliza como movimiento de costo entre
+-- centros contra la caja INVENTARIO_CEDIS, sin flujo de efectivo.
+--
+-- OJO CON EL VALOR, PORQUE HAY DOS Y NO SON EL MISMO:
+--   · el del pedido  = cantidad recibida × costo del pedido_detalle
+--   · el PEPS        = lo que de verdad costaron esos lotes al salir
+--
+-- En meses estables coinciden al centavo (ago: $26,431.26 vs $26,431.27;
+-- sep: $20,394.87 en ambos). Donde difieren es por CORTE DE FECHA: salió del
+-- almacén en octubre y se recibió en sucursal en noviembre, así que octubre
+-- da +$6,030 y noviembre −$6,344, compensándose.
+--
+-- Para contabilidad entre centros el bueno es el PEPS, cortado por la fecha
+-- de SALIDA del almacén. Por eso esta vista existe aparte de la de pedidos.
+--
+-- ADVERTENCIA: julio de 2026 trae +$78,069 que NO se compensan con ningún
+-- otro mes ($112,374 PEPS contra $34,305 del pedido). Coincide con la
+-- migración de variantes y unidades de ese mes. No lo tomen como bueno sin
+-- revisarlo.
+create or replace view v_traspasos_cedis_tesoreria as
+select
+  m.id::text                                   as traspaso_id,
+  m.fecha                                      as fecha_salida,
+  'CEDIS'::text                                as centro_origen,
+  'ROMA'::text                                 as centro_destino,
+  m.pedido_id::text                            as pedido_id,
+  p.numero_pedido                              as pedido_folio,
+  ia.sku                                       as sku,
+  ia.descripcion                               as descripcion,
+  m.cantidad                                   as cantidad,
+  round(coalesce(sum(sp.costo_total),0)::numeric, 2) as costo_peps,
+  m.nota                                       as nota
+from movimientos_almacen m
+join inventario_almacen ia on ia.id = m.inventario_id
+left join salidas_peps sp  on sp.movimiento_id = m.id
+left join pedidos p        on p.id = m.pedido_id
+where m.tipo = 'salida'
+group by m.id, m.fecha, m.pedido_id, p.numero_pedido,
+         ia.sku, ia.descripcion, m.cantidad, m.nota;
+
+comment on view v_traspasos_cedis_tesoreria is
+  'Surtido CEDIS → ROMA, al grano de la salida de almacén y valuado a costo '
+  'PEPS real. Es movimiento de costo entre centros, NO una compra: no genera '
+  'pasivo ni espera factura. Cortar por fecha_salida, no por la recepción. '
+  'Julio 2026 trae una anomalía de +$78,069 sin revisar.';
 
 -- ---------------------------------------------------------------------------
 -- 3. La función del portal del proveedor
@@ -198,6 +251,7 @@ comment on function fn_pedidos_por_facturar(text) is
 -- las cinco tablas crudas de abajo.
 grant select  on v_pedidos_tesoreria          to authenticated;
 grant select  on v_compras_directas_tesoreria to authenticated;
+grant select  on v_traspasos_cedis_tesoreria  to authenticated;
 
 -- La función la puede llamar el portal con cualquiera de los dos roles,
 -- porque la autorización va en el token, no en el rol.
@@ -217,6 +271,10 @@ commit;
 --   select count(*) from fn_pedidos_por_facturar('');                  -- 0
 --   select count(*) from fn_pedidos_por_facturar(null);                -- 0
 --
+-- Agosto y septiembre deben cuadrar al centavo contra el valor del pedido:
+--   select to_char(fecha_salida,'YYYY-MM') mes, round(sum(costo_peps),2)
+--     from v_traspasos_cedis_tesoreria group by 1 order by 1;
+--
 -- Y no debe poder ver lo de otro proveedor:
 --   select count(*) from fn_pedidos_por_facturar(
 --     (select token_acceso from tes_proveedores where alias_cocina='Juan Carlos Botello'))
@@ -228,6 +286,7 @@ commit;
 -- CÓMO REVERTIR
 -- ============================================================================
 -- drop function if exists fn_pedidos_por_facturar(text);
+-- drop view if exists v_traspasos_cedis_tesoreria;
 -- drop view if exists v_compras_directas_tesoreria;
 -- drop view if exists v_pedidos_tesoreria;
 -- No borra ni modifica ningún dato: son sólo vistas y una función.
