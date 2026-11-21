@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.40";
+const V="7.41";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -3513,14 +3513,31 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
   // que nunca se recibió ni se produjo era invisible: las 25 preparaciones y 38
   // insumos activos no se podían contar. Los que no tienen fila entran con
   // existencia 0 y `sinFila`, y la fila se crea al cerrar el conteo.
+  // v7.41: el filtro es el MISMO para los dos lados. Antes sólo se aplicaba a
+  // los insumos SIN fila, así que bastaba con tener fila —aunque fuera en
+  // cero, de tipo gasto o dado de baja— para salir en la hoja de conteo.
+  // Así volvió la wafflera: dirección la sacó el 7-oct dejando la fila en
+  // cero, y el conteo del 1-nov la reintegró por $3,999 porque cocina vio el
+  // aparato en la cocina y escribió 1. Sacar algo del inventario no servía de
+  // nada si el siguiente conteo lo volvía a ofrecer.
+  // `ins.id` no es un detalle: la app carga sólo los insumos activos
+  // (línea 4491), así que la fila de un insumo dado de baja queda huérfana y
+  // su `ins` es {}. Sin esta condición esas filas salían en la hoja como "?"
+  // con su caja para contar, y cualquiera podía reingresarlas.
+  const seCuenta=(ins)=>!!ins&&!!ins.id&&ins.activo!==false&&ins.tipo_control!=="gasto";
+  const conFilaTodas=invSucursal.filter(i=>!sucId||i.sucursal_id===sucId)
+    .map(i=>({...i,ins:insumos.find(x=>x.id===i.insumo_id)||{},sinFila:false}));
   const rows=(()=>{
-    const conFila=invSucursal.filter(i=>!sucId||i.sucursal_id===sucId)
-      .map(i=>({...i,ins:insumos.find(x=>x.id===i.insumo_id)||{},sinFila:false}));
-    const yaEstan=new Set(conFila.map(r=>r.insumo_id));
-    const sinFila=insumos.filter(x=>x.activo!==false&&x.tipo_control!=="gasto"&&!yaEstan.has(x.id))
+    const conFila=conFilaTodas.filter(r=>seCuenta(r.ins));
+    const yaEstan=new Set(conFilaTodas.map(r=>r.insumo_id));
+    const sinFila=insumos.filter(x=>seCuenta(x)&&!yaEstan.has(x.id))
       .map(x=>({id:null,sucursal_id:sucId,insumo_id:x.id,existencia:0,costo_promedio:0,ins:x,sinFila:true}));
     return [...conFila,...sinFila].sort((a,b)=>(a.ins.nombre||"").localeCompare(b.ins.nombre||""));
   })();
+  // Nada se esconde en silencio: lo que queda fuera pero todavía arrastra
+  // existencia se muestra aparte, para que se note y se corrija.
+  const excluidosConSaldo=conFilaTodas.filter(r=>!seCuenta(r.ins)
+    && Math.abs(parseFloat(r.existencia)||0)>0.0001);
   const valor=rows.reduce((s,i)=>s+Math.max(0,parseFloat(i.existencia)||0)*costoInsumo(i.insumo_id,invSucursal,catalogo),0);
   const hoy=new Date();const mesInicio=new Date(hoy.getFullYear(),hoy.getMonth(),1).toISOString().split("T")[0];
   const mermaMes=mermas.filter(m=>(m.fecha||"")>=mesInicio).reduce((s,m)=>s+parseFloat(m.costo_total||0),0);
@@ -3865,6 +3882,17 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
     </div>}
 
     {tab==="conteo"&&<div>
+      {/* v7.41: lo que ya no se cuenta pero todavía trae existencia se avisa
+          aquí. Esconderlo sin decir nada sería cambiar un error visible por
+          uno invisible, que es peor. */}
+      {excluidosConSaldo.length>0&&<div className="bg-amber-50 border border-amber-300 rounded-xl p-3 mb-4">
+        <p className="text-xs font-bold text-amber-900 mb-1">Fuera de la hoja de conteo, pero con existencia</p>
+        <p className="text-[11px] text-amber-800 mb-2">Estos ya no se cuentan porque son gasto directo o están dados de baja. Si traen existencia es un saldo viejo que quedó colgado: avisa a dirección para que lo ajuste. No los vuelvas a capturar aquí.</p>
+        {excluidosConSaldo.map(r=>(<div key={r.insumo_id} className="flex justify-between text-[11px] text-amber-900 py-0.5 border-t border-amber-200">
+          <span>{r.ins.nombre||"(insumo dado de baja)"} {!r.ins.id?<Badge v="default">dado de baja</Badge>:r.ins.tipo_control==="gasto"?<Badge v="default">gasto</Badge>:<Badge v="default">inactivo</Badge>}</span>
+          <span className="font-semibold">{fmtCant(r.existencia,r.ins.unidad_base||"")}</span>
+        </div>))}
+      </div>}
       {resConteo&&<div className="bg-white border-2 rounded-xl p-4 mb-4" style={{borderColor:resConteo.neto>0?"#bb4430":"#0e918b"}}>
         <div className="flex items-center justify-between flex-wrap gap-2 mb-2"><h3 className="text-sm font-bold text-gray-800">Conteo cerrado — {resConteo.folio}</h3><button onClick={()=>setResConteo(null)} className="text-xs text-gray-400 hover:text-gray-600">Ocultar ✕</button></div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

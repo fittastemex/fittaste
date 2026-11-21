@@ -37,6 +37,12 @@ const DB={
   insumos:[
     {id:"ins-pollo",nombre:"POLLO",unidad_base:"g",tipo_control:"inventariable",activo:true},
     {id:"ins-res",nombre:"RES",unidad_base:"g",tipo_control:"inventariable",activo:true},
+    // v7.41: los dos que NO deben aparecer en la hoja de conteo aunque tengan
+    // fila en inventario_sucursal. La wafflera es el caso real: dirección la
+    // sacó el 7-oct dejando la fila en cero y el conteo del 1-nov la reintegró
+    // por $3,999, porque el filtro sólo se aplicaba a los insumos SIN fila.
+    {id:"ins-wafflera",nombre:"WAFFLERA",unidad_base:"pz",tipo_control:"gasto",categoria_gasto:"Equipo",activo:false},
+    {id:"ins-jabon",nombre:"JABON TRASTES",unidad_base:"ml",tipo_control:"gasto",categoria_gasto:"Limpieza",activo:true},
   ],
   catalogo:[
     {id:"cat-pollo",sku:"PRO-001",articulo:"POLLO KG",tipo_producto:"PROTEINAS",unidad_id:"u-kg",
@@ -50,6 +56,10 @@ const DB={
   inventario_sucursal:[
     {id:"inv-pollo",sucursal_id:"suc-1",insumo_id:"ins-pollo",existencia:-50000,costo_promedio:0.13},
     {id:"inv-res",sucursal_id:"suc-1",insumo_id:"ins-res",existencia:2000,costo_promedio:0.25},
+    // la wafflera en CERO: así quedó tras sacarla, y así reapareció en la hoja
+    {id:"inv-wafflera",sucursal_id:"suc-1",insumo_id:"ins-wafflera",existencia:0,costo_promedio:3999},
+    // el jabón con saldo: queda fuera de la hoja pero debe AVISARSE, no esconderse
+    {id:"inv-jabon",sucursal_id:"suc-1",insumo_id:"ins-jabon",existencia:1500,costo_promedio:0.08},
   ],
   pedidos:[],pedido_detalle:[],pedido_proveedor_estatus:[],
   inventario_almacen:[],lotes_almacen:[],movimientos_almacen:[],salidas_peps:[],
@@ -131,7 +141,24 @@ const check=(n,c,e)=>{results.push({n,ok:!!c});console.log((c?"  ✓ ":"  ✗ ")
   // Capturar 10 kg de pollo (teórico -50 kg) → diferencia +60 kg
   const cajas=page.locator('input[placeholder="—"]');
   const nCajas=await cajas.count();
+  // v7.41: siguen siendo 2 y no 4. La wafflera (dada de baja, fila en cero) y
+  // el jabón (gasto directo) tienen fila en inventario_sucursal, y antes eso
+  // bastaba para salir en la hoja. Así volvió la wafflera por $3,999.
   check("1. la hoja lista los insumos con inventario",nCajas===2,nCajas);
+  const cuerpoHoja=await page.locator("body").innerText();
+  check("1b. la wafflera dada de baja NO sale en la hoja de conteo",
+        !/WAFFLERA[\s\S]{0,120}—/.test(cuerpoHoja)||!cuerpoHoja.includes("WAFFLERA"),
+        (cuerpoHoja.match(/.{0,60}WAFFLERA.{0,60}/)||[])[0]);
+  check("1c. el jabón (gasto directo) tampoco se cuenta",
+        !/JABON TRASTES[\s\S]{0,40}input/.test(cuerpoHoja),null);
+  // Pero lo excluido CON saldo tiene que avisarse, no esconderse.
+  check("1d. avisa de lo que quedó fuera pero trae existencia",
+        /Fuera de la hoja de conteo, pero con existencia/.test(cuerpoHoja),null);
+  check("1e. y nombra el insumo con su saldo",
+        /JABON TRASTES/.test(cuerpoHoja)&&/1,500 ml/.test(cuerpoHoja),
+        (cuerpoHoja.match(/.{0,80}JABON TRASTES.{0,60}/)||[])[0]);
+  check("1f. la wafflera en cero NO se avisa (no arrastra saldo)",
+        !/WAFFLERA/.test((cuerpoHoja.match(/Fuera de la hoja[\s\S]{0,400}/)||[""])[0]),null);
   // El orden es alfabético: POLLO va antes que RES
   await cajas.nth(0).fill("10000");
   await page.waitForTimeout(400);
