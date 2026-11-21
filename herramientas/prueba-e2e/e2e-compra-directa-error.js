@@ -80,7 +80,7 @@ const check=(n,c,e)=>{results.push({n,ok:!!c});console.log((c?"  ✓ ":"  ✗ ")
 (async()=>{
   console.log("\n== La compra directa dice por qué falló (v7.35) ==");
   const html=fs.readFileSync("/home/user/fittaste/index.html","utf8");
-  const browser=await chromium.launch({executablePath:"/opt/pw-browsers/chromium-1194/chrome-linux/chrome",headless:true});
+  const browser=await chromium.launch({executablePath:process.env.E2E_CHROME||"/opt/pw-browsers/chromium",headless:true});
   const page=await(await browser.newContext()).newPage();
   const avisos=[];
   page.on("dialog",async d=>{avisos.push(d.message());await d.accept();});

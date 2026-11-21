@@ -104,7 +104,7 @@ const inv=(id)=>DB.inventario_sucursal.find(i=>i.insumo_id===id);
 (async()=>{
   console.log("\n== Producción de preparaciones (v7.25) ==");
   const html=fs.readFileSync("/home/user/fittaste/index.html","utf8");
-  const browser=await chromium.launch({executablePath:"/opt/pw-browsers/chromium-1194/chrome-linux/chrome",headless:true});
+  const browser=await chromium.launch({executablePath:process.env.E2E_CHROME||"/opt/pw-browsers/chromium",headless:true});
   const page=await(await browser.newContext()).newPage();
   page.on("dialog",async d=>{await d.accept();});
   page.on("pageerror",e=>console.log("  [pageerror]",e.message));
@@ -266,27 +266,44 @@ const inv=(id)=>DB.inventario_sucursal.find(i=>i.insumo_id===id);
   await page.getByPlaceholder(/^ej\. /).fill("1600");
   await page.waitForTimeout(500);
 
+  // v7.40: 800 tandas ya no se pueden aceptar. En octubre cinco producciones
+  // como ésta pasaron por el confirm y alguien les dio Aceptar. Ahora el tope
+  // duro ni siquiera ofrece la opción: no se guarda.
   const cuerpoMag=await page.locator("body").innerText();
   check("25. mientras se escribe ya avisa que son cientos de tandas",
         /800 tandas/.test(cuerpoMag),cuerpoMag.slice(0,200));
   check("26. y propone el número correcto en vez de sólo regañar",
         /¿No serán 1\.6/.test(cuerpoMag),(cuerpoMag.match(/.{0,80}No serán.{0,40}/)||[])[0]);
-  check("27. dice que se van a descontar los ingredientes de TODAS",
-        /descontar los ingredientes de todas/i.test(cuerpoMag));
+  check("27. v7.40: avisa que NO se puede guardar así",
+        /No se puede guardar as[íi]/i.test(cuerpoMag),cuerpoMag.slice(0,200));
 
-  // Al guardar pide confirmación explícita, y cancelar no debe escribir nada.
+  // Guardar no debe abrir ningún confirm: debe rechazarse y no escribir nada.
   const antes=estadoAntes();
   page.removeAllListeners("dialog");
   const dialogos=[];
-  page.once("dialog",async d=>{dialogos.push(d.message());await d.dismiss();});
+  page.on("dialog",async d=>{dialogos.push(d.message());await d.accept();});
   await page.getByRole("button",{name:"Registrar producción"}).click();
   await page.waitForTimeout(1200);
-  check("28. al guardar pide confirmar y el aviso nombra la cantidad",
-        dialogos.some(m=>/REVISA LA CANTIDAD/.test(m)&&/800 tandas/.test(m)),dialogos.join(" | "));
-  check("29. cancelar NO registra la producción",DB.producciones.length===antes.prods,DB.producciones.length);
+  const trasGuardar=await page.locator("body").innerText();
+  check("28. v7.40: se rechaza SIN preguntar, aunque se acepte todo diálogo",
+        dialogos.length===0&&/No se puede registrar/i.test(trasGuardar),
+        {dialogos,txt:(trasGuardar.match(/.{0,120}No se puede registrar.{0,80}/)||[])[0]});
+  check("29. no registra la producción",DB.producciones.length===antes.prods,DB.producciones.length);
   check("30. y NO toca el inventario",
         parseFloat(inv("ins-mayo").existencia)===antes.mayo&&parseFloat(inv("ins-esp").existencia)===antes.esp,
         {mayo:inv("ins-mayo").existencia,esp:inv("ins-esp").existencia});
+
+  // La banda intermedia: arriba del aviso pero debajo del tope. Ahí el confirm
+  // sigue siendo lo correcto, porque 30 tandas pueden ser reales.
+  await page.getByPlaceholder(/^ej\. /).fill("60");
+  await page.waitForTimeout(500);
+  page.removeAllListeners("dialog");
+  const dial2=[];
+  page.once("dialog",async d=>{dial2.push(d.message());await d.dismiss();});
+  await page.getByRole("button",{name:"Registrar producción"}).click();
+  await page.waitForTimeout(1200);
+  check("30b. 30 tandas sí preguntan en vez de bloquear",
+        dial2.some(m=>/REVISA LA CANTIDAD/.test(m)&&/30 tandas/.test(m)),dial2.join(" | "));
 
   // Una tanda normal no debe disparar nada: una guarda que sale siempre se ignora.
   await page.getByPlaceholder(/^ej\. /).fill("1.6");

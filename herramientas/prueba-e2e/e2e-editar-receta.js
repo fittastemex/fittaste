@@ -96,7 +96,7 @@ const patchesRecetas=()=>patches.filter(p=>p.table==="recetas").length;
 (async()=>{
   console.log("\n== Editar receta: nada se guarda hasta apretar Guardar (v7.22) ==");
   const html=fs.readFileSync("/home/user/fittaste/index.html","utf8");
-  const browser=await chromium.launch({executablePath:"/opt/pw-browsers/chromium-1194/chrome-linux/chrome",headless:true});
+  const browser=await chromium.launch({executablePath:process.env.E2E_CHROME||"/opt/pw-browsers/chromium",headless:true});
   const page=await(await browser.newContext()).newPage();
   page.on("pageerror",e=>console.log("  [pageerror]",e.message));
 

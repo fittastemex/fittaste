@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.38";
+const V="7.40";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -395,6 +395,59 @@ const Icono=({n,size=16,className=""})=>(
 // describe la consecuencia pero no la causa no ayuda a corregir.
 //
 // Éste nombra la causa y propone el número, como avisoContenido. No bloquea.
+// v7.40 — EL TOPE DURO DE PRODUCCIÓN. No es un aviso: no deja guardar.
+//
+// En octubre hubo CINCO producciones disparatadas en siete días, todas con el
+// aviso de magnitud ya desplegado (21-oct) y todas aceptadas: arroz al vapor
+// 3,900 kg tres veces, dip de aguacate 1,600 kg y vizcaína 1,800 kg.
+// $1,159,664 de producción que nunca existió. Un confirm no detiene a quien
+// está capturando rápido al final del turno.
+//
+// POR QUÉ EL TOPE NO VA EN TANDAS
+// BONELESS rinde 1 porción por tanda, así que producir 43 porciones son 43
+// tandas y es su producción normal. Un tope plano en 20 o en 50 tandas
+// bloquearía la preparación que más se produce después del arroz. La tanda no
+// mide magnitud, mide rendimiento.
+//
+// EL UMBRAL SALE DE LOS DATOS, NO DE UNA CORAZONADA
+// Midiendo cada una de las 75 producciones del histórico contra la mediana de
+// las demás de su misma preparación:
+//   · la legítima más atípica es MEZCLA GALLETAS ORIGINAL, 10.8× su mediana
+//   · el disparate más chico es DIP DE AGUACATE, 1,103× su mediana
+// Entre 10.8 y 1,103 hay dos órdenes de magnitud de hueco. Topar en 30× deja
+// casi el triple de margen sobre lo legítimo y atrapa los cinco errores con
+// 36× de sobra.
+function topeProduccion(prep,producido,historial,rendimiento){
+  const prod=parseFloat(producido)||0;
+  if(!prep||!(prod>0))return null;
+  const u=prep.unidad||"";
+  const enMil=prod/1000;
+  const previas=(historial||[])
+    .filter(h=>h.preparacion_id===prep.id)
+    .map(h=>parseFloat(h.cantidad_producida)||0)
+    .filter(c=>c>0).sort((a,b)=>a-b);
+  const sug=(ref)=>(ref>0&&enMil/ref>=0.1&&enMil/ref<=10)
+    ? ` ¿No serán ${fmtCant(enMil,u)}?` : "";
+  if(previas.length>=3){
+    const n=previas.length;
+    const med=n%2?previas[(n-1)/2]:(previas[n/2-1]+previas[n/2])/2;
+    if(med>0&&prod/med>30)
+      return `${fmtCant(prod,u)} es ${Math.round(prod/med).toLocaleString("es-MX")} veces`
+           + ` lo que normalmente se produce de ${prep.nombre} (${fmtCant(med,u)}).${sug(med)}`;
+    return null;
+  }
+  // Sin al menos 3 producciones previas no hay mediana confiable. El respaldo
+  // son las tandas, pero con tope muy alto: la producción legítima más grande
+  // del histórico son 43 tandas de boneless y el error más chico fueron 1,200.
+  // Topar en 100 le da al boneless margen para duplicarse y atrapa todo error.
+  const rend=parseFloat(rendimiento)||0;
+  if(rend>0&&prod/rend>100)
+    return `${fmtCant(prod,u)} de ${prep.nombre} son `
+         + `${Math.round(prod/rend).toLocaleString("es-MX")} tandas, y todavía no hay `
+         + `suficientes producciones previas para comparar.${sug(rend)}`;
+  return null;
+}
+
 function avisoProduccion(nombre,unidad,rendimiento,producido){
   const rend=parseFloat(rendimiento)||0,prod=parseFloat(producido)||0;
   if(!(rend>0)||!(prod>0))return null;
@@ -552,7 +605,7 @@ function LoginScreen({onLogin,provToken}){
   const [selected,setSelected]=useState(null);
   const [pass,setPass]=useState("");
   const [error,setError]=useState("");
-  const roles=[{rol:"admin",label:"Admin / Dueño",desc:"Acceso total",icon:"★",color:"#e2a52a"},{rol:"compras",label:"Compras",desc:"Gestiona pedidos",icon:"◈",color:"#e2a52a"},{rol:"sucursal",label:"Sucursal",desc:"Crea pedidos",icon:"◉",color:"#bfcd3b"},{rol:"proveedor",label:"Proveedor",desc:"Captura precios",icon:"◇",color:"#d6816c"},{rol:"almacen",label:"Almacén",desc:"Inventario",icon:"◫",color:"#77b7b4"},{rol:"finanzas",label:"Finanzas",desc:"Cuentas por pagar",icon:"◎",color:"#d6816c"},
+  const roles=[{rol:"admin",label:"Admin / Dueño",desc:"Acceso total",icon:"★",color:"#e2a52a"},{rol:"compras",label:"Compras",desc:"Gestiona pedidos",icon:"◈",color:"#e2a52a"},{rol:"sucursal",label:"Sucursal",desc:"Crea pedidos",icon:"◉",color:"#bfcd3b"},{rol:"proveedor",label:"Proveedor",desc:"Captura precios",icon:"◇",color:"#d6816c"},{rol:"almacen",label:"Almacén",desc:"Inventario",icon:"◫",color:"#77b7b4"},{rol:"finanzas",label:"Finanzas",desc:"Gastos y estados",icon:"◎",color:"#d6816c"},
     // v7.6: acceso individual para la implementación, con contraseña propia y
     // permisos de admin. v7.15: habilitado también en PRODUCCIÓN — Fernanda
     // configura catálogo e insumos, que es un módulo solo de admin, y así no
@@ -841,7 +894,7 @@ function DetallePedido({pedido:ped,detalle,catalogo,proveedores,provEstatus,onBa
       <div className="flex justify-end"><Btn onClick={()=>{if(!canComprar){alert("No se puede marcar como comprado:\n\n"+closeBlockers.join("\n"));return;}onAction("comprado");}} color={canComprar?"green":"amber"}>{canComprar?"Pedido comprado ✓":"Intentar marcar comprado"}</Btn></div>
     </div>}
     {ped.estatus==="comprado"&&isCompras&&<div className="mt-4"><div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3"><p className="text-sm font-medium text-emerald-800">✓ Pedido comprado — pendiente de recepción por Sucursal</p><p className="text-xs text-emerald-600 mt-1">El pedido se cerrará automáticamente cuando Sucursal confirme la recepción de todos los proveedores</p></div></div>}
-    {ped.estatus==="cerrado"&&isCompras&&<div className="mt-4"><div className="bg-gray-100 border border-gray-200 rounded-xl p-3"><p className="text-sm font-medium text-gray-700">✓ Pedido cerrado — CxP generadas para Finanzas</p></div></div>}
+    {ped.estatus==="cerrado"&&isCompras&&<div className="mt-4"><div className="bg-gray-100 border border-gray-200 rounded-xl p-3"><p className="text-sm font-medium text-gray-700">✓ Pedido cerrado — el cobro lo lleva Tesorería</p></div></div>}
   </div>);
 }
 
@@ -2327,136 +2380,8 @@ function RecepcionView({pedidos,pedidoDetalle,proveedores,provEstatus,catalogo,r
   </div>);
 }
 
-// ======================== FINANZAS CxP ========================
-function FinanzasView({cxp,setCxp,pagos,setPagos,pedidos,proveedores,pedidoDetalle,catalogo}){
-  const [tab,setTab]=useState("pendientes");
-  const [editingCxp,setEditingCxp]=useState(null);
-  const [editFact,setEditFact]=useState({numero:"",fecha:""});
-  const [newPago,setNewPago]=useState({cxp_id:"",monto:0,metodo:"transferencia",referencia:"",notas:""});
-  const [saving,setSaving]=useState(false);
-
-  const pendientes=cxp.filter(c=>c.estatus!=="pagado");
-  const pagados=cxp.filter(c=>c.estatus==="pagado");
-  const totalAdeudado=pendientes.reduce((s,c)=>s+(parseFloat(c.monto_total)-parseFloat(c.monto_pagado||0)),0);
-  const totalPagadoMes=pagos.filter(p=>{const f=p.fecha_pago||p.created_at?.split("T")[0];const hoy=new Date();const mesInicio=new Date(hoy.getFullYear(),hoy.getMonth(),1).toISOString().split("T")[0];return f>=mesInicio;}).reduce((s,p)=>s+parseFloat(p.monto_pagado),0);
-
-  // By proveedor
-  const byProv={};
-  pendientes.forEach(c=>{const prov=proveedores.find(p=>p.id===c.proveedor_id);const k=prov?.nombre||"?";if(!byProv[k])byProv[k]={total:0,count:0};byProv[k].total+=parseFloat(c.monto_total)-parseFloat(c.monto_pagado||0);byProv[k].count++;});
-  const provSorted=Object.entries(byProv).sort((a,b)=>b[1].total-a[1].total);
-  const maxProv=provSorted.length>0?provSorted[0][1].total:1;
-
-  const saveFact=async(cxpId)=>{
-    setSaving(true);
-    await sbPatch("cuentas_por_pagar",cxpId,{numero_factura:editFact.numero||null,fecha_factura:editFact.fecha||null});
-    setCxp(cxp.map(c=>c.id===cxpId?{...c,numero_factura:editFact.numero,fecha_factura:editFact.fecha}:c));
-    setEditingCxp(null);setSaving(false);
-  };
-
-  const registrarPago=async()=>{
-    if(!newPago.cxp_id||newPago.monto<=0)return;
-    setSaving(true);
-    const res=await sbPost("pagos",{cuenta_id:newPago.cxp_id,monto_pagado:newPago.monto,fecha_pago:new Date().toISOString().split("T")[0],metodo_pago:newPago.metodo,referencia:newPago.referencia||null,nota:newPago.notas||null});
-    if(res&&res[0]){
-      setPagos([...pagos,res[0]]);
-      const c=cxp.find(x=>x.id===newPago.cxp_id);
-      if(c){
-        const nuevoMontoPagado=parseFloat(c.monto_pagado||0)+newPago.monto;
-        const nuevoEstatus=nuevoMontoPagado>=parseFloat(c.monto_total)?"pagado":"parcial";
-        await sbPatch("cuentas_por_pagar",c.id,{monto_pagado:nuevoMontoPagado,estatus:nuevoEstatus});
-        setCxp(cxp.map(x=>x.id===c.id?{...x,monto_pagado:nuevoMontoPagado,estatus:nuevoEstatus}:x));
-      }
-      setNewPago({cxp_id:"",monto:0,metodo:"transferencia",referencia:"",notas:""});
-      alert("Pago registrado");
-    }
-    setSaving(false);
-  };
-
-  const tabs3=[{id:"pendientes",l:`Pendientes (${pendientes.length})`},{id:"pagar",l:"Registrar pago"},{id:"historial",l:"Historial"},{id:"resumen",l:"Resumen"}];
-
-  return(<div>
-    <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-      <div><h2 className="text-lg font-bold text-gray-900">Finanzas — Cuentas por Pagar</h2><p className="text-sm text-gray-500">Control de facturas y pagos</p></div>
-      <div className="flex gap-3">
-        <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-2 text-right"><p className="text-xs text-red-600">Total adeudado</p><p className="text-xl font-bold text-red-700">{fmt(totalAdeudado)}</p></div>
-        <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2 text-right"><p className="text-xs text-emerald-600">Pagado este mes</p><p className="text-xl font-bold text-emerald-700">{fmt(totalPagadoMes)}</p></div>
-      </div>
-    </div>
-
-    <div className="flex gap-1 mb-4">{tabs3.map(t=><button key={t.id} onClick={()=>setTab(t.id)} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${tab===t.id?"text-white":"text-gray-500 hover:text-gray-700 bg-white border border-gray-200"}`} style={tab===t.id?{background:"#d6816c"}:{}}>{t.l}</button>)}</div>
-
-    {/* PENDIENTES */}
-    {tab==="pendientes"&&<div>{pendientes.length===0?<div className="bg-white border border-gray-200 rounded-xl p-8 text-center"><p className="text-gray-400">Sin cuentas pendientes</p></div>
-    :<div className="bg-white border border-gray-200 rounded-xl overflow-hidden"><table className="w-full text-sm"><thead className="bg-gray-50"><tr>
-      {["Pedido","Proveedor","Monto","Pagado","Saldo","Factura","Estatus",""].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${["Monto","Pagado","Saldo"].includes(h)?"text-right":"text-left"}`}>{h}</th>)}
-    </tr></thead><tbody>{pendientes.map(c=>{
-      const ped=pedidos.find(p=>p.id===c.pedido_id);
-      const prov=proveedores.find(p=>p.id===c.proveedor_id);
-      const saldo=parseFloat(c.monto_total)-parseFloat(c.monto_pagado||0);
-      const isEdit=editingCxp===c.id;
-      return(<tr key={c.id} className={`border-t border-gray-100 ${isEdit?"bg-amber-50":""}`}>
-        <td className="px-3 py-2 font-medium text-gray-800">{ped?.numero_pedido||"—"}</td>
-        <td className="px-3 py-2 text-gray-600 text-xs">{prov?.nombre||"?"}</td>
-        <td className="px-3 py-2 text-right font-semibold">{fmt(c.monto_total)}</td>
-        <td className="px-3 py-2 text-right text-emerald-600">{fmt(c.monto_pagado||0)}</td>
-        <td className="px-3 py-2 text-right font-bold text-red-600">{fmt(saldo)}</td>
-        <td className="px-3 py-2">{isEdit?<div className="flex gap-1"><input className="w-24 border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" placeholder="# factura" value={editFact.numero} onChange={e=>setEditFact({...editFact,numero:e.target.value})}/><input type="date" className="border border-amber-300 rounded px-1 py-0.5 text-xs bg-amber-50" value={editFact.fecha} onChange={e=>setEditFact({...editFact,fecha:e.target.value})}/><button onClick={()=>saveFact(c.id)} className="text-xs bg-emerald-500 text-white px-2 py-0.5 rounded">✓</button></div>:<span className="text-xs text-gray-500">{c.numero_factura||<button onClick={()=>{setEditingCxp(c.id);setEditFact({numero:c.numero_factura||"",fecha:c.fecha_factura||""});}} className="text-amber-600 hover:text-amber-800 font-medium">+ Factura</button>}</span>}</td>
-        <td className="px-3 py-2"><Badge v={c.estatus==="pagado"?"success":c.estatus==="parcial"?"warning":"danger"}>{c.estatus}</Badge></td>
-        <td className="px-3 py-2">{!isEdit&&c.numero_factura&&<button onClick={()=>{setEditingCxp(c.id);setEditFact({numero:c.numero_factura||"",fecha:c.fecha_factura||""});}} className="text-xs text-amber-600 hover:text-amber-800">Editar</button>}</td>
-      </tr>);})}</tbody></table></div>}</div>}
-
-    {/* REGISTRAR PAGO */}
-    {tab==="pagar"&&<div className="bg-white border-2 border-emerald-300 rounded-xl p-4">
-      <h3 className="text-sm font-bold text-emerald-800 mb-3">Registrar pago</h3>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
-        <div><label className="text-xs text-gray-500 block mb-1">Cuenta por pagar</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newPago.cxp_id} onChange={e=>{setNewPago({...newPago,cxp_id:e.target.value});const c=pendientes.find(x=>x.id===e.target.value);if(c)setNewPago(p=>({...p,cxp_id:e.target.value,monto:parseFloat(c.monto_total)-parseFloat(c.monto_pagado||0)}));}}><option value="">Seleccionar...</option>{pendientes.map(c=>{const ped=pedidos.find(p=>p.id===c.pedido_id);const prov=proveedores.find(p=>p.id===c.proveedor_id);const saldo=parseFloat(c.monto_total)-parseFloat(c.monto_pagado||0);return<option key={c.id} value={c.id}>{ped?.numero_pedido} — {prov?.nombre} — Saldo: {fmt(saldo)}</option>;})}</select></div>
-        <div><label className="text-xs text-gray-500 block mb-1">Monto a pagar</label><input type="number" min="0" step="0.01" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newPago.monto||""} onChange={e=>setNewPago({...newPago,monto:parseFloat(e.target.value)||0})}/></div>
-        <div><label className="text-xs text-gray-500 block mb-1">Método de pago</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={newPago.metodo} onChange={e=>setNewPago({...newPago,metodo:e.target.value})}><option value="transferencia">Transferencia</option><option value="efectivo">Efectivo</option><option value="tarjeta">Tarjeta</option></select></div>
-      </div>
-      <div className="grid grid-cols-2 gap-3 mb-4">
-        <div><label className="text-xs text-gray-500 block mb-1">Referencia</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="# transferencia, recibo, etc." value={newPago.referencia} onChange={e=>setNewPago({...newPago,referencia:e.target.value})}/></div>
-        <div><label className="text-xs text-gray-500 block mb-1">Notas</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Opcional" value={newPago.notas} onChange={e=>setNewPago({...newPago,notas:e.target.value})}/></div>
-      </div>
-      <Btn onClick={registrarPago} disabled={saving||!newPago.cxp_id||newPago.monto<=0} color="green">{saving?"Guardando...":"Registrar pago"}</Btn>
-    </div>}
-
-    {/* HISTORIAL */}
-    {tab==="historial"&&<div className="bg-white border border-gray-200 rounded-xl overflow-hidden">{pagos.length===0?<div className="p-8 text-center"><p className="text-gray-400">Sin pagos registrados</p></div>
-    :<table className="w-full text-sm"><thead className="bg-gray-50"><tr>
-      {["Fecha","Pedido","Proveedor","Monto","Método","Referencia"].map(h=><th key={h} className={`px-3 py-2.5 font-semibold text-gray-600 text-xs uppercase ${h==="Monto"?"text-right":"text-left"}`}>{h}</th>)}
-    </tr></thead><tbody>{pagos.slice().sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).map(p=>{
-      const c=cxp.find(x=>x.id===p.cuenta_id);
-      const ped=pedidos.find(x=>x.id===c?.pedido_id);
-      const prov=proveedores.find(x=>x.id===c?.proveedor_id);
-      return(<tr key={p.id} className="border-t border-gray-100">
-        <td className="px-3 py-2 text-gray-600 text-xs">{new Date(p.fecha_pago||p.created_at).toLocaleDateString("es-MX")}</td>
-        <td className="px-3 py-2 font-medium text-gray-800">{ped?.numero_pedido||"—"}</td>
-        <td className="px-3 py-2 text-gray-600 text-xs">{prov?.nombre||"?"}</td>
-        <td className="px-3 py-2 text-right font-bold text-emerald-600">{fmt(p.monto_pagado)}</td>
-        <td className="px-3 py-2"><Badge v={p.metodo_pago==="transferencia"?"info":p.metodo_pago==="efectivo"?"warning":"purple"}>{p.metodo_pago}</Badge></td>
-        <td className="px-3 py-2 text-gray-400 text-xs">{p.referencia||"—"}</td>
-      </tr>);})}</tbody></table>}</div>}
-
-    {/* RESUMEN */}
-    {tab==="resumen"&&<div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-white border border-gray-200 rounded-xl p-4"><h3 className="text-sm font-bold text-gray-700 mb-3">Saldos por proveedor</h3>
-          {provSorted.length===0?<p className="text-sm text-gray-400">Sin saldos pendientes</p>:provSorted.map(([prov,data])=>{
-            const pct=maxProv>0?(data.total/maxProv)*100:0;
-            return(<div key={prov} className="mb-3"><div className="flex justify-between text-sm mb-1"><span className="text-gray-700 font-medium">{prov} <span className="text-gray-400 text-xs">({data.count} facturas)</span></span><span className="font-bold text-red-600">{fmt(data.total)}</span></div><div className="w-full bg-gray-100 rounded-full h-3"><div className="h-3 rounded-full transition-all" style={{width:`${Math.min(pct,100)}%`,background:"#ef4444"}}/></div></div>);
-          })}
-          {provSorted.length>0&&<div className="border-t border-gray-100 pt-2 mt-2 flex justify-between font-bold text-sm"><span>Total adeudado</span><span className="text-red-600">{fmt(totalAdeudado)}</span></div>}
-        </div>
-        <div className="bg-white border border-gray-200 rounded-xl p-4"><h3 className="text-sm font-bold text-gray-700 mb-3">Métodos de pago (este mes)</h3>
-          {(()=>{const hoy=new Date();const mesInicio=new Date(hoy.getFullYear(),hoy.getMonth(),1).toISOString().split("T")[0];const pagosMes=pagos.filter(p=>(p.fecha_pago||p.created_at?.split("T")[0])>=mesInicio);const byMetodo={};pagosMes.forEach(p=>{const m=p.metodo_pago||"otro";if(!byMetodo[m])byMetodo[m]=0;byMetodo[m]+=parseFloat(p.monto_pagado);});const metodos=Object.entries(byMetodo).sort((a,b)=>b[1]-a[1]);return metodos.length===0?<p className="text-sm text-gray-400">Sin pagos este mes</p>:metodos.map(([m,total])=><div key={m} className="flex justify-between py-2 border-b border-gray-50 last:border-0"><div className="flex items-center gap-2"><Badge v={m==="transferencia"?"info":m==="efectivo"?"warning":"purple"}>{m}</Badge></div><span className="font-bold text-gray-800">{fmt(total)}</span></div>);})()}
-        </div>
-      </div>
-    </div>}
-  </div>);
-}
-
 // ======================== COMPRAS DIRECTAS (Sucursal) ========================
-function ComprasDirectasView({comprasDirectas,setComprasDirectas,catalogo,proveedores,cxp,setCxp,onEntrada,invSucursal,insumos}){
+function ComprasDirectasView({comprasDirectas,setComprasDirectas,catalogo,proveedores,onEntrada,invSucursal,insumos}){
   const [form,setForm]=useState({catalogo_id:"",proveedor_id:"",cantidad:0,costo_unitario:0,metodo_pago:"efectivo",nota:""});
   const [saving,setSaving]=useState(false);
   const [filter,setFilter]=useState("");
@@ -2489,11 +2414,12 @@ function ComprasDirectasView({comprasDirectas,setComprasDirectas,catalogo,provee
       try{
         // v7.0: la compra directa también entra al inventario de sucursal
         if(onEntrada)await onEntrada(form.catalogo_id,form.cantidad,form.costo_unitario);
-        if(form.metodo_pago==="credito"){
-          const cxpRes=await sbPost("cuentas_por_pagar",{pedido_id:null,proveedor_id:form.proveedor_id,monto_total:costoTotal,estatus:"pendiente"});
-          if(cxpRes&&cxpRes[0])setCxp([...cxp,cxpRes[0]]);
-          alert("Compra registrada — CxP generada (crédito)");
-        }else{alert("Compra registrada");}
+        // v7.39: el pasivo ya no se genera aquí. El ciclo de esta app termina en
+        // "se recibe"; quién nos cobra y cuándo se paga vive en Tesorería, que
+        // lee la compra desde esta misma base.
+        alert(form.metodo_pago==="credito"
+          ? "Compra registrada a crédito — el pago lo lleva Tesorería."
+          : "Compra registrada");
       }catch(e){
         alert(`La compra SÍ se registró, pero no se pudo actualizar el inventario:\n\n${String(e&&e.message||e)}\n\n`
           +"No la vuelvas a capturar o quedará doble. Avisa a dirección.");
@@ -2553,7 +2479,7 @@ function ComprasDirectasView({comprasDirectas,setComprasDirectas,catalogo,provee
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
         <div><label className="text-xs text-gray-500 block mb-1">Costo unitario</label><input type="number" min="0" step="0.01" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={form.costo_unitario||""} onChange={e=>setForm({...form,costo_unitario:parseFloat(e.target.value)||0})}/></div>
         <div><label className="text-xs text-gray-500 block mb-1">Total</label><div className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-gray-50 font-bold">{fmt(total)}</div></div>
-        <div><label className="text-xs text-gray-500 block mb-1">Método de pago</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={form.metodo_pago} onChange={e=>setForm({...form,metodo_pago:e.target.value})}><option value="efectivo">Efectivo</option><option value="transferencia">Transferencia</option><option value="tarjeta">Tarjeta</option><option value="credito">Crédito (genera CxP)</option></select></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Método de pago</label><select className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" value={form.metodo_pago} onChange={e=>setForm({...form,metodo_pago:e.target.value})}><option value="efectivo">Efectivo</option><option value="transferencia">Transferencia</option><option value="tarjeta">Tarjeta</option><option value="credito">Crédito (paga Tesorería)</option></select></div>
         <div><label className="text-xs text-gray-500 block mb-1">Nota</label><input className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" placeholder="Opcional" value={form.nota} onChange={e=>setForm({...form,nota:e.target.value})}/></div>
       </div>
       <Btn onClick={handleSave} disabled={saving||!form.catalogo_id||!form.proveedor_id||form.cantidad<=0}>{saving?"Guardando...":"Registrar compra"}</Btn>
@@ -3766,6 +3692,21 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
     // aviso describe la consecuencia ("no alcanza el inventario") y no la causa
     // ("escribiste mil veces de más"). Quien ve primero el motivo correcto
     // corrige; quien ve primero un trámite, lo acepta.
+    // v7.40: el tope duro va antes que cualquier confirm. Las cinco
+    // producciones de octubre pasaron por un confirm y lo aceptaron. Esto no
+    // pregunta: no deja guardar. Sólo dirección puede forzarlo.
+    // No hay excepción por rol, a propósito. Se intentó dejar que dirección
+    // forzara el tope y la primera prueba lo dejó claro: un confirm sigue
+    // siendo un clic, y quien captura como admin lo acepta igual que cocina.
+    // Si alguna vez hace falta una tanda de verdad gigante, se registra en
+    // varias capturas; es más molesto que un clic y ésa es justamente la idea.
+    const tope=topeProduccion(plan.prep,plan.producido,producciones,plan.rend);
+    if(tope){
+      setMsgProd({tipo:"error",txt:`No se puede registrar. ${tope} `
+        +`Corrige la cantidad antes de guardar. Si de verdad salió esa cantidad, `
+        +`regístrala en varias capturas o avisa a dirección.`});
+      return;
+    }
     const avisoMag=avisoProduccion(plan.prep.nombre,plan.prep.unidad,plan.rend,plan.producido);
     if(avisoMag){
       if(!confirm(`⚠ REVISA LA CANTIDAD\n\n${avisoMag}\n\n`
@@ -4052,15 +3993,17 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
             return null;})()}
           <div className="grid grid-cols-2 gap-3 mb-3">
             <div><label className="text-xs text-gray-500 block mb-1">¿Cuánto salió? {prepSel&&<b className="text-purple-700">({prepSel.unidad||"u"})</b>}</label>
-              {(()=>{const av=prepSel?avisoProduccion(prepSel.nombre,prepSel.unidad,prepSel.rendimiento,fProd.cantidad):null;
+              {(()=>{const bloq=prepSel?topeProduccion(prepSel,fProd.cantidad,producciones,prepSel.rendimiento):null;
+                const av=(!bloq&&prepSel)?avisoProduccion(prepSel.nombre,prepSel.unidad,prepSel.rendimiento,fProd.cantidad):null;
                 return<>
                   <input type="number" min="0" step="0.001"
-                    className={`w-full border rounded-lg px-3 py-2 text-sm ${av?"border-red-400 bg-red-50":"border-gray-200"}`}
+                    className={`w-full border rounded-lg px-3 py-2 text-sm ${(bloq||av)?"border-red-400 bg-red-50":"border-gray-200"}`}
                     placeholder={prepSel?`ej. ${prepSel.rendimiento||"1"}`:"0"} value={fProd.cantidad}
                     onChange={e=>setFProd({...fProd,cantidad:e.target.value})}/>
                   {/* Mientras se escribe, no sólo al guardar: corregir un número
                       antes de apretar el botón es gratis; después cuesta revertir
                       el inventario de siete insumos. */}
+                  {bloq&&<p className="mt-1 text-[11px] text-red-700 font-bold leading-snug">🚫 {bloq} No se puede guardar así.</p>}
                   {av&&<p className="mt-1 text-[11px] text-red-700 font-semibold leading-snug">{av}</p>}
                 </>;})()}</div>
             <div><label className="text-xs text-gray-500 block mb-1">Fecha</label>
@@ -4183,8 +4126,8 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
 // ======================== ESTADOS FINANCIEROS (v7.0) ========================
 // Estado de resultados y flujo de efectivo del mes, integrando: ventas de SR,
 // costo de ventas por recetas (kárdex de sucursal), merma, gastos operativos,
-// CxP/pagos y valor de inventarios. Cifras de venta sin IVA (subtotal).
-function EstadosView({ventas,mermas,gastosOp,comprasDirectas,cxp,pagos,inventario,invSucursal,movSucursal,catalogo,cogsMensual}){
+// valor de inventarios. Cifras de venta sin IVA (subtotal).
+function EstadosView({ventas,mermas,gastosOp,comprasDirectas,inventario,invSucursal,movSucursal,catalogo,cogsMensual}){
   const [mesOffset,setMesOffset]=useState(0);
   const now=new Date();
   const mesActual=new Date(now.getFullYear(),now.getMonth()-mesOffset,1);
@@ -4241,16 +4184,16 @@ function EstadosView({ventas,mermas,gastosOp,comprasDirectas,cxp,pagos,inventari
   const inPlataforma=vMes.reduce((s,v)=>s+parseFloat(v.total_plataforma||0),0);
   const inOtros=vMes.reduce((s,v)=>s+parseFloat(v.total_otros||0),0);
   const entradas=inEfectivo+inTarjeta+inPlataforma+inOtros;
-  const pagosMes=pagos.filter(p=>enMes(p.fecha_pago||p.created_at?.split("T")[0]||"")).reduce((s,p)=>s+parseFloat(p.monto_pagado||0),0);
   const cdMes=comprasDirectas.filter(c=>c.metodo_pago!=="credito"&&enMes(c.fecha||c.created_at?.split("T")[0]||"")).reduce((s,c)=>s+parseFloat(c.costo_total||0),0);
   // Los gastos "Auto:" (insumos tipo gasto recibidos) no salen de caja por sí
-  // mismos: su efectivo ya está contado en pagos CxP / compras directas.
+  // mismos: su efectivo ya está contado en las compras directas.
   const gastosFlujo=gMes.filter(g=>!(g.nota||"").startsWith("Auto:")).reduce((s,g)=>s+parseFloat(g.monto||0),0);
-  const salidas=pagosMes+cdMes+gastosFlujo;
+  // v7.39: los pagos a proveedores salieron de aquí. Esta app llega hasta
+  // "se recibe"; el pago lo lleva Tesorería y es ahí donde se ve completo.
+  const salidas=cdMes+gastosFlujo;
   const flujoNeto=entradas-salidas;
 
   // Posición (a hoy, no del mes)
-  const cxpPendiente=cxp.filter(c=>c.estatus!=="pagado").reduce((s,c)=>s+(parseFloat(c.monto_total)-parseFloat(c.monto_pagado||0)),0);
   const valorAlmacen=inventario.reduce((s,p)=>s+(parseFloat(p.existencia)||0)*(parseFloat(p.costo_unitario_actual)||0),0);
   const valorSucursal=invSucursal.reduce((s,i)=>s+Math.max(0,parseFloat(i.existencia)||0)*costoInsumo(i.insumo_id,invSucursal,catalogo),0);
 
@@ -4325,11 +4268,11 @@ function EstadosView({ventas,mermas,gastosOp,comprasDirectas,cxp,pagos,inventari
         {inOtros>0&&<Row label="Otros" value={fmt(inOtros)} indent/>}
         <Row label="Total entradas" value={fmt(entradas)} bold color="text-emerald-700"/>
         <p className="text-xs font-semibold text-red-700 mt-3 mb-1">Salidas</p>
-        <Row label="Pagos a proveedores (CxP)" value={fmt(-pagosMes)} color="text-red-600" indent/>
         <Row label="Compras directas (contado)" value={fmt(-cdMes)} color="text-red-600" indent/>
         <Row label="Gastos operativos (pagados directo)" value={fmt(-gastosFlujo)} color="text-red-600" indent/>
         <Row label="Total salidas" value={fmt(-salidas)} bold color="text-red-700"/>
         <Row label="Flujo neto del mes" value={fmt(flujoNeto)} bold color={flujoNeto>=0?"text-emerald-700":"text-red-600"}/>
+        <p className="text-xs text-gray-500 mt-2">No incluye los pagos a proveedores a crédito: esos salen del banco y se ven completos en Tesorería.</p>
         {entradas===0&&vMes.length>0&&<p className="text-xs text-orange-600 mt-2">Tip: captura las formas de pago (efectivo/tarjeta/plataforma) al importar cada corte de SR para que el flujo sea real.</p>}
       </div>
     </div>
@@ -4337,12 +4280,12 @@ function EstadosView({ventas,mermas,gastosOp,comprasDirectas,cxp,pagos,inventari
     {/* POSICIÓN */}
     <div className="bg-white border border-gray-200 rounded-xl p-4">
       <h3 className="text-sm font-bold text-gray-700 mb-3">Posición al día de hoy</h3>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <div className="bg-teal-50 border border-teal-100 rounded-xl p-3"><p className="text-xs text-teal-600">Inventario almacén</p><p className="text-lg font-bold text-teal-700">{fmt(valorAlmacen)}</p></div>
         <div className="bg-teal-50 border border-teal-100 rounded-xl p-3"><p className="text-xs text-teal-600">Inventario sucursal</p><p className="text-lg font-bold text-teal-700">{fmt(valorSucursal)}</p></div>
-        <div className="bg-red-50 border border-red-100 rounded-xl p-3"><p className="text-xs text-red-600">Cuentas por pagar</p><p className="text-lg font-bold text-red-700">{fmt(cxpPendiente)}</p></div>
-        <div className="bg-amber-50 border border-amber-100 rounded-xl p-3"><p className="text-xs" style={{color:"#b8860b"}}>Inventarios − CxP</p><p className={`text-lg font-bold ${valorAlmacen+valorSucursal-cxpPendiente>=0?"text-emerald-700":"text-red-700"}`}>{fmt(valorAlmacen+valorSucursal-cxpPendiente)}</p></div>
+        <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3"><p className="text-xs text-emerald-600">Inventario total</p><p className="text-lg font-bold text-emerald-700">{fmt(valorAlmacen+valorSucursal)}</p></div>
       </div>
+      <p className="text-xs text-gray-500 mt-3">Lo que le debemos a proveedores vive en Tesorería, que lo calcula contra las facturas recibidas.</p>
     </div>
   </div>);
 }
@@ -4371,8 +4314,6 @@ function App(){
   const [provToken,setProvToken]=useState(null);
   const [recepciones,setRecepciones]=useState([]);
   const [recepcionDetalle,setRecepcionDetalle]=useState([]);
-  const [cxp,setCxp]=useState([]);
-  const [pagos,setPagos]=useState([]);
   const [comprasDirectas,setComprasDirectas]=useState([]);
   const [gastosOp,setGastosOp]=useState([]);
   const [catGastos,setCatGastos]=useState([]);
@@ -4471,7 +4412,7 @@ function App(){
       //    ofrece ningún periodo más viejo que "mes pasado".
       // 3) Todo lo demás baja en paralelo con Promise.all en vez de en fila.
       const hace90=new Date(Date.now()-90*864e5).toISOString().split("T")[0];
-      const CHICAS=["catalogo","proveedores","tipos_flujo_costo","unidades_medida","inventario_almacen","pedidos","pedido_detalle","pedido_proveedor_estatus","lotes_almacen","recepciones","recepcion_detalle","cuentas_por_pagar","pagos","compras_directas","gastos_operativos","categorias_gastos","sucursales","productos_venta","recetas","inventario_sucursal","mermas","insumos","reglas_consumo_ticket","producciones"];
+      const CHICAS=["catalogo","proveedores","tipos_flujo_costo","unidades_medida","inventario_almacen","pedidos","pedido_detalle","pedido_proveedor_estatus","lotes_almacen","recepciones","recepcion_detalle","compras_directas","gastos_operativos","categorias_gastos","sucursales","productos_venta","recetas","inventario_sucursal","mermas","insumos","reglas_consumo_ticket","producciones"];
       setLoadMsg("Cargando datos...");
       const results={};
       // Ojo con la forma: cada entrada tiene que ser una PROMESA ya en vuelo.
@@ -4508,8 +4449,6 @@ function App(){
       setLotes(results.lotes_almacen||[]);
       setRecepciones(results.recepciones||[]);
       setRecepcionDetalle(results.recepcion_detalle||[]);
-      setCxp(results.cuentas_por_pagar||[]);
-      setPagos(results.pagos||[]);
       setComprasDirectas(results.compras_directas||[]);
       setGastosOp(results.gastos_operativos||[]);
       setCatGastos((results.categorias_gastos||[]).filter(c=>c.activa!==false));
@@ -4595,16 +4534,7 @@ function App(){
         await sbPatch("pedidos",pedId,{estatus:"cerrado",total_real:totalReal});
         setPedidos(pedidos.map(p=>p.id===pedId?{...p,estatus:"cerrado",total_real:totalReal}:p));
         setSelectedPedido({...selectedPedido,estatus:"cerrado"});
-        // Generate CxP
-        const provIds=[...new Set(pedidoDetalle.filter(d=>d.pedido_id===pedId).map(d=>d.proveedor_id))];
-        const newCxps=[];
-        for(const pid of provIds){
-          const provItems=pedidoDetalle.filter(d=>d.pedido_id===pedId&&d.proveedor_id===pid);
-          const monto=montoConIva(provItems,catalogo);
-          if(monto>0){const cxpRes=await sbPost("cuentas_por_pagar",{pedido_id:pedId,proveedor_id:pid,monto_total:Math.round(monto*100)/100,estatus:"pendiente"});if(cxpRes&&cxpRes[0])newCxps.push(cxpRes[0]);}
-        }
-        setCxp([...cxp,...newCxps]);
-        alert("Pedido comprado y cerrado — recepciones ya estaban completas. CxP generadas.");
+        alert("Pedido comprado y cerrado — recepciones ya estaban completas.");
       } else {
         await sbPatch("pedidos",pedId,{estatus:"comprado",total_real:totalReal});
         setPedidos(pedidos.map(p=>p.id===pedId?{...p,estatus:"comprado",total_real:totalReal}:p));
@@ -4968,23 +4898,11 @@ function App(){
       const ped=pedidos.find(p=>p.id===pedId);
       
       if(allReceived&&ped?.estatus==="comprado"){
-        // Auto-close pedido + generate CxP
+        // Auto-cierre del pedido
         const totalReal=pedidoDetalle.filter(d=>d.pedido_id===pedId).reduce((s,d)=>s+d.cantidad*(d.costo_real||d.costo_referencia),0);
         await sbPatch("pedidos",pedId,{estatus:"cerrado",total_real:totalReal});
         setPedidos(prev=>prev.map(p=>p.id===pedId?{...p,estatus:"cerrado",total_real:totalReal}:p));
-        // Generate CxP per proveedor
-        const provIds=[...new Set(pedidoDetalle.filter(d=>d.pedido_id===pedId).map(d=>d.proveedor_id))];
-        const newCxps=[];
-        for(const pid of provIds){
-          const provItems=pedidoDetalle.filter(d=>d.pedido_id===pedId&&d.proveedor_id===pid);
-          const monto=montoConIva(provItems,catalogo);
-          if(monto>0){
-            const cxpRes=await sbPost("cuentas_por_pagar",{pedido_id:pedId,proveedor_id:pid,monto_total:Math.round(monto*100)/100,estatus:"pendiente"});
-            if(cxpRes&&cxpRes[0])newCxps.push(cxpRes[0]);
-          }
-        }
-        setCxp(prev=>[...prev,...newCxps]);
-        alert("Recepción registrada — Pedido cerrado y CxP generadas para Finanzas.");
+        alert("Recepción registrada — Pedido cerrado.");
       } else if(allReceived){
         alert("Recepción registrada — Todas las recepciones completas. Falta que Compras marque como comprado para cerrar.");
       } else {
@@ -5026,7 +4944,6 @@ function App(){
       {id:"inv_sucursal",l:"Inventario sucursal · merma",roles:["admin","compras","sucursal"]},
     ]},
     {id:"g_finanzas",l:"Finanzas",icon:"finanzas",items:[
-      {id:"finanzas",l:"Cuentas por pagar",roles:["admin","compras","finanzas"]},
       {id:"gastos",l:"Gastos",roles:["sucursal","admin","compras","finanzas"]},
       {id:"estados",l:"Estados financieros",roles:["admin","compras","finanzas"]},
     ]},
@@ -5127,8 +5044,7 @@ function App(){
       {view==="ventas_dash"&&["admin","compras","finanzas","sucursal"].includes(rol)&&<VentasDashboardView ventas={ventas} ventaDetalle={ventaDetalle} productosVenta={productosVenta} gastosOp={gastosOp}/>}
       {view==="catalogo"&&rol==="admin"&&<CatalogoView catalogo={catalogo} setCatalogo={setCatalogo} proveedores={proveedores} setProveedores={setProveedores} unidades={unidades} inventario={inventario} flujos={flujos} insumos={insumos} setInsumos={setInsumos} recetas={recetas}/>}
       {view==="recepcion"&&rol==="sucursal"&&<RecepcionView pedidos={pedidos} pedidoDetalle={pedidoDetalle} proveedores={proveedores} provEstatus={provEstatus} catalogo={catalogo} recepciones={recepciones} recepcionDetalle={recepcionDetalle} onRecibir={handleRecibir}/>}
-      {view==="finanzas"&&["admin","compras","finanzas"].includes(rol)&&<FinanzasView cxp={cxp} setCxp={setCxp} pagos={pagos} setPagos={setPagos} pedidos={pedidos} proveedores={proveedores} pedidoDetalle={pedidoDetalle} catalogo={catalogo}/>}
-      {view==="compras_directas"&&["sucursal","admin","compras","finanzas"].includes(rol)&&<ComprasDirectasView comprasDirectas={comprasDirectas} setComprasDirectas={setComprasDirectas} catalogo={catalogo} proveedores={proveedores} cxp={cxp} setCxp={setCxp} invSucursal={invSucursal} insumos={insumos} onEntrada={async(catId,cant,costoU)=>{
+      {view==="compras_directas"&&["sucursal","admin","compras","finanzas"].includes(rol)&&<ComprasDirectasView comprasDirectas={comprasDirectas} setComprasDirectas={setComprasDirectas} catalogo={catalogo} proveedores={proveedores} invSucursal={invSucursal} insumos={insumos} onEntrada={async(catId,cant,costoU)=>{
         const sucId=sucursales[0]?.id;if(!sucId)return;
         const cat=catalogo.find(c=>c.id===catId);if(!cat?.insumo_id)return;
         const ins=insumos.find(x=>x.id===cat.insumo_id);
@@ -5144,7 +5060,7 @@ function App(){
       {view==="ventas"&&["admin","compras","sucursal","finanzas"].includes(rol)&&<VentasSRView productosVenta={productosVenta} setProductosVenta={setProductosVenta} productosInactivos={productosInactivos} setProductosInactivos={setProductosInactivos} recetas={recetas} setRecetas={setRecetas} ventas={ventas} ventaDetalle={ventaDetalle} catalogo={catalogo} insumos={insumos} invSucursal={invSucursal} reglasTicket={reglasTicket} setReglasTicket={setReglasTicket} onImport={handleImportVentas} rol={rol}/>}
       {view==="recetario"&&["admin","compras","sucursal","finanzas"].includes(rol)&&<VentasSRView key="recetario" tabInicial="productos" productosVenta={productosVenta} setProductosVenta={setProductosVenta} productosInactivos={productosInactivos} setProductosInactivos={setProductosInactivos} recetas={recetas} setRecetas={setRecetas} ventas={ventas} ventaDetalle={ventaDetalle} catalogo={catalogo} insumos={insumos} invSucursal={invSucursal} reglasTicket={reglasTicket} setReglasTicket={setReglasTicket} onImport={handleImportVentas} rol={rol}/>}
       {view==="inv_sucursal"&&["admin","compras","sucursal"].includes(rol)&&<SucursalInvView invSucursal={invSucursal} setInvSucursal={setInvSucursal} movSucursal={movSucursal} setMovSucursal={setMovSucursal} mermas={mermas} setMermas={setMermas} catalogo={catalogo} insumos={insumos} sucursales={sucursales} rol={rol} productosVenta={productosVenta} recetas={recetas} producciones={producciones} setProducciones={setProducciones}/>}
-      {view==="estados"&&["admin","compras","finanzas"].includes(rol)&&<EstadosView cogsMensual={cogsMensual} ventas={ventas} mermas={mermas} gastosOp={gastosOp} comprasDirectas={comprasDirectas} cxp={cxp} pagos={pagos} inventario={inventario} invSucursal={invSucursal} movSucursal={movSucursal} catalogo={catalogo}/>}
+      {view==="estados"&&["admin","compras","finanzas"].includes(rol)&&<EstadosView cogsMensual={cogsMensual} ventas={ventas} mermas={mermas} gastosOp={gastosOp} comprasDirectas={comprasDirectas} inventario={inventario} invSucursal={invSucursal} movSucursal={movSucursal} catalogo={catalogo}/>}
       {view==="gastos"&&["sucursal","admin","compras","finanzas"].includes(rol)&&<GastosView gastosOp={gastosOp} setGastosOp={setGastosOp} catGastos={catGastos} setCatGastos={setCatGastos} rol={rol}/>}
     </div>
   </div>);
