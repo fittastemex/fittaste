@@ -36,7 +36,7 @@ if(_envParam&&ENTORNOS[_envParam]){try{localStorage.setItem("ft_env",_envParam);
 let ENV_ID="prod";try{if(ENTORNOS[localStorage.getItem("ft_env")])ENV_ID=localStorage.getItem("ft_env");}catch(e){}
 const SB=ENTORNOS[ENV_ID].url;
 const KEY=ENTORNOS[ENV_ID].key;
-const V="7.39";
+const V="7.40";
 const H={apikey:KEY,Authorization:`Bearer ${KEY}`,"Content-Type":"application/json"};
 
 // Pagina de 1000 en 1000: PostgREST devuelve máx. 1000 filas por petición, y
@@ -395,6 +395,59 @@ const Icono=({n,size=16,className=""})=>(
 // describe la consecuencia pero no la causa no ayuda a corregir.
 //
 // Éste nombra la causa y propone el número, como avisoContenido. No bloquea.
+// v7.40 — EL TOPE DURO DE PRODUCCIÓN. No es un aviso: no deja guardar.
+//
+// En octubre hubo CINCO producciones disparatadas en siete días, todas con el
+// aviso de magnitud ya desplegado (21-oct) y todas aceptadas: arroz al vapor
+// 3,900 kg tres veces, dip de aguacate 1,600 kg y vizcaína 1,800 kg.
+// $1,159,664 de producción que nunca existió. Un confirm no detiene a quien
+// está capturando rápido al final del turno.
+//
+// POR QUÉ EL TOPE NO VA EN TANDAS
+// BONELESS rinde 1 porción por tanda, así que producir 43 porciones son 43
+// tandas y es su producción normal. Un tope plano en 20 o en 50 tandas
+// bloquearía la preparación que más se produce después del arroz. La tanda no
+// mide magnitud, mide rendimiento.
+//
+// EL UMBRAL SALE DE LOS DATOS, NO DE UNA CORAZONADA
+// Midiendo cada una de las 75 producciones del histórico contra la mediana de
+// las demás de su misma preparación:
+//   · la legítima más atípica es MEZCLA GALLETAS ORIGINAL, 10.8× su mediana
+//   · el disparate más chico es DIP DE AGUACATE, 1,103× su mediana
+// Entre 10.8 y 1,103 hay dos órdenes de magnitud de hueco. Topar en 30× deja
+// casi el triple de margen sobre lo legítimo y atrapa los cinco errores con
+// 36× de sobra.
+function topeProduccion(prep,producido,historial,rendimiento){
+  const prod=parseFloat(producido)||0;
+  if(!prep||!(prod>0))return null;
+  const u=prep.unidad||"";
+  const enMil=prod/1000;
+  const previas=(historial||[])
+    .filter(h=>h.preparacion_id===prep.id)
+    .map(h=>parseFloat(h.cantidad_producida)||0)
+    .filter(c=>c>0).sort((a,b)=>a-b);
+  const sug=(ref)=>(ref>0&&enMil/ref>=0.1&&enMil/ref<=10)
+    ? ` ¿No serán ${fmtCant(enMil,u)}?` : "";
+  if(previas.length>=3){
+    const n=previas.length;
+    const med=n%2?previas[(n-1)/2]:(previas[n/2-1]+previas[n/2])/2;
+    if(med>0&&prod/med>30)
+      return `${fmtCant(prod,u)} es ${Math.round(prod/med).toLocaleString("es-MX")} veces`
+           + ` lo que normalmente se produce de ${prep.nombre} (${fmtCant(med,u)}).${sug(med)}`;
+    return null;
+  }
+  // Sin al menos 3 producciones previas no hay mediana confiable. El respaldo
+  // son las tandas, pero con tope muy alto: la producción legítima más grande
+  // del histórico son 43 tandas de boneless y el error más chico fueron 1,200.
+  // Topar en 100 le da al boneless margen para duplicarse y atrapa todo error.
+  const rend=parseFloat(rendimiento)||0;
+  if(rend>0&&prod/rend>100)
+    return `${fmtCant(prod,u)} de ${prep.nombre} son `
+         + `${Math.round(prod/rend).toLocaleString("es-MX")} tandas, y todavía no hay `
+         + `suficientes producciones previas para comparar.${sug(rend)}`;
+  return null;
+}
+
 function avisoProduccion(nombre,unidad,rendimiento,producido){
   const rend=parseFloat(rendimiento)||0,prod=parseFloat(producido)||0;
   if(!(rend>0)||!(prod>0))return null;
@@ -3639,6 +3692,21 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
     // aviso describe la consecuencia ("no alcanza el inventario") y no la causa
     // ("escribiste mil veces de más"). Quien ve primero el motivo correcto
     // corrige; quien ve primero un trámite, lo acepta.
+    // v7.40: el tope duro va antes que cualquier confirm. Las cinco
+    // producciones de octubre pasaron por un confirm y lo aceptaron. Esto no
+    // pregunta: no deja guardar. Sólo dirección puede forzarlo.
+    // No hay excepción por rol, a propósito. Se intentó dejar que dirección
+    // forzara el tope y la primera prueba lo dejó claro: un confirm sigue
+    // siendo un clic, y quien captura como admin lo acepta igual que cocina.
+    // Si alguna vez hace falta una tanda de verdad gigante, se registra en
+    // varias capturas; es más molesto que un clic y ésa es justamente la idea.
+    const tope=topeProduccion(plan.prep,plan.producido,producciones,plan.rend);
+    if(tope){
+      setMsgProd({tipo:"error",txt:`No se puede registrar. ${tope} `
+        +`Corrige la cantidad antes de guardar. Si de verdad salió esa cantidad, `
+        +`regístrala en varias capturas o avisa a dirección.`});
+      return;
+    }
     const avisoMag=avisoProduccion(plan.prep.nombre,plan.prep.unidad,plan.rend,plan.producido);
     if(avisoMag){
       if(!confirm(`⚠ REVISA LA CANTIDAD\n\n${avisoMag}\n\n`
@@ -3925,15 +3993,17 @@ function SucursalInvView({invSucursal,setInvSucursal,movSucursal,setMovSucursal,
             return null;})()}
           <div className="grid grid-cols-2 gap-3 mb-3">
             <div><label className="text-xs text-gray-500 block mb-1">¿Cuánto salió? {prepSel&&<b className="text-purple-700">({prepSel.unidad||"u"})</b>}</label>
-              {(()=>{const av=prepSel?avisoProduccion(prepSel.nombre,prepSel.unidad,prepSel.rendimiento,fProd.cantidad):null;
+              {(()=>{const bloq=prepSel?topeProduccion(prepSel,fProd.cantidad,producciones,prepSel.rendimiento):null;
+                const av=(!bloq&&prepSel)?avisoProduccion(prepSel.nombre,prepSel.unidad,prepSel.rendimiento,fProd.cantidad):null;
                 return<>
                   <input type="number" min="0" step="0.001"
-                    className={`w-full border rounded-lg px-3 py-2 text-sm ${av?"border-red-400 bg-red-50":"border-gray-200"}`}
+                    className={`w-full border rounded-lg px-3 py-2 text-sm ${(bloq||av)?"border-red-400 bg-red-50":"border-gray-200"}`}
                     placeholder={prepSel?`ej. ${prepSel.rendimiento||"1"}`:"0"} value={fProd.cantidad}
                     onChange={e=>setFProd({...fProd,cantidad:e.target.value})}/>
                   {/* Mientras se escribe, no sólo al guardar: corregir un número
                       antes de apretar el botón es gratis; después cuesta revertir
                       el inventario de siete insumos. */}
+                  {bloq&&<p className="mt-1 text-[11px] text-red-700 font-bold leading-snug">🚫 {bloq} No se puede guardar así.</p>}
                   {av&&<p className="mt-1 text-[11px] text-red-700 font-semibold leading-snug">{av}</p>}
                 </>;})()}</div>
             <div><label className="text-xs text-gray-500 block mb-1">Fecha</label>
